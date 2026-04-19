@@ -1,0 +1,47 @@
+{
+  "id": "cybernetic-glow",
+  "name": "Cybernetic Glow",
+  "description": "Orange, amber, cyan, and purple on dark red-black",
+  "colors": {
+    "bgBase": "#0a0808",
+    "bgRaised": "#0f0d0d",
+    "bgSurface": "#141212",
+    "bgOverlay": "#1a1818",
+    "bgGlass": "rgba(15, 13, 13, 0.85)",
+    "accent": "#FF4500",
+    "accentDim": "rgba(255, 69, 0, 0.13)",
+    "accentGlow": "rgba(255, 69, 0, 0.32)",
+    "accentSoft": "rgba(255, 69, 0, 0.07)",
+    "magenta": "#FF4500",
+    "cyan": "#00FFFF",
+    "green": "#00ff88",
+    "amber": "#FFD700",
+    "red": "#FF4500",
+    "purple": "#8A2BE2",
+    "textPrimary": "#eaeaf5",
+    "textSecondary": "#8a8aac",
+    "textMuted": "#50506e",
+    "textOnAccent": "#050510",
+    "borderColor": "rgba(255, 69, 0, 0.14)",
+    "borderSubtle": "rgba(255, 255, 255, 0.06)",
+    "sidebarBg": "rgba(15, 13, 13, 0.75)",
+    "headerBg": "#0a0808",
+    "cardBg": "#0f0d0d",
+    "cardBorder": "rgba(255, 69, 0, 0.14)",
+    "feedHighlight": "rgba(255, 69, 0, 0.07)"
+  },
+  "fonts": {
+    "heading": "'Orbitron', sans-serif",
+    "body": "'Outfit', sans-serif",
+    "mono": "'JetBrains Mono', monospace"
+  },
+  "gradients": {
+    "card": "linear-gradient(135deg, rgba(255, 69, 0, 0.04) 0%, transparent 60%)",
+    "cardHover": "linear-gradient(135deg, rgba(255, 69, 0, 0.07) 0%, transparent 60%)"
+  },
+  "shadows": {
+    "card": "0 1px 3px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3)",
+    "hover": "0 0 0 1px rgba(255,69,0,0.3), 0 4px 24px rgba(0,0,0,0.4), 0 0 32px rgba(255,69,0,0.06)",
+    "glow": "0 0 8px rgba(255,69,0,0.13), 0 0 24px rgba(255,69,0,0.05)"
+  }
+}

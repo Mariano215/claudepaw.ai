@@ -1,0 +1,47 @@
+{
+  "id": "forest",
+  "name": "Forest",
+  "description": "Deep green and brown -- earthy tones",
+  "colors": {
+    "bgBase": "#0c1a0f",
+    "bgRaised": "#14261a",
+    "bgSurface": "#1a3322",
+    "bgOverlay": "#22402c",
+    "bgGlass": "rgba(12, 26, 15, 0.85)",
+    "accent": "#4ade80",
+    "accentDim": "rgba(74, 222, 128, 0.15)",
+    "accentGlow": "rgba(74, 222, 128, 0.30)",
+    "accentSoft": "rgba(74, 222, 128, 0.08)",
+    "magenta": "#f472b6",
+    "cyan": "#67e8f9",
+    "green": "#4ade80",
+    "amber": "#d97706",
+    "red": "#ef4444",
+    "purple": "#a78bfa",
+    "textPrimary": "#ecfdf5",
+    "textSecondary": "#a7f3d0",
+    "textMuted": "#6ee7b7",
+    "textOnAccent": "#0c1a0f",
+    "borderColor": "rgba(74, 222, 128, 0.18)",
+    "borderSubtle": "rgba(255, 255, 255, 0.06)",
+    "sidebarBg": "#0c1a0f",
+    "headerBg": "#0c1a0f",
+    "cardBg": "#14261a",
+    "cardBorder": "rgba(74, 222, 128, 0.12)",
+    "feedHighlight": "rgba(74, 222, 128, 0.06)"
+  },
+  "fonts": {
+    "heading": "'Outfit', sans-serif",
+    "body": "'Outfit', sans-serif",
+    "mono": "'JetBrains Mono', monospace"
+  },
+  "gradients": {
+    "card": "linear-gradient(135deg, rgba(74, 222, 128, 0.04) 0%, transparent 60%)",
+    "cardHover": "linear-gradient(135deg, rgba(74, 222, 128, 0.07) 0%, transparent 60%)"
+  },
+  "shadows": {
+    "card": "0 1px 3px rgba(0,0,0,0.4), 0 4px 12px rgba(0,0,0,0.3)",
+    "hover": "0 0 0 1px rgba(74,222,128,0.25), 0 4px 20px rgba(0,0,0,0.3)",
+    "glow": "0 0 8px rgba(74,222,128,0.12), 0 0 20px rgba(74,222,128,0.05)"
+  }
+}

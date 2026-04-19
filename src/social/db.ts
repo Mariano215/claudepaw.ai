@@ -1,0 +1,233 @@
+import Database from 'better-sqlite3'
+import { randomUUID } from 'node:crypto'
+import type { SocialPost, DraftInput, PostStatus } from './types.js'
+
+// ---------------------------------------------------------------------------
+// Schema - called from initDatabase() in main db.ts
+// ---------------------------------------------------------------------------
+
+// Canonical set of platforms allowed in social_posts.platform. Edit here to extend.
+const ALLOWED_PLATFORMS = ['linkedin', 'twitter', 'youtube', 'facebook', 'instagram'] as const
+const PLATFORM_CHECK_LIST = ALLOWED_PLATFORMS.map((p) => `'${p}'`).join(', ')
+
+function runSql(db: Database.Database, sql: string): void {
+  // Single-statement wrapper so we avoid multi-statement batching.
+  db.prepare(sql).run()
+}
+
+export function initSocialTables(db: Database.Database): void {
+  runSql(
+    db,
+    `CREATE TABLE IF NOT EXISTS social_posts (
+      id               TEXT PRIMARY KEY,
+      platform         TEXT NOT NULL CHECK(platform IN (${PLATFORM_CHECK_LIST})),
+      content          TEXT NOT NULL,
+      media_url        TEXT,
+      suggested_time   TEXT,
+      cta              TEXT,
+      status           TEXT NOT NULL DEFAULT 'draft'
+                       CHECK(status IN ('draft', 'approved', 'published', 'rejected', 'failed')),
+      platform_post_id TEXT,
+      platform_url     TEXT,
+      error            TEXT,
+      created_at       INTEGER NOT NULL,
+      published_at     INTEGER,
+      created_by       TEXT NOT NULL DEFAULT 'social',
+      project_id       TEXT NOT NULL DEFAULT 'default'
+    )`,
+  )
+  runSql(db, 'CREATE INDEX IF NOT EXISTS idx_social_status ON social_posts(status)')
+  runSql(db, 'CREATE INDEX IF NOT EXISTS idx_social_platform ON social_posts(platform)')
+
+  // Migration: add project_id column to existing tables from v1 schema
+  try {
+    runSql(db, "ALTER TABLE social_posts ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'")
+  } catch (_e) { /* Column already exists */ }
+  try {
+    runSql(db, 'CREATE INDEX IF NOT EXISTS idx_social_project ON social_posts(project_id)')
+  } catch (_e) { /* Index already exists */ }
+
+  // Migration: widen platform CHECK constraint on tables created before
+  // ALLOWED_PLATFORMS was extended. SQLite cannot ALTER a CHECK constraint in
+  // place, so we rebuild the table if the stored CREATE TABLE SQL still has
+  // the narrow two-platform list.
+  migratePlatformCheckConstraint(db)
+}
+
+function migratePlatformCheckConstraint(db: Database.Database): void {
+  const sqlRow = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='social_posts'")
+    .get() as { sql: string } | undefined
+  if (!sqlRow) return
+  // Detect the legacy narrow constraint. Anything that doesn't already allow
+  // youtube is considered stale and rebuilt.
+  if (sqlRow.sql.includes("'youtube'")) return
+
+  const rebuild = db.transaction(() => {
+    runSql(
+      db,
+      `CREATE TABLE social_posts_new (
+        id               TEXT PRIMARY KEY,
+        platform         TEXT NOT NULL CHECK(platform IN (${PLATFORM_CHECK_LIST})),
+        content          TEXT NOT NULL,
+        media_url        TEXT,
+        suggested_time   TEXT,
+        cta              TEXT,
+        status           TEXT NOT NULL DEFAULT 'draft'
+                         CHECK(status IN ('draft', 'approved', 'published', 'rejected', 'failed')),
+        platform_post_id TEXT,
+        platform_url     TEXT,
+        error            TEXT,
+        created_at       INTEGER NOT NULL,
+        published_at     INTEGER,
+        created_by       TEXT NOT NULL DEFAULT 'social',
+        project_id       TEXT NOT NULL DEFAULT 'default'
+      )`,
+    )
+    runSql(
+      db,
+      `INSERT INTO social_posts_new
+       (id, platform, content, media_url, suggested_time, cta, status,
+        platform_post_id, platform_url, error, created_at, published_at,
+        created_by, project_id)
+       SELECT id, platform, content, media_url, suggested_time, cta, status,
+              platform_post_id, platform_url, error, created_at, published_at,
+              created_by, project_id
+       FROM social_posts`,
+    )
+    runSql(db, 'DROP TABLE social_posts')
+    runSql(db, 'ALTER TABLE social_posts_new RENAME TO social_posts')
+    runSql(db, 'CREATE INDEX IF NOT EXISTS idx_social_status ON social_posts(status)')
+    runSql(db, 'CREATE INDEX IF NOT EXISTS idx_social_platform ON social_posts(platform)')
+    runSql(db, 'CREATE INDEX IF NOT EXISTS idx_social_project ON social_posts(project_id)')
+  })
+
+  try {
+    rebuild()
+  } catch (_e) {
+    // If the migration fails (unexpected schema drift, locked DB, etc.) we
+    // intentionally leave the existing table alone rather than crashing
+    // startup. The draft flow will continue to reject new platforms until a
+    // human intervenes — visible via the SqliteError path at draft time.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CRUD
+// ---------------------------------------------------------------------------
+
+let _db: Database.Database
+
+export function setSocialDb(db: Database.Database): void {
+  _db = db
+}
+
+function getDb(): Database.Database {
+  if (!_db) throw new Error('Social DB not initialized')
+  return _db
+}
+
+export function createDraft(input: DraftInput): SocialPost {
+  const id = randomUUID().slice(0, 8)
+  const now = Date.now()
+  getDb()
+    .prepare(
+      `INSERT INTO social_posts (id, platform, content, media_url, suggested_time, cta, status, created_at, created_by, project_id)
+       VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`,
+    )
+    .run(
+      id,
+      input.platform,
+      input.content,
+      input.media_url ?? null,
+      input.suggested_time ?? null,
+      input.cta ?? null,
+      now,
+      input.created_by ?? 'social',
+      input.project_id,
+    )
+  return getPost(id)!
+}
+
+export function getPost(id: string): SocialPost | undefined {
+  return getDb()
+    .prepare('SELECT * FROM social_posts WHERE id = ?')
+    .get(id) as SocialPost | undefined
+}
+
+export function listPosts(status?: PostStatus, limit: number = 20): SocialPost[] {
+  if (status) {
+    return getDb()
+      .prepare('SELECT * FROM social_posts WHERE status = ? ORDER BY created_at DESC LIMIT ?')
+      .all(status, limit) as SocialPost[]
+  }
+  return getDb()
+    .prepare('SELECT * FROM social_posts ORDER BY created_at DESC LIMIT ?')
+    .all(limit) as SocialPost[]
+}
+
+export function listDrafts(): SocialPost[] {
+  return listPosts('draft')
+}
+
+export function approvePost(id: string): boolean {
+  const info = getDb()
+    .prepare("UPDATE social_posts SET status = 'approved' WHERE id = ? AND status = 'draft'")
+    .run(id)
+  return info.changes > 0
+}
+
+export function rejectPost(id: string): boolean {
+  const info = getDb()
+    .prepare("UPDATE social_posts SET status = 'rejected' WHERE id = ? AND status IN ('draft', 'approved')")
+    .run(id)
+  return info.changes > 0
+}
+
+export function markPublished(
+  id: string,
+  platformPostId: string,
+  platformUrl: string,
+): boolean {
+  const info = getDb()
+    .prepare(
+      `UPDATE social_posts
+       SET status = 'published', platform_post_id = ?, platform_url = ?, published_at = ?
+       WHERE id = ?`,
+    )
+    .run(platformPostId, platformUrl, Date.now(), id)
+  return info.changes > 0
+}
+
+export function markFailed(id: string, error: string): boolean {
+  const info = getDb()
+    .prepare("UPDATE social_posts SET status = 'failed', error = ? WHERE id = ?")
+    .run(error, id)
+  return info.changes > 0
+}
+
+export function updateContent(id: string, content: string): boolean {
+  const info = getDb()
+    .prepare("UPDATE social_posts SET content = ? WHERE id = ? AND status IN ('draft', 'approved')")
+    .run(content, id)
+  return info.changes > 0
+}
+
+export function getPostStats(): { drafts: number; published: number; rejected: number; failed: number } {
+  const row = getDb()
+    .prepare(
+      `SELECT
+        SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) as drafts,
+        SUM(CASE WHEN status = 'published' THEN 1 ELSE 0 END) as published,
+        SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+       FROM social_posts`,
+    )
+    .get() as Record<string, number>
+  return {
+    drafts: row.drafts ?? 0,
+    published: row.published ?? 0,
+    rejected: row.rejected ?? 0,
+    failed: row.failed ?? 0,
+  }
+}

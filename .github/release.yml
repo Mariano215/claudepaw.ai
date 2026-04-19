@@ -1,0 +1,22 @@
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+  categories:
+    - title: Added
+      labels:
+        - feature
+        - enhancement
+    - title: Changed
+      labels:
+        - refactor
+        - maintenance
+        - docs
+    - title: Fixed
+      labels:
+        - bug
+        - fix
+    - title: Removed
+      labels:
+        - breaking
+        - removal

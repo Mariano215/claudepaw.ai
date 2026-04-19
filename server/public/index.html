@@ -1,0 +1,1645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ClaudePaw</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='80'>&#x1F43E;</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700;800;900&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=20260418e">
+  <script defer src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+</head>
+<body class="sidebar-expanded">
+
+  <!-- ========== LEFT SIDEBAR NAV ========== -->
+  <nav class="sidebar-nav" aria-label="Main navigation">
+    <div class="sidebar-nav__logo" aria-label="ClaudePaw Dashboard">
+      <img src="assets/claude-paw-logo.png" alt="ClaudePaw" class="logo-img">
+    </div>
+
+    <!-- Project Selector -->
+    <div class="project-selector" id="project-selector">
+      <button class="project-selector__current" id="project-selector-btn" aria-label="Switch project" title="Switch project">
+        <i class="project-selector__icon" id="project-icon" data-lucide="globe"></i>
+        <span class="project-selector__name" id="project-name">All Projects</span>
+        <span class="project-selector__chevron"><i data-lucide="chevron-down" style="width:14px;height:14px;"></i></span>
+      </button>
+      <div class="project-selector__dropdown" id="project-dropdown" hidden>
+        <button class="project-selector__option active" data-project-id="" data-project-slug="">
+          <i class="project-option__icon" data-lucide="globe"></i>
+          <span class="project-option__name">All Projects</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Pages -->
+    <div class="sidebar-pages">
+      <span class="sidebar-section-label">Pages</span>
+      <a href="#agents" class="sidebar-link" data-page="page-agents">
+        <i data-lucide="bot"></i><span>Agents</span>
+      </a>
+      <a href="#action-plan" class="sidebar-link" data-page="page-action-plan">
+        <i data-lucide="clipboard-check"></i><span>Action Plan</span>
+      </a>
+      <a href="#pipeline" class="sidebar-link" data-page="page-pipeline">
+        <i data-lucide="git-branch"></i><span>Pipeline</span>
+      </a>
+      <a href="#board" class="sidebar-link" data-page="page-board">
+        <i data-lucide="calendar-check"></i><span>Board</span>
+      </a>
+      <a href="#research" class="sidebar-link" data-page="page-research">
+        <i data-lucide="telescope"></i><span>Research</span>
+      </a>
+      <a href="#comms" class="sidebar-link" data-page="page-comms">
+        <i data-lucide="network"></i><span>Comms</span>
+      </a>
+      <a href="#chat" class="sidebar-link" data-page="page-chat">
+        <i data-lucide="message-square"></i><span>Chat</span>
+      </a>
+      <a href="#logging" class="sidebar-link" data-page="page-logging">
+        <i data-lucide="scroll-text"></i><span>Logging</span>
+      </a>
+      <a href="#sops" class="sidebar-link" data-page="page-sops">
+        <i data-lucide="clock"></i><span>Cron Jobs</span>
+      </a>
+      <a href="#paws" class="sidebar-link" data-page="page-paws">
+        <i data-lucide="paw-print"></i><span>Paws</span>
+      </a>
+      <a href="#graph" class="sidebar-link" data-page="page-graph">
+        <i data-lucide="brain"></i><span>Knowledge Graph</span>
+      </a>
+      <a href="#knowledge" class="sidebar-link" data-page="page-knowledge">
+        <i data-lucide="brain-circuit"></i>
+        <span>Knowledge</span>
+      </a>
+      <a href="#users" class="sidebar-link sidebar-link--admin-only" data-page="page-users" style="display:none">
+        <i data-lucide="users"></i>
+        <span>Users</span>
+      </a>
+    </div>
+
+    <div class="sidebar-nav__footer">
+      <button class="sidebar-toggle" id="toggle-sidebar" aria-label="Collapse sidebar" title="Collapse sidebar"><i data-lucide="panel-left-close" style="width:16px;height:16px;"></i></button>
+      <div class="connection-dot" id="ws-status-dot" data-status="disconnected" aria-label="Connection status: disconnected"></div>
+    </div>
+  </nav>
+
+  <!-- ========== MAIN CONTENT ========== -->
+  <main class="main-content" role="main">
+
+    <!-- Header Bar -->
+    <header class="header-bar">
+      <button class="btn-hamburger" id="btn-hamburger" aria-label="Toggle navigation" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+      <div class="header-bar__brand">
+        <h1 class="header-title">ClaudePaw</h1>
+      </div>
+      <nav class="header-nav">
+        <a class="header-nav__link active" data-page="page-dashboard"><i data-lucide="layout-dashboard"></i><span>Dashboard</span></a>
+        <a class="header-nav__link" data-page="page-security"><i data-lucide="shield"></i><span>Security</span></a>
+        <a class="header-nav__link" data-page="page-performance"><i data-lucide="activity"></i><span>Performance</span></a>
+        <a class="header-nav__link" data-page="page-credentials"><i data-lucide="key-round"></i><span>Credentials</span></a>
+        <a class="header-nav__link" data-page="page-projects"><i data-lucide="folder-kanban"></i><span>Projects</span></a>
+        <a class="header-nav__link" data-page="page-integrations"><i data-lucide="puzzle"></i><span>Integrations</span></a>
+        <a class="header-nav__link" data-page="page-settings"><i data-lucide="settings"></i><span>Settings</span></a>
+      </nav>
+      <div class="header-bar__meta">
+        <span class="update-badge" id="update-badge" role="button" tabindex="0" aria-label="Update available - click to upgrade" style="display:none">
+          <span class="update-badge__dot" aria-hidden="true"></span>
+          <span id="update-badge-text">-- commits behind</span>
+        </span>
+        <span class="live-badge" aria-label="Live connection active">
+          <span class="live-badge__dot" aria-hidden="true"></span>Live
+        </span>
+        <span class="disconnected-badge" aria-label="Connection lost">
+          <span class="disconnected-badge__dot" aria-hidden="true"></span>Disconnected
+        </span>
+        <span class="header-date" data-bind="current-date" aria-live="polite">--</span>
+        <span class="header-time" data-bind="current-time" aria-live="polite">--:--:--</span>
+        <button class="btn-icon" id="toggle-feed" aria-label="Toggle live feed" title="Toggle Feed"><i data-lucide="menu" style="width:18px;height:18px;"></i></button>
+        <button class="btn-icon" id="toggle-theme" aria-label="Toggle light/dark mode" title="Toggle Theme"><i data-lucide="moon" style="width:18px;height:18px;"></i></button>
+      </div>
+    </header>
+    <!-- Mobile overlay backdrop -->
+    <div class="mobile-nav-overlay" id="mobile-nav-overlay" aria-hidden="true"></div>
+
+    <!-- Page Container -->
+    <div id="page-container">
+
+      <!-- ==================== PAGE: DASHBOARD ==================== -->
+      <section id="page-dashboard" class="page active" data-page-title="Dashboard" aria-label="Dashboard">
+
+        <!-- Today's Briefing -->
+        <div class="briefing-banner" data-component="briefing">
+          <div class="briefing-banner__header">
+            <span class="briefing-banner__icon"><i data-lucide="clipboard-list" style="width:20px;height:20px;"></i></span>
+            <h2 class="briefing-banner__title">Today's Briefing</h2>
+            <span class="briefing-banner__agent">Scout</span>
+            <time class="briefing-banner__time" datetime="">--</time>
+          </div>
+          <div class="briefing-banner__body" data-bind="briefing-body">
+            <div class="briefing-scroll-inner"><p>Loading briefing...</p></div>
+          </div>
+        </div>
+
+        <!-- Needs Your Attention -->
+        <section id="home-action-plan" class="home-section">
+          <div class="home-section__header">
+            <h2>Needs Your Attention</h2>
+            <span id="home-action-count" class="home-badge">0</span>
+          </div>
+          <div id="home-action-list" class="home-action-list"></div>
+          <div class="home-section__footer">
+            <a href="#action-plan">Go to Action Plan</a>
+          </div>
+        </section>
+
+        <!-- Stats Row (dynamic per project) -->
+        <div class="stats-row" data-component="stats" id="dashboard-stats-row">
+          <div class="stat-card" data-metric="active-agents">
+            <span class="stat-card__label">Active Agents</span>
+            <span class="stat-card__value" data-bind="active-agents">--</span>
+            <span class="stat-card__delta neutral" data-bind="active-agents-delta">of 8 total</span>
+          </div>
+        </div>
+
+        <!-- Project Health Grid (All Projects view) -->
+          <div id="project-health-grid" class="project-health-grid" hidden></div>
+
+        <!-- Social / Integration Cards (dynamic per project) -->
+        <div class="section-block" data-component="social-integrations">
+          <h3 class="section-title" id="social-section-title">Social &amp; Integrations</h3>
+          <div class="social-grid" id="social-cards-container">
+            <!-- Dynamically populated from project integrations -->
+            <div class="social-grid__empty" style="text-align:center;padding:2rem;color:var(--text-muted)">Select a project to see integrations</div>
+          </div>
+        </div>
+
+        <!-- AI Team Overview -->
+        <div class="section-block" data-component="team-overview">
+          <h3 class="section-title">AI Team Overview</h3>
+          <div class="agent-grid" id="dashboard-agent-grid">
+            <!-- Populated dynamically from AGENTS -->
+          </div>
+        </div>
+
+        <!-- Pipeline Preview -->
+        <div class="section-block" data-component="pipeline-preview">
+          <h3 class="section-title">Task Pipeline</h3>
+          <div id="pipeline-preview-container">
+            <!-- Dynamically populated from scheduled tasks -->
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ==================== PAGE: AGENTS ==================== -->
+      <section id="page-agents" class="page" data-page-title="Agents" aria-label="AI Agents" hidden>
+
+        <div class="page-heading-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+          <h2 class="page-heading" style="margin-bottom:0;">AI Team &mdash; Agent Management</h2>
+          <button class="btn btn--primary" id="create-agent-btn" type="button">+ Create Agent</button>
+        </div>
+
+        <div class="agents-detail-grid" id="agents-detail-grid">
+          <!-- Populated dynamically from AGENTS -->
+        </div>
+
+        <!-- Agent Communication Log -->
+        <div class="section-block" data-component="agent-comms">
+          <h3 class="section-title">Agent Communication Log</h3>
+          <div class="comms-log" data-bind="agent-comms" aria-label="Recent agent communications">
+            <div class="comms-entry"><span class="comms-msg" style="color:var(--text-muted)">Loading communications...</span></div>
+          </div>
+        </div>
+
+        <!-- Task Assignment -->
+        <div class="section-block" data-component="task-assignment">
+          <h3 class="section-title">Assign Task</h3>
+          <div class="task-assignment-form" data-action="assign-task">
+            <select class="form-select" data-field="agent" aria-label="Select agent" id="task-agent-select">
+              <option value="">Select Agent...</option>
+            </select>
+            <input type="text" class="form-input" data-field="task-title" placeholder="Task description..." aria-label="Task description">
+            <select class="form-select" data-field="priority" aria-label="Priority">
+              <option value="normal">Normal</option>
+              <option value="high">High</option>
+              <option value="urgent">Urgent</option>
+            </select>
+            <button class="btn btn--primary" data-action="submit-task" type="button">Assign</button>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ==================== PAGE: PIPELINE ==================== -->
+      <section id="page-pipeline" class="page" data-page-title="Pipeline" aria-label="Task Pipeline" hidden>
+        <div class="page-heading-row">
+          <h2 class="page-heading">Task Pipeline</h2>
+          <div class="pipeline-controls">
+            <div class="pipeline-tabs" data-component="pipeline-tabs">
+              <button class="btn btn--ghost btn--sm active" data-tab="all" type="button">All</button>
+              <button class="btn btn--ghost btn--sm" data-tab="cron" type="button">Cron Jobs</button>
+              <button class="btn btn--ghost btn--sm" data-tab="research" type="button">Research</button>
+              <button class="btn btn--ghost btn--sm" data-tab="video" type="button">Video</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Upcoming Tasks -->
+        <div class="section-block" data-component="pipeline-upcoming">
+          <h3 class="section-title">Upcoming <span class="pipeline-upcoming-count" data-bind="pipeline-upcoming-count"></span></h3>
+          <div class="pipeline-upcoming-list" data-bind="pipeline-upcoming"></div>
+        </div>
+
+        <!-- Kanban Board -->
+        <div class="kanban-board" data-component="pipeline-kanban">
+          <div class="kanban-column" data-column="queued">
+            <div class="kanban-column__header">
+              <h3>Queued</h3>
+              <span class="kanban-column__count" data-bind="queued-count">0</span>
+            </div>
+            <div class="kanban-column__body" data-drop-zone="queued"></div>
+          </div>
+          <div class="kanban-column" data-column="running">
+            <div class="kanban-column__header">
+              <h3>Running</h3>
+              <span class="kanban-column__count" data-bind="running-count">0</span>
+            </div>
+            <div class="kanban-column__body" data-drop-zone="running"></div>
+          </div>
+          <div class="kanban-column" data-column="completed">
+            <div class="kanban-column__header">
+              <h3>Completed</h3>
+              <span class="kanban-column__count" data-bind="completed-count">0</span>
+            </div>
+            <div class="kanban-column__body" data-drop-zone="completed"></div>
+          </div>
+          <div class="kanban-column" data-column="failed">
+            <div class="kanban-column__header">
+              <h3>Failed</h3>
+              <span class="kanban-column__count" data-bind="failed-count">0</span>
+            </div>
+            <div class="kanban-column__body" data-drop-zone="failed"></div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ==================== PAGE: PERFORMANCE ==================== -->
+      <section id="page-performance" class="page" data-page-title="Performance" aria-label="Performance Analytics" hidden>
+
+        <div class="page-heading-row">
+          <h2 class="page-heading">Performance Analytics</h2>
+          <div class="date-range-selector" data-component="date-range">
+            <button class="btn btn--ghost btn--sm active" data-range="7d" type="button">7D</button>
+            <button class="btn btn--ghost btn--sm" data-range="30d" type="button">30D</button>
+            <button class="btn btn--ghost btn--sm" data-range="90d" type="button">90D</button>
+          </div>
+        </div>
+
+        <div class="section-block" data-component="perf-integrations">
+          <div class="perf-grid" id="perf-cards-container">
+            <!-- Dynamically populated from project integrations -->
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ==================== PAGE: COSTS ==================== -->
+      <section id="page-costs" class="page" data-page-title="Costs" aria-label="Model Usage Costs" hidden>
+
+        <div class="costs-summary-banner">
+          <div class="costs-summary-banner__header">
+            <h2 class="section-title">Model Usage Costs</h2>
+            <div class="costs-date-range">
+              <button class="range-btn active" data-cost-range="7d">7D</button>
+              <button class="range-btn" data-cost-range="30d">30D</button>
+              <button class="range-btn" data-cost-range="90d">90D</button>
+              <button class="range-btn" data-cost-range="ytd">YTD</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="costs-kpi-row">
+          <div class="stat-card cost-kpi"><div class="stat-card__label">API Spend</div><div class="stat-card__value" data-bind="cost-total-value">--</div><div class="stat-card__delta neutral" data-bind="cost-total-delta">&nbsp;</div></div>
+          <div class="stat-card cost-kpi"><div class="stat-card__label">Today</div><div class="stat-card__value" data-bind="cost-today-value">--</div><div class="stat-card__delta neutral" data-bind="cost-today-delta">&nbsp;</div></div>
+          <div class="stat-card cost-kpi"><div class="stat-card__label">Total Tokens</div><div class="stat-card__value" data-bind="cost-tokens-value">--</div><div class="stat-card__delta neutral" data-bind="cost-tokens-delta">&nbsp;</div></div>
+          <div class="stat-card cost-kpi"><div class="stat-card__label">Sessions</div><div class="stat-card__value" data-bind="cost-sessions-value">--</div><div class="stat-card__delta neutral" data-bind="cost-sessions-delta">&nbsp;</div></div>
+        </div>
+
+        <div class="costs-fixed-section costs-breakdown-card">
+          <h3 class="subsection-title">Cost Summary</h3>
+          <div class="costs-fixed-table" data-bind="cost-fixed-items"></div>
+        </div>
+
+        <div class="costs-alerts" data-bind="cost-alerts"></div>
+
+        <div class="costs-chart-section">
+          <h3 class="subsection-title">Daily Spend</h3>
+          <div class="costs-chart-container">
+            <canvas class="costs-chart" data-cost-chart="daily-spend" aria-label="Daily spend chart"></canvas>
+            <div class="costs-chart-legend" data-bind="cost-legend">
+              <span class="legend-item"><span class="legend-dot" style="background:var(--accent)"></span> Total</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--cyan)"></span> Input</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--magenta)"></span> Output</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--accent)"></span> Cache Read</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--amber)"></span> Cache Write</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="costs-breakdown-row">
+          <div class="costs-breakdown-card">
+            <h3 class="subsection-title">Cost by Agent</h3>
+            <div class="costs-bar-chart" data-bind="cost-by-agent"></div>
+          </div>
+          <div class="costs-breakdown-card">
+            <h3 class="subsection-title">Cost by Model</h3>
+            <div class="costs-bar-chart" data-bind="cost-by-model"></div>
+            <h3 class="subsection-title" style="margin-top:24px">Token Split</h3>
+            <div class="costs-token-split">
+              <div class="costs-token-bar"></div>
+              <div class="costs-token-labels"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="costs-heatmap-section">
+          <h3 class="subsection-title">Usage Heatmap (Last 7 Days)</h3>
+          <div class="costs-heatmap" data-bind="cost-heatmap">
+            <div class="costs-heatmap__y-labels"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
+            <div class="costs-heatmap__grid" data-bind="heatmap-grid"></div>
+            <div class="costs-heatmap__x-labels"><span>12a</span><span>3a</span><span>6a</span><span>9a</span><span>12p</span><span>3p</span><span>6p</span><span>9p</span></div>
+          </div>
+        </div>
+
+        <div class="costs-table-section">
+          <div class="costs-table-header">
+            <h3 class="subsection-title">Session Log</h3>
+            <div class="costs-table-filter">
+              <select class="costs-filter-select" data-bind="cost-agent-filter" id="cost-agent-filter">
+                <option value="all">All Agents</option>
+              </select>
+            </div>
+          </div>
+          <div class="costs-table-wrap">
+            <table class="costs-table">
+              <thead><tr><th>Time</th><th>Agent</th><th>Execution</th><th>Input</th><th>Output</th><th>Cache Read</th><th>Cache Write</th><th>Cost</th><th>Task</th></tr></thead>
+              <tbody data-bind="cost-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ==================== PAGE: SYSTEM HEALTH ==================== -->
+      <section id="page-health" class="page" data-page-title="System Health" aria-label="System Health" hidden>
+
+        <div class="page-header">
+          <h2 class="page-title">System Health</h2>
+          <p class="page-subtitle">Bot and server vitals</p>
+        </div>
+
+        <!-- Service Dependency Grid -->
+        <div class="health-section">
+          <h3 class="section-title">Service Dependencies</h3>
+          <div class="health-dep-grid" data-bind="health-dep-grid"></div>
+        </div>
+
+        <!-- BOT (Mac) Section -->
+        <div class="health-zone">
+          <div class="health-zone__header">
+            <span class="health-zone__label">Bot</span>
+            <span class="health-zone__host">MacBook Pro</span>
+            <span class="health-timestamp" data-bind="health-bot-ts">--</span>
+          </div>
+
+          <div class="health-kpi-row">
+            <div class="stat-card health-card" data-metric="cpu">
+              <div class="stat-card__icon">CPU</div>
+              <div class="stat-card__value" data-bind="bot-cpu">--%</div>
+              <div class="stat-card__label">Processor</div>
+              <div class="health-bar"><div class="health-bar__fill" data-bind="bot-cpu-bar"></div></div>
+            </div>
+            <div class="stat-card health-card" data-metric="memory">
+              <div class="stat-card__icon">RAM</div>
+              <div class="stat-card__value" data-bind="bot-mem">--%</div>
+              <div class="stat-card__label" data-bind="bot-mem-detail">-- / -- GB</div>
+              <div class="health-bar"><div class="health-bar__fill" data-bind="bot-mem-bar"></div></div>
+            </div>
+            <div class="stat-card health-card">
+              <div class="stat-card__icon">RSS</div>
+              <div class="stat-card__value" data-bind="bot-rss">--</div>
+              <div class="stat-card__label">Node.js Memory</div>
+            </div>
+            <div class="stat-card health-card">
+              <div class="stat-card__icon">UPTIME</div>
+              <div class="stat-card__value" data-bind="bot-uptime">--</div>
+              <div class="stat-card__label">System Uptime</div>
+            </div>
+          </div>
+
+          <div class="health-chart-container">
+            <canvas id="bot-cpu-chart" width="600" height="180"></canvas>
+            <canvas id="bot-mem-chart" width="600" height="180"></canvas>
+          </div>
+        </div>
+
+        <!-- SERVER (Hostinger) Section -->
+        <div class="health-zone">
+          <div class="health-zone__header">
+            <span class="health-zone__label">Server</span>
+            <span class="health-zone__host">Hostinger</span>
+            <span class="health-timestamp" data-bind="health-srv-ts">--</span>
+          </div>
+
+          <div class="health-kpi-row">
+            <div class="stat-card health-card">
+              <div class="stat-card__icon">STATUS</div>
+              <div class="stat-card__value" data-bind="srv-status">--</div>
+              <div class="stat-card__label">Express Server</div>
+            </div>
+            <div class="stat-card health-card">
+              <div class="stat-card__icon">UPTIME</div>
+              <div class="stat-card__value" data-bind="srv-uptime">--</div>
+              <div class="stat-card__label">Process Uptime</div>
+            </div>
+            <div class="stat-card health-card" data-metric="memory">
+              <div class="stat-card__icon">HEAP</div>
+              <div class="stat-card__value" data-bind="srv-heap">--</div>
+              <div class="stat-card__label" data-bind="srv-heap-detail">-- / -- MB</div>
+              <div class="health-bar"><div class="health-bar__fill" data-bind="srv-heap-bar"></div></div>
+            </div>
+            <div class="stat-card health-card">
+              <div class="stat-card__icon">DB</div>
+              <div class="stat-card__value" data-bind="srv-db-size">--</div>
+              <div class="stat-card__label">Database Size</div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ==================== PAGE: SECURITY ==================== -->
+      <section id="page-security" class="page" data-page-title="Security" aria-label="Security Command Center" hidden>
+
+        <div class="page-header">
+          <h2 class="page-title">Security Command Center</h2>
+          <p class="page-subtitle">Vulnerability scanning, auto-remediation, and security posture monitoring</p>
+        </div>
+
+        <!-- Row 1: Score Gauge + Controls -->
+        <div class="sec-row sec-row--score">
+          <div class="sec-gauge-wrap">
+            <canvas id="sec-gauge-canvas" width="220" height="220" aria-label="Overall security score gauge"></canvas>
+            <div class="sec-gauge-label">SECURITY SCORE</div>
+          </div>
+          <div class="sec-controls">
+            <div class="sec-controls__buttons">
+              <button class="security-scan-btn" id="sec-btn-daily" type="button">
+                <span class="security-scan-btn__icon"><i data-lucide="zap" style="width:18px;height:18px;"></i></span>
+                <span class="security-scan-btn__label">Run Daily Scan</span>
+                <span class="security-scan-btn__status" data-bind="sec-daily-status">Idle</span>
+              </button>
+              <button class="security-scan-btn" id="sec-btn-weekly" type="button">
+                <span class="security-scan-btn__icon"><i data-lucide="scan-search" style="width:18px;height:18px;"></i></span>
+                <span class="security-scan-btn__label">Run Weekly Audit</span>
+                <span class="security-scan-btn__status" data-bind="sec-weekly-status">Idle</span>
+              </button>
+            </div>
+            <div class="sec-controls__times">
+              <div class="sec-time-row"><span class="sec-time-label">Last Scan</span><span class="sec-time-value" data-bind="sec-last-scan">--</span></div>
+              <div class="sec-time-row"><span class="sec-time-label">Next Scheduled</span><span class="sec-time-value" data-bind="sec-next-scan">--</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Row 2: Severity Cards -->
+        <h3 class="section-title" style="margin-bottom:8px;font-size:0.68rem;">Open Findings by Severity</h3>
+        <div class="sec-row sec-severity-cards">
+          <div class="sec-sev-card" data-severity="critical">
+            <span class="sec-sev-card__count" data-bind="sec-sev-critical">0</span>
+            <span class="sec-sev-card__label">Critical</span>
+          </div>
+          <div class="sec-sev-card" data-severity="high">
+            <span class="sec-sev-card__count" data-bind="sec-sev-high">0</span>
+            <span class="sec-sev-card__label">High</span>
+          </div>
+          <div class="sec-sev-card" data-severity="medium">
+            <span class="sec-sev-card__count" data-bind="sec-sev-medium">0</span>
+            <span class="sec-sev-card__label">Medium</span>
+          </div>
+          <div class="sec-sev-card" data-severity="low">
+            <span class="sec-sev-card__count" data-bind="sec-sev-low">0</span>
+            <span class="sec-sev-card__label">Low</span>
+          </div>
+        </div>
+
+        <!-- Row 3: Trend Chart -->
+        <div class="section-block" data-component="sec-trend">
+          <div style="display:flex;align-items:center;margin-bottom:12px;">
+            <h3 class="section-title" id="sec-trend-title" style="margin:0;">30-Day Security Trend</h3>
+            <div style="display:flex;gap:4px;margin-left:auto;">
+              <button class="graph-filter-btn sec-trend-filter" data-days="7">7d</button>
+              <button class="graph-filter-btn sec-trend-filter active" data-days="30">30d</button>
+              <button class="graph-filter-btn sec-trend-filter" data-days="60">60d</button>
+              <button class="graph-filter-btn sec-trend-filter" data-days="90">90d</button>
+            </div>
+          </div>
+          <canvas id="sec-trend-canvas" width="900" height="260" aria-label="Security trend chart"></canvas>
+        </div>
+
+        <!-- Row 4: Findings Table -->
+        <div class="section-block" data-component="sec-findings">
+          <div class="sec-findings-header">
+            <h3 class="section-title" style="margin:0;">Findings</h3>
+            <button class="btn btn-sm btn-danger" id="btn-resolve-all" title="Acknowledge all open findings">Acknowledge All</button>
+            <div class="sec-findings-filters">
+              <select class="form-select sec-filter" id="sec-filter-severity" aria-label="Filter by severity">
+                <option value="">All Severities</option>
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+              <select class="form-select sec-filter" id="sec-filter-scanner" aria-label="Filter by scanner">
+                <option value="">All Scanners</option>
+              </select>
+              <select class="form-select sec-filter" id="sec-filter-status" aria-label="Filter by status">
+                <option value="open" selected>Open</option>
+                <option value="">All Statuses</option>
+                <option value="acknowledged">Acknowledged</option>
+                <option value="false-positive">False Positive</option>
+                <option value="fixed">Fixed</option>
+              </select>
+              <input type="text" class="form-input sec-filter" id="sec-filter-text" placeholder="Search findings..." aria-label="Search findings">
+            </div>
+          </div>
+          <div class="sec-findings-table-wrap">
+            <table class="sec-findings-table" id="sec-findings-table">
+              <thead>
+                <tr>
+                  <th data-sort="severity">Sev</th>
+                  <th data-sort="title">Title</th>
+                  <th data-sort="scannerId">Scanner</th>
+                  <th data-sort="target">Target</th>
+                  <th data-sort="status">Status</th>
+                  <th data-sort="lastSeen">Last Seen</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="sec-findings-tbody"></tbody>
+            </table>
+            <div class="sec-findings-empty" id="sec-findings-empty">No findings. Run a scan to check for issues.</div>
+          </div>
+        </div>
+
+        <!-- Row 5: Split - Scan History + Auto-fix Log -->
+        <div class="sec-row sec-row--split">
+          <div class="section-block sec-half">
+            <h3 class="section-title">Scan History</h3>
+            <div class="sec-mini-table-wrap">
+              <table class="sec-mini-table" id="sec-scans-table">
+                <thead>
+                  <tr>
+                    <th>Scanner</th>
+                    <th>Trigger</th>
+                    <th>Findings</th>
+                    <th>Duration</th>
+                    <th>Time</th>
+                  </tr>
+                </thead>
+                <tbody id="sec-scans-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="section-block sec-half">
+            <h3 class="section-title">Auto-Fix Log</h3>
+            <div class="sec-mini-table-wrap">
+              <table class="sec-mini-table" id="sec-autofixes-table">
+                <thead>
+                  <tr>
+                    <th>Finding</th>
+                    <th>Result</th>
+                    <th>Description</th>
+                    <th>Time</th>
+                  </tr>
+                </thead>
+                <tbody id="sec-autofixes-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Row 6: Per-Project Breakdown -->
+        <div class="section-block" data-component="sec-projects">
+          <h3 class="section-title">Per-Project Breakdown</h3>
+          <div class="sec-projects-accordion" id="sec-projects-accordion"></div>
+        </div>
+
+        <!-- Row 7: Test Runner -->
+        <div class="section-block" data-component="test-runner">
+          <div class="test-runner-header">
+            <h3 class="section-title" style="margin:0;">Test Runner</h3>
+            <button class="btn btn-sm btn-primary" id="btn-run-tests" type="button">
+              <span id="test-run-icon"><i data-lucide="play" style="width:14px;height:14px;"></i></span> Run Tests
+            </button>
+          </div>
+
+          <!-- Summary cards -->
+          <div class="test-summary-cards" id="test-summary-cards" style="display:none;">
+            <div class="test-card test-card--passed">
+              <span class="test-card__count" data-bind="test-passed">0</span>
+              <span class="test-card__label">Passed</span>
+            </div>
+            <div class="test-card test-card--failed">
+              <span class="test-card__count" data-bind="test-failed">0</span>
+              <span class="test-card__label">Failed</span>
+            </div>
+            <div class="test-card test-card--skipped">
+              <span class="test-card__count" data-bind="test-skipped">0</span>
+              <span class="test-card__label">Skipped</span>
+            </div>
+            <div class="test-card test-card--duration">
+              <span class="test-card__count" data-bind="test-duration">--</span>
+              <span class="test-card__label">Duration</span>
+            </div>
+          </div>
+
+          <!-- Status line -->
+          <div class="test-status" id="test-status">
+            <span class="test-status__text">No test run yet. Click "Run Tests" to start.</span>
+          </div>
+
+          <!-- Progress log (streamed lines) -->
+          <div class="test-progress-log" id="test-progress-log" style="display:none;"></div>
+
+          <!-- File breakdown table -->
+          <div class="test-files-wrap" id="test-files-wrap" style="display:none;">
+            <table class="sec-mini-table" id="test-files-table">
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Tests</th>
+                  <th>Passed</th>
+                  <th>Failed</th>
+                  <th>Duration</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="test-files-tbody"></tbody>
+            </table>
+          </div>
+
+          <!-- Error details -->
+          <div class="test-errors" id="test-errors" style="display:none;">
+            <h4 class="test-errors__title">Failed Tests</h4>
+            <div id="test-errors-list"></div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ==================== PAGE: CHAT ==================== -->
+      <section id="page-chat" class="page" data-page-title="Chat" aria-label="Chat" hidden>
+        <div class="chat-container">
+          <div class="chat-header">
+            <h2 class="chat-header__title">Chat</h2>
+            <span class="chat-header__subtitle">Telegram conversations</span>
+          </div>
+          <div class="chat-messages" id="chat-messages">
+            <div class="chat-messages__loader" id="chat-loader" hidden>
+              <div class="chat-skeleton"></div>
+              <div class="chat-skeleton chat-skeleton--short"></div>
+              <div class="chat-skeleton"></div>
+            </div>
+            <div class="chat-messages__empty" id="chat-empty" hidden>
+              No messages yet. Say something.
+            </div>
+            <div class="chat-messages__list" id="chat-list"></div>
+            <div class="chat-typing" id="chat-typing" hidden>
+              <div class="chat-typing__dots">
+                <span></span><span></span><span></span>
+              </div>
+              <span class="chat-typing__elapsed" style="font-size:0.8em;opacity:0.7;margin-left:8px;"></span>
+            </div>
+          </div>
+          <div class="chat-new-pill" id="chat-new-pill" hidden>
+            New messages ↓
+          </div>
+          <div class="chat-input-bar">
+            <textarea class="chat-input" id="chat-input" placeholder="Type a message..." rows="1"></textarea>
+            <button class="chat-send-btn" id="chat-send" disabled aria-label="Send">
+              <i data-lucide="send" style="width:18px;height:18px;"></i>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== PAGE: COMMS ==================== -->
+      <section id="page-comms" class="page" data-page-title="Agent Comms" aria-label="Agent Communications" hidden>
+        <div class="comms-page">
+          <div class="comms-left">
+            <div class="comms-canvas-card">
+              <div class="comms-canvas-header">
+                <span class="section-label">Network</span>
+              </div>
+              <canvas id="comms-network-canvas"></canvas>
+            </div>
+            <div class="comms-agents-row" id="comms-agents-row"></div>
+          </div>
+          <div class="comms-right">
+            <div class="comms-filters">
+              <div class="comms-filter-group" id="comms-type-filters">
+                <button class="comms-filter-pill active" data-type="all">All</button>
+                <button class="comms-filter-pill" data-type="task">Task</button>
+                <button class="comms-filter-pill" data-type="result">Result</button>
+                <button class="comms-filter-pill" data-type="handoff">Handoff</button>
+                <button class="comms-filter-pill" data-type="info">Info</button>
+                <button class="comms-filter-pill" data-type="error">Error</button>
+              </div>
+              <select class="comms-agent-filter" id="comms-agent-filter">
+                <option value="">All Agents</option>
+              </select>
+              <div class="comms-time-filters" id="comms-time-filters">
+                <button class="comms-filter-pill" data-since="1h">1h</button>
+                <button class="comms-filter-pill active" data-since="24h">24h</button>
+                <button class="comms-filter-pill" data-since="7d">7d</button>
+                <button class="comms-filter-pill" data-since="30d">30d</button>
+              </div>
+            </div>
+            <div class="comms-log" id="comms-log">
+              <div class="comms-log-empty">No communications yet.</div>
+            </div>
+            <div class="comms-reply-panel" id="comms-reply-panel" hidden>
+              <div class="comms-reply-header">
+                <span id="comms-reply-to">Replying to agent</span>
+                <button class="comms-reply-close" id="comms-reply-close">&times;</button>
+              </div>
+              <div class="comms-reply-input-row">
+                <textarea class="comms-reply-input" id="comms-reply-input" placeholder="Type a message..." rows="1"></textarea>
+                <button class="comms-reply-send" id="comms-reply-send" disabled>
+                  <i data-lucide="send" style="width:16px;height:16px;"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== PAGE: BOARD ==================== -->
+      <section id="page-board" class="page" data-page-title="Board" aria-label="Monday Morning Meeting" hidden>
+
+        <div class="page-header">
+          <h2 class="page-title">Monday Morning Meeting</h2>
+          <p class="page-subtitle">Weekly briefing, decisions, and growth tracking</p>
+        </div>
+
+        <!-- Next Meeting -->
+        <div class="section-block" data-component="board-next-meeting">
+          <h3 class="section-title">Next Meeting</h3>
+          <div class="board-next-meeting" data-bind="board-next-meeting">
+            <div class="board-empty-state">
+              <p style="color:var(--text-muted)">No upcoming meeting scheduled</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Briefing -->
+        <div class="section-block">
+          <h3 class="section-title">This Week's Briefing</h3>
+          <div class="board-briefing-card" data-bind="board-briefing">
+            <div class="board-empty-state">
+              <div class="board-empty-icon"><i data-lucide="landmark" style="width:32px;height:32px;"></i></div>
+              <p>No board meetings held yet.</p>
+              <p class="board-empty-hint">Schedule a weekly board meeting task, or run one manually.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Decisions -->
+        <div class="section-block">
+          <h3 class="section-title">Decisions &amp; Open Items <span class="board-open-count" data-bind="board-open-count"></span></h3>
+          <div class="board-decisions-grid" data-bind="board-decisions">
+            <p class="board-no-items">No decisions tracked yet.</p>
+          </div>
+        </div>
+
+        <!-- Growth Metrics -->
+        <div class="section-block">
+          <h3 class="section-title">Growth Metrics</h3>
+          <div class="board-metrics-grid" data-bind="board-metrics">
+            <div class="board-metric-card board-metric-card--empty">
+              <span class="board-metric-label">Metrics populate after first board meeting</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Meeting History -->
+        <div class="section-block">
+          <h3 class="section-title">Meeting History</h3>
+          <div class="board-history-list" data-bind="board-history">
+            <p class="board-no-items">No meetings recorded yet.</p>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ========== RESEARCH ========== -->
+      <section id="page-research" class="page" data-page-title="Research" aria-label="Research & Tracking" hidden>
+
+        <div class="page-heading-row">
+          <h2 class="page-heading">Research &amp; Tracking</h2>
+          <div class="research-header-controls">
+            <span class="research-item-count" data-bind="research-item-count">-- items</span>
+            <button class="btn btn--sm btn--accent" id="research-refresh-btn" title="Refresh"><i data-lucide="refresh-cw" style="width:14px;height:14px;"></i> Refresh</button>
+          </div>
+        </div>
+
+        <!-- Upcoming Research Tasks -->
+        <div class="research-upcoming-bar" data-bind="research-upcoming" style="margin-bottom:16px;">
+        </div>
+
+        <!-- Stats Row -->
+        <div class="research-stats-row">
+          <div class="stat-card" data-metric="research-total">
+            <span class="stat-card__label">Total Items</span>
+            <span class="stat-card__value" data-bind="research-stat-total">--</span>
+          </div>
+          <div class="stat-card" data-metric="research-opportunities">
+            <span class="stat-card__label">Opportunities</span>
+            <span class="stat-card__value" data-bind="research-stat-opportunities">--</span>
+          </div>
+          <div class="stat-card" data-metric="research-pipeline">
+            <span class="stat-card__label">In Pipeline</span>
+            <span class="stat-card__value" data-bind="research-stat-pipeline">--</span>
+          </div>
+          <div class="stat-card" data-metric="research-published">
+            <span class="stat-card__label">Published</span>
+            <span class="stat-card__value" data-bind="research-stat-published">--</span>
+          </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="research-filters">
+          <select class="form-select" id="research-filter-category">
+            <option value="">All Categories</option>
+            <option value="cyber">Cyber</option>
+            <option value="ai">AI</option>
+            <option value="tools">Tools</option>
+            <option value="general">General</option>
+            <option value="real-estate">Real Estate</option>
+          </select>
+          <select class="form-select" id="research-filter-status">
+            <option value="">All Status</option>
+            <option value="new">New</option>
+            <option value="reviewing">Reviewing</option>
+            <option value="opportunity">Opportunity</option>
+            <option value="published">Published</option>
+            <option value="archived">Archived</option>
+          </select>
+          <select class="form-select" id="research-filter-pipeline">
+            <option value="">All Pipeline</option>
+            <option value="idea">Idea</option>
+            <option value="draft">Draft</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="live">Live</option>
+          </select>
+        </div>
+
+        <!-- Trend Tracking Table -->
+        <div class="section-block" data-component="research-trends">
+          <h3 class="section-title">Trend Tracking</h3>
+          <div class="research-table-wrap">
+            <table class="research-table" aria-label="Research trend tracking">
+              <thead>
+                <tr>
+                  <th scope="col" class="research-th-sortable" data-sort-field="topic">Topic <span class="sort-indicator"></span></th>
+                  <th scope="col" class="research-th-sortable" data-sort-field="source">Source <span class="sort-indicator"></span></th>
+                  <th scope="col" class="research-th-sortable" data-sort-field="category">Category <span class="sort-indicator"></span></th>
+                  <th scope="col" class="research-th-sortable" data-sort-field="score">Score <span class="sort-indicator">↓</span></th>
+                  <th scope="col" class="research-th-sortable" data-sort-field="status">Status <span class="sort-indicator"></span></th>
+                  <th scope="col" class="research-th-sortable" data-sort-field="pipeline">Pipeline <span class="sort-indicator"></span></th>
+                  <th scope="col" class="research-th-sortable" data-sort-field="created_at">Found <span class="sort-indicator"></span></th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody data-bind="research-table-body">
+                <tr><td colspan="8" class="research-table-empty">Loading research items...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Content Opportunity Pipeline -->
+        <div class="section-block" data-component="research-pipeline">
+          <h3 class="section-title">Content Opportunity Pipeline</h3>
+          <div class="research-pipeline-board">
+            <div class="research-pipeline-col" data-pipeline="idea">
+              <div class="research-pipeline-col__header">
+                <span class="research-pipeline-dot research-pipeline-dot--idea"></span> Idea
+                <span class="research-pipeline-col__count" data-bind="pipeline-idea-count">0</span>
+              </div>
+              <div class="research-pipeline-col__items" data-bind="pipeline-idea-items"></div>
+            </div>
+            <div class="research-pipeline-col" data-pipeline="draft">
+              <div class="research-pipeline-col__header">
+                <span class="research-pipeline-dot research-pipeline-dot--draft"></span> Draft
+                <span class="research-pipeline-col__count" data-bind="pipeline-draft-count">0</span>
+              </div>
+              <div class="research-pipeline-col__items" data-bind="pipeline-draft-items"></div>
+            </div>
+            <div class="research-pipeline-col" data-pipeline="scheduled">
+              <div class="research-pipeline-col__header">
+                <span class="research-pipeline-dot research-pipeline-dot--scheduled"></span> Scheduled
+                <span class="research-pipeline-col__count" data-bind="pipeline-scheduled-count">0</span>
+              </div>
+              <div class="research-pipeline-col__items" data-bind="pipeline-scheduled-items"></div>
+            </div>
+            <div class="research-pipeline-col" data-pipeline="live">
+              <div class="research-pipeline-col__header">
+                <span class="research-pipeline-dot research-pipeline-dot--live"></span> Live
+                <span class="research-pipeline-col__count" data-bind="pipeline-live-count">0</span>
+              </div>
+              <div class="research-pipeline-col__items" data-bind="pipeline-live-items"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Competitor Analysis -->
+        <div class="section-block" data-component="research-competitors">
+          <h3 class="section-title">Competitor Analysis</h3>
+          <div class="research-table-wrap">
+            <table class="research-table" aria-label="Competitor research">
+              <thead>
+                <tr>
+                  <th scope="col">Topic</th>
+                  <th scope="col">Competitor</th>
+                  <th scope="col">Category</th>
+                  <th scope="col">Score</th>
+                  <th scope="col">Notes</th>
+                  <th scope="col">Status</th>
+                </tr>
+              </thead>
+              <tbody data-bind="research-competitor-body">
+                <tr><td colspan="6" class="research-table-empty">No competitor data yet</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ========== CRON JOBS ========== -->
+      <section id="page-sops" class="page" data-page-title="Cron Jobs" aria-label="Cron Jobs" hidden>
+
+        <div class="page-heading-row">
+          <h2 class="page-heading">Cron Jobs</h2>
+          <div class="sop-header-controls">
+            <span class="sop-task-count" data-bind="sop-task-count">-- tasks</span>
+            <button class="btn btn--sm btn--primary" data-action="create-sop"><i data-lucide="plus" style="width:14px;height:14px;"></i> New Cron Job</button>
+          </div>
+        </div>
+
+        <div class="sop-grid" data-component="sops">
+          <div class="sop-card" style="opacity:0.4;text-align:center;padding:40px;">
+            <span style="color:var(--text-muted)">Loading scheduled tasks...</span>
+          </div>
+        </div>
+
+      </section>
+
+      <section id="page-plugins" class="page" data-page-title="Plugins" aria-label="Plugins" hidden>
+
+        <div class="page-heading-row">
+          <h2 class="page-heading">Plugins</h2>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <span class="plugin-count" data-bind="plugin-count">-- plugins</span>
+          </div>
+        </div>
+
+        <div class="plugin-grid" data-component="plugins">
+          <div class="sop-card" style="opacity:0.4;text-align:center;padding:40px;">
+            <span style="color:var(--text-muted)">Loading plugins...</span>
+          </div>
+        </div>
+
+      </section>
+
+      <section id="page-webhooks" class="page" data-page-title="Webhooks" aria-label="Webhooks" hidden>
+
+        <div class="page-heading-row">
+          <h2 class="page-heading">Webhooks</h2>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <span class="webhook-count" data-bind="webhook-count">-- webhooks</span>
+            <button class="btn-primary" id="btn-add-webhook" style="padding:6px 14px;font-size:0.85rem;">+ Add Webhook</button>
+          </div>
+        </div>
+
+        <!-- Add Webhook Form (hidden by default) -->
+        <div id="webhook-form" class="card" style="display:none;margin-bottom:24px;padding:20px;">
+          <h3 style="margin:0 0 16px;font-size:1rem;color:var(--text-primary);">New Webhook</h3>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+            <div>
+              <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:4px;">Event Type</label>
+              <select id="wh-event-type" style="width:100%;padding:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-family:inherit;">
+                <option value="agent_completed">Agent Completed</option>
+                <option value="security_finding">Security Finding</option>
+                <option value="task_completed">Task Completed</option>
+                <option value="guard_blocked">Guard Blocked</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:4px;">Secret (optional)</label>
+              <input id="wh-secret" type="text" placeholder="HMAC signing secret" style="width:100%;padding:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-family:inherit;box-sizing:border-box;">
+            </div>
+          </div>
+          <div style="margin-bottom:16px;">
+            <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:4px;">Target URL</label>
+            <input id="wh-target-url" type="url" placeholder="https://example.com/webhook" style="width:100%;padding:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-family:inherit;box-sizing:border-box;">
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn-primary" id="btn-save-webhook" style="padding:6px 14px;font-size:0.85rem;">Save</button>
+            <button class="btn-secondary" id="btn-cancel-webhook" style="padding:6px 14px;font-size:0.85rem;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:6px;cursor:pointer;">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Registered Webhooks -->
+        <div class="card" style="margin-bottom:24px;">
+          <h3 style="margin:0 0 16px;font-size:1rem;color:var(--text-primary);">Registered Webhooks</h3>
+          <div id="webhooks-list" style="min-height:60px;">
+            <div style="opacity:0.4;text-align:center;padding:20px;color:var(--text-muted);">Loading...</div>
+          </div>
+        </div>
+
+        <!-- Recent Deliveries -->
+        <div class="card">
+          <h3 style="margin:0 0 16px;font-size:1rem;color:var(--text-primary);">Recent Deliveries</h3>
+          <div id="webhook-deliveries" style="min-height:60px;overflow-x:auto;">
+            <div style="opacity:0.4;text-align:center;padding:20px;color:var(--text-muted);">Loading...</div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ========== PAWS MODE ========== -->
+      <section id="page-paws" class="page" data-page-title="Paws Mode" aria-label="Paws Mode" hidden>
+        <div class="page-heading-row">
+          <h2 class="page-heading">Paws Mode</h2>
+          <div class="sop-header-controls">
+            <span class="sop-task-count" data-bind="paw-count">-- paws</span>
+            <button class="btn btn--sm btn--primary" data-action="create-paw"><i data-lucide="plus" style="width:14px;height:14px;"></i> New Paw</button>
+          </div>
+        </div>
+        <div class="sop-grid" data-component="paws"></div>
+      </section>
+
+      <section id="page-graph" class="page" data-page-title="Knowledge Graph" aria-label="Knowledge Graph" hidden>
+
+        <div class="page-heading-row">
+          <h2 class="page-heading">Knowledge Graph</h2>
+          <div class="graph-toolbar" id="graph-toolbar">
+            <div class="graph-filter-group">
+              <button class="graph-filter-btn active" data-node-type="agent" title="Agents"><i data-lucide="bot" style="width:14px;height:14px;"></i> Agents</button>
+              <button class="graph-filter-btn active" data-node-type="project" title="Projects"><i data-lucide="folder" style="width:14px;height:14px;"></i> Projects</button>
+              <button class="graph-filter-btn active" data-node-type="memory" title="Memories"><i data-lucide="brain" style="width:14px;height:14px;"></i> Memories</button>
+              <button class="graph-filter-btn active" data-node-type="task" title="Tasks"><i data-lucide="clock" style="width:14px;height:14px;"></i> Tasks</button>
+              <button class="graph-filter-btn active" data-node-type="finding" title="Findings"><i data-lucide="shield-alert" style="width:14px;height:14px;"></i> Findings</button>
+            </div>
+            <select class="graph-project-filter" id="graph-project-filter" title="Filter by project">
+              <option value="">All Projects</option>
+            </select>
+            <button class="graph-reset-btn" id="graph-reset-cam" title="Reset camera"><i data-lucide="rotate-ccw" style="width:14px;height:14px;"></i> Reset</button>
+          </div>
+        </div>
+
+        <div class="graph-container" id="graph-container">
+          <div id="graph-3d" style="width:100%;height:100%;"></div>
+          <div class="graph-detail-panel" id="graph-detail-panel" hidden>
+            <button class="graph-detail-close" id="graph-detail-close">&times;</button>
+            <div class="graph-detail-header" id="graph-detail-header"></div>
+            <div class="graph-detail-body" id="graph-detail-body"></div>
+          </div>
+          <div class="graph-legend" id="graph-legend">
+            <span class="graph-legend-item"><span class="graph-legend-dot" style="background:var(--accent);"></span>Agent</span>
+            <span class="graph-legend-item"><span class="graph-legend-dot" style="background:var(--cyan);"></span>Project</span>
+            <span class="graph-legend-item"><span class="graph-legend-dot" style="background:var(--purple);"></span>Memory</span>
+            <span class="graph-legend-item"><span class="graph-legend-dot" style="background:var(--amber);"></span>Task</span>
+            <span class="graph-legend-item"><span class="graph-legend-dot" style="background:var(--red);"></span>Finding</span>
+          </div>
+          <div class="graph-stats" id="graph-stats"></div>
+        </div>
+
+      </section>
+
+      <section id="page-knowledge" class="page" data-page-title="Knowledge Graph" aria-label="Knowledge Graph" hidden>
+        <div class="page-heading-row">
+          <h2 class="page-heading">Knowledge Graph</h2>
+        </div>
+        <div id="knowledge-stats" class="grid grid-3" style="margin-bottom:20px;"></div>
+        <div class="card" style="margin-bottom:16px;">
+          <h3 style="margin-bottom:12px;">Recently Learned</h3>
+          <div id="knowledge-recent" class="feed-list"></div>
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:12px;">Recent Changes</h3>
+          <div id="knowledge-changes" class="feed-list"></div>
+        </div>
+      </section>
+
+      <!-- ===== PROJECTS PAGE ===== -->
+      <section id="page-projects" class="page" data-page-title="Projects" aria-label="Projects" hidden>
+        <div class="page-heading-row">
+          <h2 class="page-heading">Projects</h2>
+        </div>
+        <div id="projects-content">
+          <div class="projects-page-shell">
+            <div class="projects-page-grid">
+              <section class="projects-form-card">
+                <div class="projects-form-card__header">
+                  <div>
+                    <h3 id="projects-form-title">Create Project</h3>
+                    <p id="projects-form-subtitle">Set up a new workspace and optional auto-archive window.</p>
+                  </div>
+                  <button type="button" class="btn btn--ghost btn--sm" id="projects-form-reset" hidden>Cancel Edit</button>
+                </div>
+                <form id="projects-form" class="projects-form">
+                  <div class="projects-form__grid">
+                    <label>
+                      <span>Project ID</span>
+                      <input id="project-id-input" class="input" name="id" placeholder="my-project" pattern="[a-z0-9-]+" required />
+                    </label>
+                    <label>
+                      <span>Slug</span>
+                      <input id="project-slug-input" class="input" name="slug" placeholder="my-project" pattern="[a-z0-9-]+" required />
+                    </label>
+                    <label>
+                      <span>Name</span>
+                      <input id="project-name-input" class="input" name="name" placeholder="internal-name" required />
+                    </label>
+                    <label>
+                      <span>Display Name</span>
+                      <input id="project-display-name-input" class="input" name="display_name" placeholder="My Project" required />
+                    </label>
+                    <label>
+                      <span>Icon</span>
+                      <input id="project-icon-input" class="input" name="icon" placeholder="folder" />
+                    </label>
+                    <label>
+                      <span>Status</span>
+                      <select id="project-status-input" class="input" name="status">
+                        <option value="active">Active</option>
+                        <option value="paused">Paused</option>
+                        <option value="archived">Archived</option>
+                      </select>
+                    </label>
+                    <label class="projects-form__full">
+                      <span>Auto-Archive After Inactivity</span>
+                      <div class="projects-autoarchive-row">
+                        <input id="project-auto-archive-days-input" class="input" name="auto_archive_days" type="number" min="1" max="3650" placeholder="30" />
+                        <span class="projects-autoarchive-suffix">days</span>
+                      </div>
+                    </label>
+                  </div>
+                  <p class="projects-form__hint">Leave the auto-archive field empty to keep the project active until you pause or archive it manually.</p>
+                  <div class="projects-form__actions">
+                    <button type="submit" class="btn-primary" id="projects-submit-btn">Create Project</button>
+                  </div>
+                </form>
+              </section>
+              <section class="projects-list-card">
+                <div class="projects-list-card__header">
+                  <div>
+                    <h3>Workspace Inventory</h3>
+                    <p>Manage project status, recovery, and cleanup from one place.</p>
+                  </div>
+                  <div class="projects-summary" id="projects-summary"></div>
+                </div>
+                <div id="projects-list" class="projects-list"></div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== SETTINGS PAGE ===== -->
+      <!-- ==================== PAGE: INTEGRATIONS ==================== -->
+      <section id="page-integrations" class="page" data-page-title="Integrations" aria-label="Integrations" hidden>
+        <div class="page-header">
+          <h2 class="page-heading">Integrations</h2>
+          <p class="page-header__sub">Browse, install, and manage integrations for the current project.</p>
+        </div>
+
+        <nav class="integrations-tabs" role="tablist" aria-label="Integrations tabs">
+          <button class="int-tab int-tab--active" data-int-tab="connected" type="button">Connected</button>
+          <button class="int-tab" data-int-tab="browse" type="button">Browse</button>
+          <button class="int-tab" data-int-tab="setup-help" type="button">Setup Help</button>
+        </nav>
+
+        <div id="int-tab-connected" class="int-tab-panel">
+          <div id="int-connected-grid" class="integration-grid"></div>
+        </div>
+
+        <div id="int-tab-browse" class="int-tab-panel" hidden>
+          <div class="int-browse-layout">
+            <aside class="int-categories">
+              <input id="int-search" class="input-field" placeholder="Search...">
+              <ul id="int-category-list"></ul>
+            </aside>
+            <div id="int-browse-grid" class="integration-grid"></div>
+          </div>
+        </div>
+
+        <div id="int-tab-setup-help" class="int-tab-panel" hidden>
+          <div class="int-empty">
+            Setup Help lets an agent walk you through installing an integration. Coming soon.
+          </div>
+        </div>
+      </section>
+
+      <section id="page-settings" class="page" data-page-title="Settings" aria-label="Settings" hidden>
+        <div class="page-heading-row">
+          <h2 class="page-heading">Project Settings</h2>
+        </div>
+
+        <!-- Project selector for settings -->
+        <div class="settings-project-bar" id="settings-project-bar"></div>
+
+        <!-- Theme picker grid -->
+        <div class="settings-section" id="settings-theme-section">
+          <h3 class="settings-section-title">Theme</h3>
+          <p class="settings-section-desc">Pick a color theme for the dashboard. Changes apply instantly.</p>
+          <div class="theme-grid" id="theme-grid"></div>
+        </div>
+
+        <!-- Custom color overrides -->
+        <div class="settings-section" id="settings-colors-section">
+          <h3 class="settings-section-title">Color Overrides</h3>
+          <p class="settings-section-desc">Fine-tune individual colors on top of the selected theme.</p>
+          <div class="color-overrides-grid" id="color-overrides-grid"></div>
+        </div>
+
+        <div class="settings-section" id="settings-execution-section">
+          <h3 class="settings-section-title">Execution Defaults</h3>
+          <p class="settings-section-desc">Set the project-default execution waterfall. Changes save immediately. If a model is blank, the selected tier decides the provider default.</p>
+          <div class="settings-exec-waterfall" id="settings-execution-grid">
+            <div class="settings-exec-stage">
+              <div class="settings-exec-stage__label">1. Primary</div>
+              <div class="settings-exec-stage__fields">
+                <label class="settings-field">
+                  <span>Default Provider</span>
+                  <select class="input" id="settings-execution-provider">
+                    <option value="claude_desktop">Claude Desktop</option>
+                    <option value="codex_local">Codex Local</option>
+                    <option value="anthropic_api">Anthropic API</option>
+                    <option value="openai_api">OpenAI API</option>
+                    <option value="openrouter_api">OpenRouter</option>
+                    <option value="ollama">Ollama</option>
+                    <option value="lm_studio">LM Studio</option>
+                  </select>
+                </label>
+                <label class="settings-field">
+                  <span>Primary Model</span>
+                  <input class="input" id="settings-execution-model-primary" placeholder="Leave blank to use Balanced tier default" />
+                </label>
+              </div>
+            </div>
+            <div class="settings-exec-stage settings-exec-stage--arrow">
+              <div class="settings-exec-stage__label">2. Secondary</div>
+              <div class="settings-exec-stage__fields">
+                <label class="settings-field">
+                  <span>Secondary Provider</span>
+                  <select class="input" id="settings-execution-provider-secondary">
+                    <option value="">None</option>
+                    <option value="claude_desktop">Claude Desktop</option>
+                    <option value="codex_local">Codex Local</option>
+                    <option value="anthropic_api">Anthropic API</option>
+                    <option value="openai_api">OpenAI API</option>
+                    <option value="openrouter_api">OpenRouter</option>
+                    <option value="ollama">Ollama</option>
+                    <option value="lm_studio">LM Studio</option>
+                  </select>
+                </label>
+                <label class="settings-field">
+                  <span>Secondary Model</span>
+                  <input class="input" id="settings-execution-model-secondary" placeholder="Leave blank to use Balanced tier default" />
+                </label>
+              </div>
+            </div>
+            <div class="settings-exec-stage settings-exec-stage--arrow">
+              <div class="settings-exec-stage__label">3. Fallback</div>
+              <div class="settings-exec-stage__fields">
+                <label class="settings-field">
+                  <span>Fallback Provider</span>
+                  <select class="input" id="settings-execution-provider-fallback">
+                    <option value="">None</option>
+                    <option value="claude_desktop">Claude Desktop</option>
+                    <option value="codex_local">Codex Local</option>
+                    <option value="anthropic_api">Anthropic API</option>
+                    <option value="openai_api">OpenAI API</option>
+                    <option value="openrouter_api">OpenRouter</option>
+                    <option value="ollama">Ollama</option>
+                    <option value="lm_studio">LM Studio</option>
+                  </select>
+                </label>
+                <label class="settings-field">
+                  <span>Fallback Model</span>
+                  <input class="input" id="settings-execution-model-fallback" placeholder="Leave blank to use Balanced tier default" />
+                </label>
+              </div>
+            </div>
+            <div class="settings-exec-grid">
+              <label class="settings-field">
+                <span>Fallback Policy</span>
+                <select class="input" id="settings-fallback-policy">
+                  <option value="disabled">Disabled</option>
+                  <option value="enabled">Enabled</option>
+                </select>
+              </label>
+              <label class="settings-field">
+                <span>Default Tier</span>
+                <select class="input" id="settings-model-tier">
+                  <option value="cheap">Cheap</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="premium">Premium</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <p class="settings-section-note">Execution runs top to bottom. Secondary and fallback stages are only tried when the selected fallback policy allows automatic retry.</p>
+          <div class="settings-actions" id="settings-actions">
+            <span class="settings-status" id="settings-status">Saved</span>
+            <button class="btn-secondary" id="settings-reset-btn">Reset Project Defaults</button>
+          </div>
+        </div>
+
+        <!-- Cost Caps -->
+        <section class="cap-section" id="settings-cap-section">
+          <h3>Cost Caps</h3>
+          <p class="hint">At 80% the provider is auto-switched to ollama. At 100% agents refuse to run and you are notified.</p>
+          <label>Monthly cost cap ($) <input id="cap-monthly" type="number" min="0" step="0.01" /></label>
+          <label>Daily cost cap ($) <input id="cap-daily" type="number" min="0" step="0.01" /></label>
+          <button id="cap-save">Save caps</button>
+          <div id="cap-status" class="hint"></div>
+        </section>
+
+        <!-- Kill Switch (admin only) -->
+        <section id="settings-kill-switch-section">
+          <div id="kill-switch-panel"></div>
+          <!-- Inline trip modal -->
+          <div id="kill-modal" class="kill-modal hidden">
+            <label for="kill-reason">Reason</label>
+            <input id="kill-reason" type="text" placeholder="e.g. cost spike investigation" />
+            <div class="kill-modal-actions">
+              <button id="kill-confirm" class="btn-danger">Confirm</button>
+              <button id="kill-cancel" class="btn-secondary">Cancel</button>
+            </div>
+          </div>
+        </section>
+
+      </section>
+
+      <!-- ==================== PAGE: CREDENTIALS ==================== -->
+      <section id="page-credentials" class="page" data-page-title="Credentials" aria-label="Credentials" hidden>
+        <div class="page-header">
+          <h2>Credentials</h2>
+          <p class="page-header__sub">Encrypted secrets per project. Values are write-only -- never returned by the API.</p>
+        </div>
+        <div id="cred-container"></div>
+      </section>
+
+      <!-- ==================== PAGE: LOGGING ==================== -->
+      <section id="page-logging" class="page" hidden data-page-title="Logging" aria-label="Channel Logging">
+        <div class="page-header"><h2>Channel Logging</h2><p class="page-header__sub">All inbound and outbound messages across channels</p></div>
+        <div class="logging-filters" style="display:flex;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem">
+          <select id="logging-channel-filter" class="input-field" style="width:auto"><option value="">All Channels</option><option value="telegram">Telegram</option><option value="whatsapp">WhatsApp</option><option value="discord">Discord</option><option value="slack">Slack</option><option value="imessage">iMessage</option></select>
+          <select id="logging-bot-filter" class="input-field" style="width:auto"><option value="">All Bots</option></select>
+          <select id="logging-direction-filter" class="input-field" style="width:auto"><option value="">All</option><option value="in">Inbound</option><option value="out">Outbound</option></select>
+          <select id="logging-time-filter" class="input-field" style="width:auto"><option value="1h">Last hour</option><option value="24h" selected>Last 24h</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select>
+          <input id="logging-search" class="input-field" placeholder="Search messages..." style="flex:1;min-width:150px">
+        </div>
+        <div id="logging-table-container" style="overflow-x:auto">
+          <table class="data-table" id="logging-table">
+            <thead><tr><th>Time</th><th></th><th>Channel</th><th>Bot</th><th>Project</th><th>Sender</th><th>Content</th><th>Agent</th></tr></thead>
+            <tbody id="logging-tbody"></tbody>
+          </table>
+        </div>
+        <div id="logging-load-more" style="text-align:center;padding:1rem"><button class="btn btn-secondary" id="logging-more-btn" hidden>Load More</button></div>
+      </section>
+
+      <!-- ==================== PAGE: USERS ==================== -->
+      <section id="page-users" class="page" data-page-title="Users" aria-label="Users Admin" hidden>
+        <div class="page-heading-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+          <h2 class="page-heading" style="margin-bottom:0;">Users</h2>
+          <button class="btn btn--primary" id="users-add-btn" type="button">+ Add user</button>
+        </div>
+        <div id="users-list" class="users-list"></div>
+      </section>
+
+      <!-- ==================== PAGE: ACTION PLAN ==================== -->
+      <section id="page-action-plan" class="page" data-page-title="Action Plan" aria-label="Action Plan" hidden>
+        <div class="page-heading-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+          <h2 class="page-heading" style="margin-bottom:0;">Action Plan</h2>
+          <button id="ap-new-btn" class="btn btn--primary" type="button">New item</button>
+        </div>
+        <nav class="ap-tabs" role="tablist" aria-label="Action Plan tabs">
+          <button class="ap-tab ap-tab--active" data-tab="active" type="button">Active</button>
+          <button class="ap-tab" data-tab="proposed" type="button">Proposed</button>
+          <button class="ap-tab" data-tab="completed" type="button">Completed</button>
+          <button class="ap-tab" data-tab="archive" type="button">Archive</button>
+        </nav>
+        <div id="ap-purge-row" style="display:none;margin-bottom:8px;text-align:right;">
+          <button id="ap-purge-btn" class="btn btn--ghost btn--sm" type="button" style="color:var(--color-danger,#e55);">Purge old archives</button>
+        </div>
+        <input id="ap-search" class="ap-search" placeholder="Search action items..." aria-label="Search" />
+        <div id="ap-list" class="ap-list"></div>
+        <aside id="ap-drawer" class="ap-drawer" hidden aria-label="Action item details"></aside>
+      </section>
+
+    </div><!-- /page-container -->
+
+    <!-- Upgrade Modal -->
+    <div class="modal-overlay" id="upgrade-modal" style="display:none" role="dialog" aria-modal="true" aria-labelledby="upgrade-modal-title">
+      <div class="modal-content" style="max-width:440px">
+        <div class="modal-header">
+          <h3 id="upgrade-modal-title" style="margin:0">Update Available</h3>
+          <button class="modal-close-btn" id="upgrade-modal-close" aria-label="Close">&times;</button>
+        </div>
+        <p id="upgrade-modal-subtitle" style="color:var(--text-secondary);font-size:13px;margin:0 0 12px"></p>
+        <div id="upgrade-commits" style="background:var(--bg-base);border-radius:6px;padding:10px 12px;font-family:monospace;font-size:11px;line-height:1.9;margin-bottom:12px;max-height:180px;overflow-y:auto"></div>
+        <p style="color:var(--text-muted);font-size:11px;margin:0 0 16px">Runs: git pull &rarr; npm run build &rarr; restart. Bot offline ~30s.</p>
+        <button class="btn btn-primary" id="upgrade-now-btn" style="width:100%">Upgrade Now</button>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Research Drawer (outside main to avoid main-content stacking context trap) -->
+  <div id="rs-drawer" class="rs-drawer" hidden aria-label="Research item detail">
+    <div class="rs-drawer__backdrop" data-action="close"></div>
+    <aside class="rs-drawer__panel" role="dialog" aria-modal="true">
+      <header class="rs-drawer__header">
+        <button class="rs-drawer__close" data-action="close" aria-label="Close">&times;</button>
+        <h3 class="rs-drawer__title" data-bind="rs-title"></h3>
+        <div class="rs-drawer__meta" data-bind="rs-meta"></div>
+        <div class="rs-drawer__status-row">
+          <label>Status
+            <select class="rs-drawer__status" data-bind="rs-status">
+              <option value="new">New</option>
+              <option value="reviewing">Reviewing</option>
+              <option value="opportunity">Opportunity</option>
+              <option value="published">Published</option>
+              <option value="archived">Archived</option>
+            </select>
+          </label>
+        </div>
+      </header>
+
+      <section class="rs-drawer__actionbar" data-bind="rs-actionbar"></section>
+      <section class="rs-drawer__details" data-bind="rs-details"></section>
+      <section class="rs-drawer__drafts" data-bind="rs-drafts" hidden>
+        <h4>Linked drafts</h4>
+        <ul class="rs-drawer__drafts-list" data-bind="rs-drafts-list"></ul>
+      </section>
+
+      <section class="rs-drawer__chat">
+        <h4>Scout chat</h4>
+        <div class="rs-drawer__chat-messages" data-bind="rs-chat-messages"></div>
+        <div class="rs-drawer__chat-input-row">
+          <textarea class="rs-drawer__chat-input" data-bind="rs-chat-input" rows="2" placeholder="Message Scout..."></textarea>
+          <button class="rs-drawer__chat-send" data-bind="rs-chat-send">Send</button>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <!-- Agent Creator Wizard (outside page sections to avoid stacking context traps) -->
+  <div class="agent-wizard-overlay" id="agent-wizard" style="display:none;" data-component="agent-wizard">
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:999;" id="wizard-backdrop"></div>
+    <div class="agent-wizard-modal" style="background:var(--bg-overlay);border-radius:12px;border:1px solid var(--border-subtle);max-width:640px;width:90%;max-height:85vh;overflow-y:auto;padding:32px;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1000;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;">
+        <h3 style="font-size:18px;font-weight:700;color:var(--text-primary);margin:0;">Create New Agent</h3>
+        <button class="btn-icon" id="wizard-close" type="button" style="font-size:18px;cursor:pointer;">&times;</button>
+      </div>
+      <div class="wizard-steps" id="wizard-steps" style="display:flex;gap:8px;margin-bottom:24px;">
+        <div class="wizard-step active" data-step="1" style="flex:1;height:4px;border-radius:2px;background:var(--accent);"></div>
+        <div class="wizard-step" data-step="2" style="flex:1;height:4px;border-radius:2px;background:var(--border-subtle);"></div>
+        <div class="wizard-step" data-step="3" style="flex:1;height:4px;border-radius:2px;background:var(--border-subtle);"></div>
+        <div class="wizard-step" data-step="4" style="flex:1;height:4px;border-radius:2px;background:var(--border-subtle);"></div>
+        <div class="wizard-step" data-step="5" style="flex:1;height:4px;border-radius:2px;background:var(--border-subtle);"></div>
+        <div class="wizard-step" data-step="6" style="flex:1;height:4px;border-radius:2px;background:var(--border-subtle);"></div>
+      </div>
+      <div id="wizard-content"></div>
+      <div style="display:flex;justify-content:space-between;margin-top:24px;">
+        <button class="btn btn--ghost" id="wizard-back" type="button" style="display:none;">Back</button>
+        <div style="flex:1;"></div>
+        <button class="btn btn--primary" id="wizard-next" type="button">Next</button>
+      </div>
+    </div>
+  </div>
+
+    <!-- Integration Install Modal -->
+    <div class="int-modal-overlay" id="int-modal" style="display:none">
+      <div style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:999" id="int-modal-backdrop"></div>
+      <div class="int-modal" style="background:var(--bg-overlay);border-radius:12px;border:1px solid var(--border-subtle);max-width:560px;width:90%;max-height:85vh;overflow-y:auto;padding:28px;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1000">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <h3 id="int-modal-title" style="font-size:18px;font-weight:700;margin:0">Install</h3>
+          <button class="btn-icon" id="int-modal-close" type="button" style="font-size:18px;cursor:pointer">&times;</button>
+        </div>
+        <div id="int-modal-body"></div>
+      </div>
+    </div>
+
+  <!-- ========== RIGHT SIDEBAR -- LIVE FEED ========== -->
+  <aside class="sidebar-feed" aria-label="Activity feed">
+    <div class="sidebar-feed__header">
+      <h2>Live Feed</h2>
+      <span class="pulse-dot" aria-hidden="true"></span>
+      <button id="feed-sort-toggle" class="btn-icon" style="margin-left:auto;font-size:11px;opacity:0.7;" title="Toggle sort order"><i data-lucide="arrow-down" style="width:12px;height:12px;"></i> Newest</button>
+    </div>
+    <div class="sidebar-feed__list" data-bind="live-feed" aria-live="polite">
+      <div class="feed-item" style="opacity:0.5;text-align:center;"><span class="feed-text">Loading feed...</span></div>
+    </div>
+  </aside>
+
+  <!-- ========== FOOTER ========== -->
+  <footer class="app-footer">
+    <div class="footer-status">
+      <span class="connection-indicator" data-bind="connection-status" aria-label="Connection status">
+        <span class="connection-indicator__dot" id="ws-footer-dot"></span>
+        <span class="connection-indicator__text" id="ws-footer-text">Connecting...</span>
+      </span>
+    </div>
+    <div class="footer-brand">
+      Powered by <strong>ClaudePaw</strong> &middot; Open Source
+    </div>
+  </footer>
+
+  <!-- ========== AUTH GATE ========== -->
+  <div id="auth-gate" style="display:none" role="dialog" aria-modal="true" aria-labelledby="auth-gate-title">
+    <div class="auth-gate__card">
+      <div class="auth-gate__brand">
+        <img src="assets/claude-paw-logo.png" alt="ClaudePaw" class="auth-gate__logo">
+        <span class="auth-gate__title" id="auth-gate-title">ClaudePaw</span>
+      </div>
+      <p class="auth-gate__label">Enter your ClaudePaw access token</p>
+      <input
+        type="password"
+        id="auth-gate-input"
+        class="auth-gate__input"
+        placeholder="cpaw_..."
+        autocomplete="current-password"
+        spellcheck="false"
+      >
+      <p id="auth-gate-error" class="auth-gate__error" style="display:none"></p>
+      <button id="auth-gate-submit" class="auth-gate__btn" type="button">Connect</button>
+    </div>
+  </div>
+
+  <!-- ========== USERS MODALS ========== -->
+  <div id="users-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="users-modal-title">
+    <div class="modal-content" style="max-width:480px">
+      <div class="modal-header">
+        <h3 id="users-modal-title" style="margin:0">Add User</h3>
+        <button class="modal-close-btn" id="users-modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div id="users-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Raw token one-time display modal -->
+  <div id="token-reveal-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="token-reveal-title">
+    <div class="modal-content" style="max-width:480px">
+      <div class="modal-header">
+        <h3 id="token-reveal-title" style="margin:0">Access Token</h3>
+        <button class="modal-close-btn" id="token-reveal-close" aria-label="Close">&times;</button>
+      </div>
+      <p style="color:var(--amber);font-size:13px;margin:0 0 12px">This is the only time this token will be shown. Copy it now.</p>
+      <div id="token-reveal-value" style="background:var(--bg-base);border:1px solid var(--border-subtle);border-radius:6px;padding:10px 12px;font-family:var(--font-mono);font-size:12px;word-break:break-all;margin-bottom:12px;color:var(--accent)"></div>
+      <button id="token-reveal-copy" class="btn btn--primary" style="width:100%" type="button">Copy to clipboard</button>
+    </div>
+  </div>
+
+  <!-- Confirm dialog -->
+  <div id="confirm-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+    <div class="modal-content" style="max-width:420px">
+      <div class="modal-header">
+        <h3 id="confirm-modal-title" style="margin:0">Confirm</h3>
+      </div>
+      <p id="confirm-modal-body" style="color:var(--text-secondary);font-size:14px;margin:0 0 20px"></p>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button id="confirm-modal-cancel" class="btn btn--ghost" type="button">Cancel</button>
+        <button id="confirm-modal-ok" class="btn btn--primary" type="button" style="background:var(--red);border-color:var(--red)">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=20260418f"></script>
+</body>
+</html>

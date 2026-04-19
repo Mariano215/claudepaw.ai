@@ -1,0 +1,47 @@
+{
+  "id": "rose",
+  "name": "Rose Blush",
+  "description": "Warm pink and rose on deep plum",
+  "colors": {
+    "bgBase": "#0f080d",
+    "bgRaised": "#1a0e17",
+    "bgSurface": "#20131c",
+    "bgOverlay": "#2d1a26",
+    "bgGlass": "rgba(26, 14, 23, 0.80)",
+    "accent": "#f472b6",
+    "accentDim": "rgba(244, 114, 182, 0.13)",
+    "accentGlow": "rgba(244, 114, 182, 0.32)",
+    "accentSoft": "rgba(244, 114, 182, 0.07)",
+    "magenta": "#f472b6",
+    "cyan": "#fb7185",
+    "green": "#34d399",
+    "amber": "#fbbf24",
+    "red": "#ef4444",
+    "purple": "#c084fc",
+    "textPrimary": "#f0e0e8",
+    "textSecondary": "#b08898",
+    "textMuted": "#6b4a5a",
+    "textOnAccent": "#0f080d",
+    "borderColor": "rgba(244, 114, 182, 0.14)",
+    "borderSubtle": "rgba(255, 255, 255, 0.06)",
+    "sidebarBg": "rgba(26, 14, 23, 0.80)",
+    "headerBg": "#0f080d",
+    "cardBg": "#20131c",
+    "cardBorder": "rgba(244, 114, 182, 0.14)",
+    "feedHighlight": "rgba(244, 114, 182, 0.07)"
+  },
+  "fonts": {
+    "heading": "'Orbitron', sans-serif",
+    "body": "'Outfit', sans-serif",
+    "mono": "'JetBrains Mono', monospace"
+  },
+  "gradients": {
+    "card": "linear-gradient(135deg, rgba(244, 114, 182, 0.04) 0%, transparent 60%)",
+    "cardHover": "linear-gradient(135deg, rgba(244, 114, 182, 0.07) 0%, transparent 60%)"
+  },
+  "shadows": {
+    "card": "0 1px 3px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3)",
+    "hover": "0 0 0 1px rgba(244,114,182,0.3), 0 4px 24px rgba(0,0,0,0.4), 0 0 32px rgba(244,114,182,0.06)",
+    "glow": "0 0 8px rgba(244,114,182,0.13), 0 0 24px rgba(244,114,182,0.05)"
+  }
+}

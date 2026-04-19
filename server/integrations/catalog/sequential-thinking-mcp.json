@@ -1,0 +1,24 @@
+{
+  "id": "sequential-thinking-mcp",
+  "name": "Sequential Thinking",
+  "category": "ai",
+  "icon": "brain",
+  "description": "Structured step-by-step reasoning for complex problem solving and analysis",
+  "kind": "mcp_server",
+  "mcp": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking@2025.12.18"],
+    "env_from_credentials": [],
+    "transport": "stdio"
+  },
+  "setup": {
+    "credentials_required": [],
+    "instructions": "No credentials needed. Adds structured thinking tools to agent sessions."
+  },
+  "verify": {
+    "kind": "mcp_tool_call",
+    "tool": "sequentialthinking",
+    "args": { "thought": "test", "nextThoughtNeeded": false, "thoughtNumber": 1, "totalThoughts": 1 },
+    "timeout_ms": 15000
+  }
+}

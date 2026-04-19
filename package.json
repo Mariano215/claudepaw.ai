@@ -1,0 +1,76 @@
+{
+  "name": "claudepaw",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "setup": "tsx scripts/setup.ts",
+    "status": "tsx scripts/status.ts",
+    "provider:readiness": "node --import tsx scripts/provider-readiness.ts",
+    "provider:smoke": "node --import tsx scripts/provider-smoke.ts",
+    "schedule": "tsx src/schedule-cli.ts",
+    "social": "tsx src/social-cli.ts",
+    "produce:publish": "tsx scripts/youtube-publish.ts",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:guard:rules": "bash -lc 'cd guard-sidecar && .venv/bin/python ./test_rules.py'",
+    "typecheck": "tsc --noEmit",
+    "restart": "bash scripts/restart.sh",
+    "deploy": "bash scripts/deploy.sh",
+    "deploy:dashboard": "bash scripts/deploy-dashboard.sh",
+    "db:status": "bash scripts/db-status.sh",
+    "db:pull:prod": "bash scripts/pull-prod-db.sh",
+    "db:push:prod": "bash scripts/push-prod-db.sh",
+    "sync:oss": "bash scripts/sync-oss.sh",
+    "knowledge:seed": "tsx scripts/knowledge-seed.ts",
+    "knowledge:ingest": "tsx scripts/knowledge-ingest.ts",
+    "knowledge:migrate": "tsx scripts/migrate-learned-skills.ts",
+    "paws": "node dist/paws-cli.js",
+    "paws:seed": "tsx scripts/paws-seed.ts",
+    "memory:nightly": "tsx scripts/run-memory-v2-nightly.ts nightly",
+    "memory:compact": "tsx scripts/run-memory-v2-nightly.ts compact",
+    "memory:backfill-embeddings": "tsx scripts/backfill-embeddings.ts",
+    "memory:migrate-legacy": "tsx scripts/migrate-memory-v2.ts",
+    "verify:permissions": "tsx scripts/verify-permissions.ts"
+  },
+  "bin": {
+    "cpaw": "./dist/integrations/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.0",
+    "@anthropic-ai/sdk": "^0.89.0",
+    "@slack/bolt": "^4.6.0",
+    "@types/ws": "^8.18.1",
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "better-sqlite3": "^11.0.0",
+    "cron-parser": "^4.9.0",
+    "discord.js": "^14.26.2",
+    "googleapis": "^171.4.0",
+    "grammy": "^1.30.0",
+    "imapflow": "^1.2.18",
+    "jsonwebtoken": "^9.0.3",
+    "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0",
+    "sharp": "^0.34.5",
+    "sqlite-vec": "^0.1.9",
+    "ws": "^8.20.0"
+  },
+  "overrides": {
+    "axios": ">=1.8.0"
+  },
+  "devDependencies": {
+    "@inquirer/prompts": "^8.3.2",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "@types/sharp": "^0.31.1",
+    "@vitest/coverage-v8": "^4.1.4",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^4.1.4"
+  }
+}

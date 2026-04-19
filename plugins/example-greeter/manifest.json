@@ -1,0 +1,10 @@
+{
+  "id": "example-greeter",
+  "name": "Greeter",
+  "version": "1.0.0",
+  "author": "ClaudePaw",
+  "description": "Example plugin that adds a greeting capability to any agent",
+  "keywords": ["example", "greeting", "demo"],
+  "agent_id": "builder",
+  "dependencies": []
+}

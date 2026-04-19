@@ -1,0 +1,30 @@
+{
+  "id": "resend",
+  "name": "Resend",
+  "category": "communication",
+  "icon": "send",
+  "description": "Send transactional email via Resend",
+  "kind": "api_key",
+  "api_key": {
+    "credential_key": "resend.api_key",
+    "test_endpoint": "https://api.resend.com/domains",
+    "test_header": "Authorization: Bearer {api_key}"
+  },
+  "setup": {
+    "credentials_required": [
+      {
+        "service": "resend",
+        "key": "api_key",
+        "label": "Resend API Key",
+        "help_url": "https://resend.com/api-keys",
+        "input_type": "password"
+      }
+    ]
+  },
+  "verify": {
+    "kind": "http_get",
+    "endpoint": "https://api.resend.com/domains",
+    "header_template": "Authorization: Bearer {api_key}",
+    "expect_status": 200
+  }
+}

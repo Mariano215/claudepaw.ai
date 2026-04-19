@@ -1,0 +1,47 @@
+{
+  "id": "holo-future",
+  "name": "Holo Future",
+  "description": "Blue, magenta, amber, and green holographic palette",
+  "colors": {
+    "bgBase": "#0c0e1a",
+    "bgRaised": "#11131f",
+    "bgSurface": "#161824",
+    "bgOverlay": "#1c1e2a",
+    "bgGlass": "rgba(17, 19, 31, 0.85)",
+    "accent": "#4A90E2",
+    "accentDim": "rgba(74, 144, 226, 0.13)",
+    "accentGlow": "rgba(74, 144, 226, 0.32)",
+    "accentSoft": "rgba(74, 144, 226, 0.07)",
+    "magenta": "#D5006D",
+    "cyan": "#4A90E2",
+    "green": "#7ED321",
+    "amber": "#F5A623",
+    "red": "#ff3355",
+    "purple": "#a78bfa",
+    "textPrimary": "#eaeaf5",
+    "textSecondary": "#8a8aac",
+    "textMuted": "#50506e",
+    "textOnAccent": "#050510",
+    "borderColor": "rgba(74, 144, 226, 0.14)",
+    "borderSubtle": "rgba(255, 255, 255, 0.06)",
+    "sidebarBg": "rgba(17, 19, 31, 0.75)",
+    "headerBg": "#0c0e1a",
+    "cardBg": "#11131f",
+    "cardBorder": "rgba(74, 144, 226, 0.14)",
+    "feedHighlight": "rgba(74, 144, 226, 0.07)"
+  },
+  "fonts": {
+    "heading": "'Orbitron', sans-serif",
+    "body": "'Outfit', sans-serif",
+    "mono": "'JetBrains Mono', monospace"
+  },
+  "gradients": {
+    "card": "linear-gradient(135deg, rgba(74, 144, 226, 0.04) 0%, transparent 60%)",
+    "cardHover": "linear-gradient(135deg, rgba(74, 144, 226, 0.07) 0%, transparent 60%)"
+  },
+  "shadows": {
+    "card": "0 1px 3px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3)",
+    "hover": "0 0 0 1px rgba(74,144,226,0.3), 0 4px 24px rgba(0,0,0,0.4), 0 0 32px rgba(74,144,226,0.06)",
+    "glow": "0 0 8px rgba(74,144,226,0.13), 0 0 24px rgba(74,144,226,0.05)"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "id": "github-mcp",
+  "name": "GitHub",
+  "category": "dev-tools",
+  "icon": "github",
+  "description": "Read and manage repositories, issues, pull requests, and commits",
+  "kind": "mcp_server",
+  "mcp": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github@2025.4.8"],
+    "env_from_credentials": ["github.personal_access_token"],
+    "transport": "stdio"
+  },
+  "setup": {
+    "credentials_required": [
+      {
+        "service": "github",
+        "key": "personal_access_token",
+        "label": "GitHub Personal Access Token",
+        "help_url": "https://github.com/settings/tokens",
+        "input_type": "password"
+      }
+    ],
+    "instructions": "Create a fine-grained PAT with read access to repositories, issues, and pull requests."
+  },
+  "verify": {
+    "kind": "mcp_tool_call",
+    "tool": "list_commits",
+    "args": { "owner": "modelcontextprotocol", "repo": "servers", "perPage": 1 },
+    "timeout_ms": 30000
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "id": "stripe",
+  "name": "Stripe",
+  "category": "payments",
+  "icon": "credit-card",
+  "description": "Read payments, customers, and subscriptions via Stripe API",
+  "kind": "api_key",
+  "api_key": {
+    "credential_key": "stripe.api_key",
+    "test_endpoint": "https://api.stripe.com/v1/charges?limit=1",
+    "test_header": "Authorization: Bearer {api_key}"
+  },
+  "setup": {
+    "credentials_required": [
+      {
+        "service": "stripe",
+        "key": "api_key",
+        "label": "Stripe Secret Key",
+        "help_url": "https://dashboard.stripe.com/apikeys",
+        "input_type": "password"
+      }
+    ],
+    "instructions": "Create a restricted API key with read access to Customers, Charges, and Subscriptions. Paste the secret key below."
+  },
+  "verify": {
+    "kind": "http_get",
+    "endpoint": "https://api.stripe.com/v1/charges?limit=1",
+    "header_template": "Authorization: Bearer {api_key}",
+    "expect_status": 200
+  }
+}

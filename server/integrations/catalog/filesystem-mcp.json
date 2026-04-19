@@ -1,0 +1,24 @@
+{
+  "id": "filesystem-mcp",
+  "name": "Filesystem",
+  "category": "dev-tools",
+  "icon": "folder",
+  "description": "Read, write, and search files with directory-level access controls",
+  "kind": "mcp_server",
+  "mcp": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem@2026.1.14", "/tmp"],
+    "env_from_credentials": [],
+    "transport": "stdio"
+  },
+  "setup": {
+    "credentials_required": [],
+    "instructions": "Grants the agent read/write access to a directory. The default is /tmp. Edit the manifest to change the allowed path."
+  },
+  "verify": {
+    "kind": "mcp_tool_call",
+    "tool": "list_directory",
+    "args": { "path": "/tmp" },
+    "timeout_ms": 15000
+  }
+}
