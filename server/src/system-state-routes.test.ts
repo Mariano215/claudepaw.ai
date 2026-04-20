@@ -12,7 +12,7 @@
  *  6. POST with empty reason                              -> 400
  */
 
-import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import express from 'express'
 import { createServer } from 'node:http'
@@ -87,20 +87,28 @@ vi.mock('./integrations/routes.js', async () => {
 })
 
 // ---------------------------------------------------------------------------
-// Mock system-state so tests control kill-switch state directly
+// Mock system-state so tests control kill-switch state directly.
+// `appendKillSwitchLog` proxies to the real implementation against our
+// in-memory testDb so the route tests can assert that rows actually
+// land in the kill_switch_log table.
 // ---------------------------------------------------------------------------
 
 let _ks: { set_at: number; reason: string; set_by: string | null } | null = null
 
-vi.mock('./system-state.js', () => ({
-  getKillSwitch: vi.fn(() => _ks),
-  setKillSwitch: vi.fn((reason: string, setBy: string) => {
-    _ks = { set_at: Date.now(), reason, set_by: setBy }
-  }),
-  clearKillSwitch: vi.fn(() => {
-    _ks = null
-  }),
-}))
+vi.mock('./system-state.js', async () => {
+  const real = await vi.importActual<typeof import('./system-state.js')>('./system-state.js')
+  return {
+    getKillSwitch: vi.fn(() => _ks),
+    setKillSwitch: vi.fn((reason: string, setBy: string) => {
+      _ks = { set_at: Date.now(), reason, set_by: setBy }
+    }),
+    clearKillSwitch: vi.fn(() => {
+      _ks = null
+    }),
+    appendKillSwitchLog: vi.fn(real.appendKillSwitchLog),
+    readKillSwitchLog: vi.fn(real.readKillSwitchLog),
+  }
+})
 
 // ---------------------------------------------------------------------------
 // In-memory DB + db.js mock
@@ -150,6 +158,17 @@ function makeSchema(db: Database.Database) {
       status TEXT NOT NULL DEFAULT 'active',
       auto_archive_days INTEGER,
       created_at INTEGER NOT NULL DEFAULT 0
+    )
+  `).run()
+  // Phase 5 Task 3 -- mirror the production kill_switch_log schema so
+  // POST/DELETE handlers can append rows and assertions can SELECT them.
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS kill_switch_log (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      toggled_at_ms  INTEGER NOT NULL,
+      new_state      TEXT NOT NULL CHECK (new_state IN ('tripped', 'active')),
+      reason         TEXT,
+      set_by         TEXT
     )
   `).run()
 }
@@ -433,5 +452,123 @@ describe('POST /api/v1/system-state/kill-switch -- uninitialized store', () => {
     })
     expect(res.status).toBe(500)
     expect((res.body as { error: string }).error).toMatch(/kill-switch store not initialized/i)
+  })
+})
+
+// ===========================================================================
+// Phase 5 Task 3 -- kill_switch_log append behaviour
+// ===========================================================================
+
+describe('Phase 5 Task 3 -- kill_switch_log append on toggle', () => {
+  beforeEach(() => {
+    testDb.prepare('DELETE FROM kill_switch_log').run()
+    _ks = null
+  })
+
+  it('POST appends a tripped row with reason and operator name', async () => {
+    const res = await httpReq(srv, 'POST', '/api/v1/system-state/kill-switch', {
+      headers: tok(adminToken),
+      body: { reason: 'cost spike' },
+    })
+    expect(res.status).toBe(200)
+    const rows = testDb.prepare(
+      `SELECT toggled_at_ms, new_state, reason, set_by FROM kill_switch_log`,
+    ).all() as Array<{
+      toggled_at_ms: number
+      new_state: string
+      reason: string | null
+      set_by: string | null
+    }>
+    expect(rows.length).toBe(1)
+    expect(rows[0].new_state).toBe('tripped')
+    expect(rows[0].reason).toBe('cost spike')
+    // set_by stores the operator email to match the system_state
+    // singleton's kill_switch_set_by column (Phase 5 Task 3 review).
+    expect(rows[0].set_by).toBe('admin@ks.test')
+    expect(typeof rows[0].toggled_at_ms).toBe('number')
+    expect(rows[0].toggled_at_ms).toBeGreaterThan(0)
+  })
+
+  it('DELETE appends an active row with reason "cleared"', async () => {
+    _ks = { set_at: Date.now(), reason: 'pre-set', set_by: 'admin' }
+    const res = await httpReq(srv, 'DELETE', '/api/v1/system-state/kill-switch', {
+      headers: tok(adminToken),
+    })
+    expect(res.status).toBe(200)
+    const rows = testDb.prepare(
+      `SELECT new_state, reason, set_by FROM kill_switch_log`,
+    ).all() as Array<{ new_state: string; reason: string | null; set_by: string | null }>
+    expect(rows.length).toBe(1)
+    expect(rows[0].new_state).toBe('active')
+    expect(rows[0].reason).toBe('cleared')
+    expect(rows[0].set_by).toBe('admin@ks.test')
+  })
+
+  it('consecutive POST -> DELETE -> POST yields 3 rows in chronological order', async () => {
+    await httpReq(srv, 'POST', '/api/v1/system-state/kill-switch', {
+      headers: tok(adminToken),
+      body: { reason: 'first trip' },
+    })
+    await httpReq(srv, 'DELETE', '/api/v1/system-state/kill-switch', {
+      headers: tok(adminToken),
+    })
+    await httpReq(srv, 'POST', '/api/v1/system-state/kill-switch', {
+      headers: tok(adminToken),
+      body: { reason: 'second trip' },
+    })
+
+    const rows = testDb.prepare(
+      `SELECT new_state, reason FROM kill_switch_log ORDER BY id ASC`,
+    ).all() as Array<{ new_state: string; reason: string | null }>
+    expect(rows.length).toBe(3)
+    expect(rows[0]).toEqual({ new_state: 'tripped', reason: 'first trip' })
+    expect(rows[1]).toEqual({ new_state: 'active',  reason: 'cleared' })
+    expect(rows[2]).toEqual({ new_state: 'tripped', reason: 'second trip' })
+  })
+
+  it('POST that fails authz (member, not admin) does NOT append a row', async () => {
+    const res = await httpReq(srv, 'POST', '/api/v1/system-state/kill-switch', {
+      headers: tok(memberToken),
+      body: { reason: 'denied' },
+    })
+    expect(res.status).toBe(403)
+    const count = (testDb.prepare(`SELECT COUNT(*) AS n FROM kill_switch_log`).get() as { n: number }).n
+    expect(count).toBe(0)
+  })
+
+  it('POST with empty reason does NOT append a row (400 short-circuit)', async () => {
+    const res = await httpReq(srv, 'POST', '/api/v1/system-state/kill-switch', {
+      headers: tok(adminToken),
+      body: { reason: '' },
+    })
+    expect(res.status).toBe(400)
+    const count = (testDb.prepare(`SELECT COUNT(*) AS n FROM kill_switch_log`).get() as { n: number }).n
+    expect(count).toBe(0)
+  })
+
+  it('a thrown appendKillSwitchLog does not fail the toggle', async () => {
+    // Drop the kill_switch_log table so the append throws -- the
+    // singleton state should still update + return 200.
+    testDb.prepare(`DROP TABLE kill_switch_log`).run()
+    try {
+      const res = await httpReq(srv, 'POST', '/api/v1/system-state/kill-switch', {
+        headers: tok(adminToken),
+        body: { reason: 'log-broken' },
+      })
+      expect(res.status).toBe(200)
+      // The singleton mock still tracks set state.
+      expect(_ks?.reason).toBe('log-broken')
+    } finally {
+      // Recreate the table so subsequent tests can run.
+      testDb.prepare(`
+        CREATE TABLE IF NOT EXISTS kill_switch_log (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          toggled_at_ms  INTEGER NOT NULL,
+          new_state      TEXT NOT NULL CHECK (new_state IN ('tripped', 'active')),
+          reason         TEXT,
+          set_by         TEXT
+        )
+      `).run()
+    }
   })
 })

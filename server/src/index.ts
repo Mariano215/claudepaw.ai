@@ -6,7 +6,7 @@ import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 import { createServer } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { initDatabase, closeAllDatabases } from './db.js'
+import { initDatabase, closeAllDatabases, getServerDb } from './db.js'
 import { initUserStore } from './users.js'
 import { authenticate, scopeProjects, mountAuthRoutes, ensureAuthBootstrap } from './auth.js'
 import routes from './routes.js'
@@ -16,6 +16,8 @@ import { mountUsersRoutes } from './users-routes.js'
 import { setupWebSocket } from './ws.js'
 import { logger } from './logger.js'
 import { runMetricsCollection } from './metrics-collector.js'
+import { pruneKillSwitchLog } from './system-state.js'
+import { resolveKillSwitchLogRetentionDays } from './env-config.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = parseInt(process.env.PORT ?? '3000', 10)
@@ -189,6 +191,38 @@ server.listen(PORT, '0.0.0.0', () => {
     }, wait)
   }
   scheduleDailyMetrics()
+
+  // Phase 6 Task 5 -- kill_switch_log retention.  Drops rows older than
+  // KILL_SWITCH_LOG_RETENTION_DAYS (default 180).  Fires once on startup,
+  // then every 24 hours.
+  //
+  // Phase 7 Task 8 -- retention window is configurable via the
+  // KILL_SWITCH_LOG_RETENTION_DAYS env var.  Non-numeric, non-finite,
+  // non-integer, or non-positive values fall back to the 180-day default
+  // with a warning logged so a typo in the env does not silently disable
+  // retention.  The resolved value is logged at info on startup so ops
+  // can confirm which window is active without reading the code.
+  const KILL_SWITCH_LOG_RETENTION_DAYS = resolveKillSwitchLogRetentionDays(
+    process.env.KILL_SWITCH_LOG_RETENTION_DAYS,
+    logger,
+  )
+  logger.info(
+    { retentionDays: KILL_SWITCH_LOG_RETENTION_DAYS },
+    'kill_switch_log: retention configured',
+  )
+  const KILL_SWITCH_LOG_RETENTION_MS = KILL_SWITCH_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000
+  const KILL_SWITCH_LOG_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000
+  function runKillSwitchLogPrune(): void {
+    try {
+      const cutoffMs = Date.now() - KILL_SWITCH_LOG_RETENTION_MS
+      const deleted = pruneKillSwitchLog(getServerDb(), cutoffMs)
+      logger.info({ cutoffMs, deleted }, 'kill_switch_log: prune complete')
+    } catch (err) {
+      logger.warn({ err }, 'kill_switch_log: prune failed')
+    }
+  }
+  runKillSwitchLogPrune()
+  setInterval(runKillSwitchLogPrune, KILL_SWITCH_LOG_PRUNE_INTERVAL_MS).unref()
 })
 
 // Graceful shutdown

@@ -864,6 +864,17 @@ export function initDatabase(): Database.Database {
       kill_switch_set_by TEXT,
       updated_at INTEGER NOT NULL
     );
+    -- Phase 5 Task 3 -- append-only kill-switch transition log.
+    -- Sibling of system_state; weekly report joins this for intra-week
+    -- toggle counts.
+    CREATE TABLE IF NOT EXISTS kill_switch_log (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      toggled_at_ms  INTEGER NOT NULL,
+      new_state      TEXT NOT NULL CHECK (new_state IN ('tripped', 'active')),
+      reason         TEXT,
+      set_by         TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_kill_switch_log_toggled_at ON kill_switch_log(toggled_at_ms DESC);
   `)
   db.prepare('INSERT OR IGNORE INTO system_state (id, updated_at) VALUES (1, ?)').run(Date.now())
 

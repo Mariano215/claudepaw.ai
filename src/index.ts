@@ -16,6 +16,7 @@ import {
   IMESSAGE_ALLOWED_HANDLES,
   EMBEDDING_DIMENSIONS,
   DASHBOARD_URL,
+  OPERATOR_CHAT_IDS,
 } from './config.js'
 import { initDatabase, getDb, initVecTable, getTask, createTask, checkpointAndCloseDatabase } from './db.js'
 import { initTelemetryDatabase, seedDefaultProject, checkpointAndCloseTelemetryDb } from './telemetry-db.js'

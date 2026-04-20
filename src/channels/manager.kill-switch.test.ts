@@ -93,4 +93,5 @@ describe('ChannelManager kill-switch gate', () => {
     await mgr.sendVoice('telegram', '123', Buffer.from('audio'), 'fallback text')
     expect(channel.sendVoice).toHaveBeenCalled()
   })
+
 })

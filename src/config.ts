@@ -74,6 +74,7 @@ export const CREDENTIAL_ENCRYPTION_KEY: string = env.CREDENTIAL_ENCRYPTION_KEY ?
 export const GUARD_SIDECAR_URL: string =
   env.GUARD_SIDECAR_URL ?? 'http://localhost:8099'
 
+
 // --- Multi-platform channels ---
 export const CHANNELS_ENABLED: string[] =
   (env.CHANNELS_ENABLED || 'telegram').split(',').map((s) => s.trim()).filter(Boolean)

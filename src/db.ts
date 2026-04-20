@@ -902,6 +902,7 @@ export function initDatabase(): Database.Database {
   initPawsTables(db)
 
 
+
   // Versioned migrations (post-v0 schema changes)
   runMigrations(db)
 

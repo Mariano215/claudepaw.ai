@@ -3184,6 +3184,7 @@ function initNavigation() {
       }
     }
 
+
     const pageMap = {
       'dashboard': 'page-dashboard',
       'agents': 'page-agents',
@@ -10642,6 +10643,7 @@ async function renderKillSwitch() {
     btn.textContent = 'Pause all agents (kill switch)';
   }
   wrapper.appendChild(btn);
+
 
   panel.appendChild(wrapper);
 }

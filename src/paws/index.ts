@@ -10,6 +10,10 @@ type Sender = (chatId: string, text: string) => Promise<void>
 
 export type { Paw, PawConfig, PawCycle, PawPhase, PawStatus } from './types.js'
 
+// Phase 5 Task 5: weekly regime model retrain Paw. Declarative config so
+// seed + tests + docs all reference the same source of truth. The seed
+// script pushes this into the `paws` table; tests pin the invariants.
+
 export function createPaw(input: {
   id: string
   project_id: string
