@@ -145,11 +145,24 @@ describe('computeNextRun', () => {
     expect(next).toBeLessThanOrEqual(Date.now() + fiveMinutes + 1000)
   })
 
-  it('"0 9 * * *" returns next 9am occurrence', () => {
+  it('"0 9 * * *" returns next 9am occurrence in CRON_TZ (America/New_York by default)', () => {
     const next = computeNextRun('0 9 * * *')
-    const date = new Date(next)
-    expect(date.getHours()).toBe(9)
-    expect(date.getMinutes()).toBe(0)
+    // computeNextRun pins TZ via CRON_TZ (default America/New_York), so
+    // getHours() on the host (which might be UTC in CI) will not report 9.
+    // Use Intl to extract the hour in the intended TZ.
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: process.env.CRON_TZ || 'America/New_York',
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: false,
+    })
+    const parts = Object.fromEntries(
+      fmt.formatToParts(new Date(next)).map(p => [p.type, p.value]),
+    )
+    // Intl sometimes returns "24" for midnight; normalize to "00".
+    const hour = parts.hour === '24' ? '00' : parts.hour
+    expect(Number(hour)).toBe(9)
+    expect(Number(parts.minute)).toBe(0)
   })
 
   it('throws on invalid cron expression', () => {
