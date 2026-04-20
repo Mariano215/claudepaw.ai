@@ -16,6 +16,7 @@
 
 import type Database from 'better-sqlite3'
 import { logger } from './logger.js'
+import { getAgentsForProject } from './agents.js'
 
 interface Migration {
   version: number
@@ -45,16 +46,43 @@ const MIGRATIONS: Migration[] = [
     // starting point.
     up: (_db) => {},
   },
-  // Add future migrations here:
-  // {
-  //   version: 2,
-  //   description: 'Add foo column to bar table',
-  //   up: (db) => {
-  //     if (!hasColumn(db, 'bar', 'foo')) {
-  //       db.prepare('ALTER TABLE bar ADD COLUMN foo TEXT').run()
-  //     }
-  //   },
-  // },
+  {
+    version: 2,
+    description: 'Remove stale agent rows whose template_id no longer exists in the project roster',
+    // Context: some projects were lazy-seeded
+    // from GENERIC_PROJECT_AGENTS (builder/scout/strategist/auditor/advocate)
+    // before their real rosters existed in agents.ts. Once the real rosters
+    // landed, those stale rows were left behind -- the dashboard kept showing
+    // the generic 5 instead of the actual project agents.
+    //
+    // This migration drops any row whose (project_id, template_id) combination
+    // is no longer in the roster returned by getAgentsForProject(). The
+    // dashboard's existing lazy-seed path will repopulate the correct rows
+    // the next time the project page loads.
+    up: (db) => {
+      const rows = db
+        .prepare('SELECT project_id, id, template_id FROM agents')
+        .all() as Array<{ project_id: string; id: string; template_id: string | null }>
+      const rosterCache = new Map<string, Set<string>>()
+      const deleteStmt = db.prepare('DELETE FROM agents WHERE id = ?')
+      let removed = 0
+      for (const row of rows) {
+        if (!row.template_id) continue
+        let allowed = rosterCache.get(row.project_id)
+        if (!allowed) {
+          allowed = new Set(getAgentsForProject(row.project_id).map((a) => a.id))
+          rosterCache.set(row.project_id, allowed)
+        }
+        if (!allowed.has(row.template_id)) {
+          deleteStmt.run(row.id)
+          removed += 1
+        }
+      }
+      if (removed > 0) {
+        logger.info({ removed }, 'Pruned stale agent rows with no roster entry')
+      }
+    },
+  },
 ]
 
 export function getCurrentSchemaVersion(db: Database.Database): number {

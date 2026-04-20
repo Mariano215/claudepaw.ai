@@ -53,7 +53,12 @@ export const GENERIC_PROJECT_AGENTS: AgentDef[] = [
   { id: 'advocate', name: 'Advocate', role: "Devil's Advocate", emoji: '\uD83D\uDE08', mode: 'on-demand', heartbeat_interval: 'none' },
 ]
 
-/** Get the agent roster for a given project. Unknown projects get the generic roster. */
+/**
+ * Get the agent roster for a given project. Unknown projects get the generic
+ * roster (5 boilerplate agents), but this is a sign of a misconfiguration --
+ * the `projects/<slug>/agents/` directory and this switch must stay in sync.
+ * The agents.test.ts guard enforces that invariant at test time.
+ */
 export function getAgentsForProject(projectId: string): AgentDef[] {
   switch (projectId) {
     case 'default': return PERSONAL_AGENTS
