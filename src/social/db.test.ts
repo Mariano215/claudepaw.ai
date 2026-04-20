@@ -13,6 +13,9 @@ import {
   markFailed,
   updateContent,
   getPostStats,
+  createScheduledPost,
+  listDueApproved,
+  hasCrossPostForVideo,
 } from './db.js'
 
 describe('social/db', () => {
@@ -118,6 +121,29 @@ describe('social/db', () => {
     expect(listPosts()).toHaveLength(2)
   })
 
+  it('adds scheduled_at column after init', () => {
+    const db = new Database(':memory:')
+    db.pragma('journal_mode = WAL')
+    initSocialTables(db)
+    const cols = db
+      .prepare("PRAGMA table_info(social_posts)")
+      .all() as Array<{ name: string; type: string }>
+    const scheduled = cols.find((c) => c.name === 'scheduled_at')
+    expect(scheduled).toBeDefined()
+    expect(scheduled!.type.toUpperCase()).toBe('INTEGER')
+  })
+
+  it('creates idx_social_due partial index', () => {
+    const db = new Database(':memory:')
+    db.pragma('journal_mode = WAL')
+    initSocialTables(db)
+    const idx = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_social_due'")
+      .get() as { name: string } | undefined
+    expect(idx).toBeDefined()
+    expect(idx!.name).toBe('idx_social_due')
+  })
+
   it('stores optional fields', () => {
     const post = createDraft({
       platform: 'linkedin',
@@ -133,5 +159,51 @@ describe('social/db', () => {
     expect(fetched.suggested_time).toBe('morning EST')
     expect(fetched.cta).toBe('Subscribe to the channel')
     expect(fetched.created_by).toBe('social')
+  })
+
+  it('createScheduledPost inserts as approved with scheduled_at', () => {
+    const future = Date.now() + 60_000
+    const post = createScheduledPost({
+      platform: 'linkedin',
+      content: 'Hello scheduled',
+      project_id: 'default',
+      scheduled_at: future,
+      created_by: 'producer',
+    })
+    expect(post.status).toBe('approved')
+    expect(post.scheduled_at).toBe(future)
+    expect(post.platform).toBe('linkedin')
+  })
+
+  it('listDueApproved returns only past-due approved posts', () => {
+    const now = Date.now()
+    createScheduledPost({
+      platform: 'linkedin', content: 'past', project_id: 'default',
+      scheduled_at: now - 1000, created_by: 'producer',
+    })
+    createScheduledPost({
+      platform: 'twitter', content: 'future', project_id: 'default',
+      scheduled_at: now + 60_000, created_by: 'producer',
+    })
+    // a non-scheduled draft should NOT appear
+    createDraft({ platform: 'twitter', content: 'legacy draft', project_id: 'default' })
+
+    const due = listDueApproved(now)
+    expect(due).toHaveLength(1)
+    expect(due[0].content).toBe('past')
+    expect(due[0].status).toBe('approved')
+  })
+
+  it('hasCrossPostForVideo detects an already-published youtu.be link', () => {
+    const p = createDraft({
+      platform: 'linkedin',
+      content: 'Watch the new one: https://youtu.be/abc12345678',
+      project_id: 'default',
+    })
+    approvePost(p.id)
+    markPublished(p.id, 'urn:li:share:1', 'https://linkedin.com/...')
+
+    expect(hasCrossPostForVideo('default', 'abc12345678')).toBe(true)
+    expect(hasCrossPostForVideo('default', 'nonexistent1')).toBe(false)
   })
 })

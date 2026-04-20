@@ -17,6 +17,7 @@ import { parseActionItemsFromAgentOutput, ingestParsedItems } from './action-ite
 import { buildExampleCompanyTaskContext } from './projects/example-company/task-context.js'
 import { buildDefaultTaskContext } from './projects/default/task-context.js'
 import { getDuePaws, triggerPaw } from './paws/index.js'
+import { publishDueSocialPosts } from './social/index.js'
 import { checkAndUpgrade } from './system-update.js'
 
 const execFileAsync = promisify(execFile)
@@ -455,6 +456,19 @@ async function executeDueTasks(send: Sender): Promise<void> {
     }
   } catch (err) {
     logger.error({ err }, 'Paws scheduler tick failed')
+  }
+
+  // ── Social posts: auto-publish anything whose scheduled_at has passed ──
+  try {
+    // TODO(future): replace with a per-project lookup in project_settings.
+    // For now the only project using scheduled social posts is default.
+    const socialChatId = '123456789'
+    const socialRes = await publishDueSocialPosts(send, socialChatId)
+    if (socialRes.attempted > 0) {
+      logger.info(socialRes, 'Scheduler tick: social auto-publish')
+    }
+  } catch (err) {
+    logger.error({ err }, 'Scheduler tick: social auto-publish failed')
   }
 
   // Sync updated task state to dashboard after all tasks run

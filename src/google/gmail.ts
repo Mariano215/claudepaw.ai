@@ -9,6 +9,18 @@ import type { EmailMessage, SendResult } from './types.js'
 // ---------------------------------------------------------------------------
 
 export function buildRawMessage(msg: EmailMessage): string {
+  const raw = msg.inlineImages && msg.inlineImages.length > 0
+    ? buildMultipartRelatedMessage(msg)
+    : buildSimpleHtmlMessage(msg)
+
+  return Buffer.from(raw, 'utf-8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
+}
+
+function buildSimpleHtmlMessage(msg: EmailMessage): string {
   const lines = [
     `To: ${msg.to}`,
     `Subject: ${msg.subject}`,
@@ -18,13 +30,65 @@ export function buildRawMessage(msg: EmailMessage): string {
     '',
     msg.htmlBody,
   ]
+  return lines.join('\r\n')
+}
 
-  const raw = lines.join('\r\n')
-  return Buffer.from(raw, 'utf-8')
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '')
+function buildMultipartRelatedMessage(msg: EmailMessage): string {
+  // Boundary must be unique per message and not occur in any body part.
+  const boundary = `=_cp_${Date.now().toString(36)}_${Math.random()
+    .toString(36)
+    .slice(2, 10)}=`
+
+  const parts: string[] = []
+
+  // Outer headers
+  parts.push(
+    [
+      `To: ${msg.to}`,
+      `Subject: ${msg.subject}`,
+      `MIME-Version: 1.0`,
+      `Content-Type: multipart/related; boundary="${boundary}"; type="text/html"`,
+      '',
+      `This is a multi-part message in MIME format.`,
+      '',
+    ].join('\r\n'),
+  )
+
+  // HTML part
+  parts.push(
+    [
+      `--${boundary}`,
+      `Content-Type: text/html; charset=utf-8`,
+      `Content-Transfer-Encoding: 7bit`,
+      '',
+      msg.htmlBody,
+      '',
+    ].join('\r\n'),
+  )
+
+  // One part per inline image
+  for (const img of msg.inlineImages ?? []) {
+    const b64 = img.data.toString('base64')
+    // Wrap base64 at 76 chars per line per RFC 2045
+    const wrapped = b64.match(/.{1,76}/g)?.join('\r\n') ?? b64
+    parts.push(
+      [
+        `--${boundary}`,
+        `Content-Type: ${img.contentType}`,
+        `Content-Transfer-Encoding: base64`,
+        `Content-ID: <${img.cid}>`,
+        `Content-Disposition: inline; filename="${img.cid}"`,
+        '',
+        wrapped,
+        '',
+      ].join('\r\n'),
+    )
+  }
+
+  // Closing boundary
+  parts.push(`--${boundary}--`)
+
+  return parts.join('\r\n')
 }
 
 // ---------------------------------------------------------------------------

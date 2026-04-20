@@ -32,6 +32,7 @@ export function initSocialTables(db: Database.Database): void {
       error            TEXT,
       created_at       INTEGER NOT NULL,
       published_at     INTEGER,
+      scheduled_at     INTEGER,
       created_by       TEXT NOT NULL DEFAULT 'social',
       project_id       TEXT NOT NULL DEFAULT 'default'
     )`,
@@ -45,6 +46,19 @@ export function initSocialTables(db: Database.Database): void {
   } catch (_e) { /* Column already exists */ }
   try {
     runSql(db, 'CREATE INDEX IF NOT EXISTS idx_social_project ON social_posts(project_id)')
+  } catch (_e) { /* Index already exists */ }
+
+  // Migration: add scheduled_at for auto-publish-on-schedule flow
+  try {
+    runSql(db, 'ALTER TABLE social_posts ADD COLUMN scheduled_at INTEGER')
+  } catch (_e) { /* Column already exists */ }
+  try {
+    runSql(
+      db,
+      `CREATE INDEX IF NOT EXISTS idx_social_due
+       ON social_posts(status, scheduled_at)
+       WHERE scheduled_at IS NOT NULL`,
+    )
   } catch (_e) { /* Index already exists */ }
 
   // Migration: widen platform CHECK constraint on tables created before
@@ -80,6 +94,7 @@ function migratePlatformCheckConstraint(db: Database.Database): void {
         error            TEXT,
         created_at       INTEGER NOT NULL,
         published_at     INTEGER,
+        scheduled_at     INTEGER,
         created_by       TEXT NOT NULL DEFAULT 'social',
         project_id       TEXT NOT NULL DEFAULT 'default'
       )`,
@@ -100,6 +115,12 @@ function migratePlatformCheckConstraint(db: Database.Database): void {
     runSql(db, 'CREATE INDEX IF NOT EXISTS idx_social_status ON social_posts(status)')
     runSql(db, 'CREATE INDEX IF NOT EXISTS idx_social_platform ON social_posts(platform)')
     runSql(db, 'CREATE INDEX IF NOT EXISTS idx_social_project ON social_posts(project_id)')
+    runSql(
+      db,
+      `CREATE INDEX IF NOT EXISTS idx_social_due
+       ON social_posts(status, scheduled_at)
+       WHERE scheduled_at IS NOT NULL`,
+    )
   })
 
   try {
@@ -211,6 +232,72 @@ export function updateContent(id: string, content: string): boolean {
     .prepare("UPDATE social_posts SET content = ? WHERE id = ? AND status IN ('draft', 'approved')")
     .run(content, id)
   return info.changes > 0
+}
+
+export interface ScheduledPostInput {
+  platform: 'linkedin' | 'twitter'
+  content: string
+  media_url?: string | null
+  cta?: string | null
+  suggested_time?: string | null
+  project_id: string
+  scheduled_at: number
+  created_by: string
+}
+
+export function createScheduledPost(input: ScheduledPostInput): SocialPost {
+  const id = randomUUID().slice(0, 8)
+  const now = Date.now()
+  getDb()
+    .prepare(
+      `INSERT INTO social_posts
+         (id, platform, content, media_url, suggested_time, cta,
+          status, created_at, created_by, project_id, scheduled_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      input.platform,
+      input.content,
+      input.media_url ?? null,
+      input.suggested_time ?? null,
+      input.cta ?? null,
+      now,
+      input.created_by,
+      input.project_id,
+      input.scheduled_at,
+    )
+  return getPost(id)!
+}
+
+export function listDueApproved(nowMs: number): SocialPost[] {
+  return getDb()
+    .prepare(
+      `SELECT * FROM social_posts
+       WHERE status = 'approved'
+         AND scheduled_at IS NOT NULL
+         AND scheduled_at <= ?
+       ORDER BY scheduled_at ASC`,
+    )
+    .all(nowMs) as SocialPost[]
+}
+
+// Checks whether a YouTube video (by 11-char ID) has already been
+// cross-posted to linkedin or twitter for the given project.
+// Matches the video ID as a substring of `content` — safe because the
+// 11-char YT ID space is sparse enough that collisions are negligible.
+export function hasCrossPostForVideo(projectId: string, youtubeId: string): boolean {
+  if (!/^[A-Za-z0-9_-]{11}$/.test(youtubeId)) return false
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(*) as n FROM social_posts
+       WHERE project_id = ?
+         AND platform IN ('linkedin', 'twitter')
+         AND status = 'published'
+         AND content LIKE ?`,
+    )
+    .get(projectId, `%${youtubeId}%`) as { n: number }
+  return row.n > 0
 }
 
 export function getPostStats(): { drafts: number; published: number; rejected: number; failed: number } {

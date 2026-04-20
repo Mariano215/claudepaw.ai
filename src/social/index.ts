@@ -175,3 +175,5 @@ export function isLinkedInConfigured(projectId = 'default'): boolean {
 
 export { getPost, listDrafts, listPosts, getPostStats }
 export type { SocialPost, Platform, DraftInput }
+export { publishDueSocialPosts } from './scheduler.js'
+export type { PublishDueResult } from './scheduler.js'

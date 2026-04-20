@@ -173,10 +173,9 @@ export async function postLinkedIn(text: string, config: LinkedInConfig, mediaUr
       return { success: false, error: 'No post ID in LinkedIn response' }
     }
 
-    // Build shareable URL from URN
-    // Format: urn:li:share:XXXXX or urn:li:ugcPost:XXXXX
-    const activityId = postUrn.split(':').pop() ?? postUrn
-    const postUrl = `https://www.linkedin.com/feed/update/urn:li:activity:${activityId}/`
+    // Build shareable URL from URN -- use the share URN directly.
+    // LinkedIn 404s on urn:li:activity:X; the correct URL uses urn:li:share:X unchanged.
+    const postUrl = `https://www.linkedin.com/feed/update/${postUrn}/`
 
     logger.info({ postUrn, postUrl }, 'LinkedIn post published')
 

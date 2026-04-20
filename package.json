@@ -24,6 +24,7 @@
     "db:pull:prod": "bash scripts/pull-prod-db.sh",
     "db:push:prod": "bash scripts/push-prod-db.sh",
     "sync:oss": "bash scripts/sync-oss.sh",
+    "sync:paw-trader": "bash scripts/sync-paw-trader.sh",
     "knowledge:seed": "tsx scripts/knowledge-seed.ts",
     "knowledge:ingest": "tsx scripts/knowledge-ingest.ts",
     "knowledge:migrate": "tsx scripts/migrate-learned-skills.ts",
@@ -33,7 +34,8 @@
     "memory:compact": "tsx scripts/run-memory-v2-nightly.ts compact",
     "memory:backfill-embeddings": "tsx scripts/backfill-embeddings.ts",
     "memory:migrate-legacy": "tsx scripts/migrate-memory-v2.ts",
-    "verify:permissions": "tsx scripts/verify-permissions.ts"
+    "verify:permissions": "tsx scripts/verify-permissions.ts",
+    "generate:social:this-week": "tsx scripts/generate-social-this-week.ts"
   },
   "bin": {
     "cpaw": "./dist/integrations/cli.js"

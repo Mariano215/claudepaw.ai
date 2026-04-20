@@ -18,6 +18,7 @@ export interface SocialPost {
   error: string | null
   created_at: number
   published_at: number | null
+  scheduled_at?: number | null
   created_by: string // agent ID that drafted it
   project_id: string
 }

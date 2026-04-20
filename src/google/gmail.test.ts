@@ -29,4 +29,42 @@ describe('buildRawMessage', () => {
     const decoded = Buffer.from(raw, 'base64url').toString('utf-8')
     expect(decoded).toContain('AI & Cybersecurity Brief')
   })
+
+  it('builds multipart/related when inline images are present', () => {
+    const raw = buildRawMessage({
+      to: '',
+      subject: 'Property Scout test',
+      htmlBody: '<p><img src="cid:map-0"></p>',
+      inlineImages: [
+        {
+          cid: 'map-0',
+          contentType: 'image/png',
+          data: Buffer.from('fake-png-bytes'),
+        },
+      ],
+    })
+    const decoded = Buffer.from(raw, 'base64url').toString('utf-8')
+    expect(decoded).toContain('Content-Type: multipart/related;')
+    expect(decoded).toContain('Content-ID: <map-0>')
+    expect(decoded).toContain('Content-Transfer-Encoding: base64')
+    expect(decoded).toContain('src="cid:map-0"')
+    const boundaryMatch = decoded.match(/boundary="([^"]+)"/)
+    expect(boundaryMatch).not.toBeNull()
+    const boundary = boundaryMatch![1]
+    expect(decoded).toContain(`--${boundary}`)
+    expect(decoded).toContain(`--${boundary}--`)
+    expect(decoded).toContain(Buffer.from('fake-png-bytes').toString('base64'))
+  })
+
+  it('falls back to simple HTML when inlineImages is empty', () => {
+    const raw = buildRawMessage({
+      to: 'test@example.com',
+      subject: 'Plain',
+      htmlBody: '<p>hello</p>',
+      inlineImages: [],
+    })
+    const decoded = Buffer.from(raw, 'base64url').toString('utf-8')
+    expect(decoded).toContain('Content-Type: text/html; charset=utf-8')
+    expect(decoded).not.toContain('multipart/related')
+  })
 })
