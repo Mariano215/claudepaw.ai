@@ -725,6 +725,28 @@ export function initDatabase(): Database.Database {
       value TEXT NOT NULL
     );
 
+    -- Rentcast API cache + monthly call log. Rentcast Developer tier caps
+    -- at 50 calls/month; the property scout paw would burn that in one
+    -- run without gating. rentcast_cache stores full response bodies
+    -- keyed on (endpoint, query_string) with per-entry TTL. rentcast_call_log
+    -- is an append-only counter used to enforce the monthly budget.
+    -- See scripts/rentcast-cli.ts for the wrapper that reads/writes both.
+    CREATE TABLE IF NOT EXISTS rentcast_cache (
+      key           TEXT PRIMARY KEY,
+      response_json TEXT NOT NULL,
+      cached_at     INTEGER NOT NULL,
+      ttl_ms        INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS rentcast_call_log (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      endpoint       TEXT NOT NULL,
+      query          TEXT NOT NULL,
+      called_at      INTEGER NOT NULL,
+      status_code    INTEGER NOT NULL,
+      bytes_returned INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_rentcast_log_called_at ON rentcast_call_log(called_at);
+
     CREATE TABLE IF NOT EXISTS chat_messages (
       id INTEGER PRIMARY KEY,
       chat_id TEXT NOT NULL,
