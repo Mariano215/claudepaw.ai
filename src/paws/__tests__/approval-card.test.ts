@@ -16,6 +16,7 @@ const paw = {
   id: 'sentinel-patrol',
   name: 'Sentinel Security Patrol',
   project_id: 'default',
+  cron: '0 */4 * * *',
 } as unknown as Paw
 
 describe('buildApprovalCard', () => {
@@ -28,6 +29,16 @@ describe('buildApprovalCard', () => {
     expect(card.text).toContain('ClaudePaw  •  1 finding')
     expect(card.text).toContain('🔴 NPM CVEs — example-app')
     expect(card.text).toContain('path-to-regexp DoS')
+  })
+
+  it('renders identifying metadata line so operators can trace the source', () => {
+    const findings: TestFinding[] = [
+      { id: 'f1', title: 'a', detail: '', severity: 4, target: 't', auto_fixable: 0 },
+    ]
+    const card = buildApprovalCard(paw, 'ClaudePaw', findings, 1700000000000)
+    expect(card.text).toContain('paw: sentinel-patrol')
+    expect(card.text).toContain('project: default')
+    expect(card.text).toContain('cron: 0 */4 * * *')
   })
 
   it('uses 🔴 for high/critical (severity >= 4), 🟡 for medium (3), ⚪ for low (<=2)', () => {

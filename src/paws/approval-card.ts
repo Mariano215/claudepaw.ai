@@ -50,10 +50,11 @@ export function buildApprovalCard(
 ): { text: string; keyboard: InlineKeyboard } {
   const findingWord = findings.length === 1 ? 'finding' : 'findings'
   const header = `🛡 ${paw.name}\n${projectName}  •  ${findings.length} ${findingWord} need your call`
+  const meta = `paw: ${paw.id}  •  project: ${paw.project_id}  •  cron: ${paw.cron}`
   const body = findings
     .map(f => `${severityEmoji(f.severity)} ${f.title}\n${f.detail}`)
     .join('\n\n')
-  const text = `${header}\n\n${body}`
+  const text = `${header}\n${meta}\n\n${body}`
 
   const rows: InlineKeyboardButton[][] = []
   const visible = findings.slice(0, MAX_FINDING_ROWS)

@@ -207,7 +207,8 @@ export async function resumePawCycle(
       state,
     })
     const projectName = getProjectName(paw.project_id)
-    const header = `🛡 ${paw.name}\n${projectName}  •  ACT skipped\n\n`
+    const meta = `paw: ${paw.id}  •  project: ${paw.project_id}  •  cron: ${paw.cron}`
+    const header = `🛡 ${paw.name}\n${projectName}  •  ACT skipped\n${meta}\n\n`
     await send(paw.config.chat_id, header + reportResult)
     return
   }
@@ -277,7 +278,8 @@ async function runActAndReport(
 
   if (reportResult && reportResult.trim().length > 0) {
     const projectName = getProjectName(paw.project_id)
-    const header = `🛡 ${paw.name}\n${projectName}  •  Cycle complete\n\n`
+    const meta = `paw: ${paw.id}  •  project: ${paw.project_id}  •  cron: ${paw.cron}`
+    const header = `🛡 ${paw.name}\n${projectName}  •  Cycle complete\n${meta}\n\n`
     await send(paw.config.chat_id, header + reportResult)
   }
 }
