@@ -252,7 +252,9 @@ function handleServerMessage(msg: Record<string, unknown>): void {
       logger.warn({ msg }, 'Received chat_message with no text, ignoring')
       return
     }
-    logger.info({ text: text.slice(0, 80), chatId, projectId }, 'Dashboard chat message received')
+    // PII-safe: log length + ids only at info; prompt body only at debug
+    logger.info({ chatId, projectId, textLen: text.length }, 'Dashboard chat message received')
+    logger.debug({ text: text.slice(0, 80), chatId, projectId }, 'Dashboard chat message body (debug only)')
 
     // Inject projects/<slug>/context.md so the dashboard chat agent gets the
     // same project context Telegram-routed agents see (sheet IDs, tool paths,

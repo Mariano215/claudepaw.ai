@@ -924,17 +924,20 @@ router.put(
 // --- Messages ---
 
 router.post('/messages', requireProjectRole('editor'), (req: Request, res: Response) => {
-  const { from, to, content, type } = req.body as {
-    from: string; to: string; content: string; type?: string
-  }
+  const body = req.body as { from: string; to: string; content: string; type?: string; project_id?: string }
+  const { from, to, content, type } = body
   if (!from || !to || !content) {
     res.status(400).json({ error: 'from, to, and content are required' })
     return
   }
-  const message = sendMessage(from, to, content, type)
+  // Persist project_id so dashboard replies written under a non-default
+  // project land on that project (bot DB column defaults to 'default' which
+  // silently misfiles cross-project replies).
+  const projectId = typeof body.project_id === 'string' && body.project_id.trim() ? body.project_id : 'default'
+  const message = sendMessage(from, to, content, type, projectId)
   notifyAgentMessage(to, message)
-  addFeedItem(from, 'sent_message', `To ${to}: ${content.slice(0, 100)}`)
-  logger.info({ from, to, type: message.type }, 'Message sent')
+  addFeedItem(from, 'sent_message', `To ${to}: ${content.slice(0, 60)}`)
+  logger.info({ from, to, type: message.type, project_id: projectId }, 'Message sent')
   res.status(201).json(message)
 })
 
@@ -1541,6 +1544,12 @@ router.patch(
     return
   }
   const updates = req.body as Record<string, unknown>
+  // Strip project_id from updates: the gate checked editor on the source
+  // project; allowing body to reassign project_id would let an editor on A
+  // move the row to project B without having editor on B. Keep the stored
+  // project_id immutable for PATCH (move flows should be a dedicated endpoint
+  // that gates both source and target).
+  delete updates.project_id
   upsertResearchItem({ ...existing, ...updates, id, updated_at: Date.now() })
   res.json(getResearchItem(id))
 })

@@ -190,13 +190,13 @@ export function reapStalePawCycles(
   `).run(Date.now(), cutoff)
 
   // Unstick any Paw that is waiting_approval but no longer has an active
-  // approval cycle to respond to (either the cycle was just reaped, or the
-  // approval state has gone stale past the configured timeout).
-  //
-  // For Paws with approval_timeout_sec in their config, honor that. For the
-  // rest we require the latest cycle to have completed or failed.
+  // approval cycle to respond to. Two conditions unstuck a Paw:
+  //   1. latest cycle has completed/failed/disappeared (lost forever)
+  //   2. latest cycle is still waiting in 'decide' phase but has aged past the
+  //      Paw's configured approval_timeout_sec — treat the silent user as an
+  //      implicit skip so the Paw can resume its normal schedule.
   const stuck = db.prepare(`
-    SELECT p.id, p.config, c.id as cycle_id, c.phase as cycle_phase
+    SELECT p.id, p.config, c.id as cycle_id, c.phase as cycle_phase, c.started_at as cycle_started_at
       FROM paws p
       LEFT JOIN (
         SELECT paw_id, id, phase, started_at
@@ -206,16 +206,41 @@ export function reapStalePawCycles(
          )
       ) c ON c.paw_id = p.id
      WHERE p.status = 'waiting_approval'
-  `).all() as Array<{ id: string; config: string; cycle_id: string | null; cycle_phase: string | null }>
+  `).all() as Array<{ id: string; config: string; cycle_id: string | null; cycle_phase: string | null; cycle_started_at: number | null }>
 
   let pawsUnstuck = 0
+  const now = Date.now()
+  const timeoutCycle = db.prepare(`
+    UPDATE paw_cycles
+       SET phase = 'failed',
+           error = 'approval timeout — user did not respond',
+           completed_at = ?
+     WHERE id = ?
+  `)
   for (const row of stuck) {
-    const needsUnstick =
+    // Case 1: latest cycle has resolved or was never created — straight unstick.
+    const latestResolved =
       row.cycle_phase === null ||
       row.cycle_phase === 'completed' ||
       row.cycle_phase === 'failed'
-    if (needsUnstick) {
-      db.prepare("UPDATE paws SET status = 'active', next_run = ? WHERE id = ?").run(Date.now(), row.id)
+
+    // Case 2: latest cycle is waiting in decide AND aged past timeout.
+    let approvalTimedOut = false
+    if (!latestResolved && row.cycle_id && row.cycle_started_at) {
+      try {
+        const cfg = JSON.parse(row.config) as { approval_timeout_sec?: number }
+        const timeoutSec = typeof cfg?.approval_timeout_sec === 'number' && cfg.approval_timeout_sec > 0
+          ? cfg.approval_timeout_sec
+          : 3600 // default: 1h
+        if (now - row.cycle_started_at > timeoutSec * 1000) {
+          timeoutCycle.run(now, row.cycle_id)
+          approvalTimedOut = true
+        }
+      } catch { /* malformed config; leave alone */ }
+    }
+
+    if (latestResolved || approvalTimedOut) {
+      db.prepare("UPDATE paws SET status = 'active', next_run = ? WHERE id = ?").run(now, row.id)
       pawsUnstuck++
     }
   }

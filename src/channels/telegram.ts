@@ -404,8 +404,10 @@ export class TelegramChannel implements Channel {
         reportMetric('telegram', 'voice_received', 1)
         const localPath = await downloadMedia(this.config.botToken, voice.file_id, 'voice.oga')
         const transcript = await transcribeAudio(localPath)
-        logger.info({ transcript: transcript.slice(0, 100) }, 'Voice transcribed')
-        reportFeedItem('system', 'Voice transcribed', transcript.slice(0, 60))
+        // PII-safe: log length only at info; raw transcript text only at debug
+        logger.info({ chatId: String(ctx.chat!.id), length: transcript.length }, 'Voice transcribed')
+        logger.debug({ transcript: transcript.slice(0, 100) }, 'Voice transcript body (debug only)')
+        reportFeedItem('system', 'Voice transcribed', `${transcript.length} chars`)
         await this.onMessage({
           channelId: this.id,
           chatId: String(ctx.chat!.id),

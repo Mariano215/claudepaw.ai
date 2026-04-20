@@ -312,6 +312,11 @@ export function getTelemetryDb(): Database.Database | null {
     if (!hasColumn(telemetryDb, 'agent_events', 'provider_fallback_applied')) {
       telemetryDb.exec(`ALTER TABLE agent_events ADD COLUMN provider_fallback_applied INTEGER DEFAULT 0`)
     }
+    // Index for the cost-gate hot path: SUM(total_cost_usd) WHERE project_id=? AND received_at>=?
+    // runs on every runAgent invocation. Without this index, the query does a
+    // full table scan on a table that grows by ~1 row per agent call (multi-GB
+    // over a few months).
+    telemetryDb.exec(`CREATE INDEX IF NOT EXISTS idx_agent_events_project_time ON agent_events(project_id, received_at)`)
     telemetryDb.exec(`
       CREATE TABLE IF NOT EXISTS cost_line_items (
         id TEXT PRIMARY KEY,
@@ -738,9 +743,11 @@ export function initDatabase(): Database.Database {
     try {
       db.exec(sql)
     } catch (err: any) {
-      if (!err?.message?.includes('duplicate column')) {
-        logger.error({ err }, 'Unexpected ALTER TABLE error')
-      }
+      // "duplicate column" is expected on re-run; anything else is a real
+      // schema problem and must fail boot loudly instead of being swallowed.
+      if (err?.message?.includes('duplicate column')) continue
+      logger.error({ err, sql }, 'Unexpected ALTER TABLE error — rethrowing')
+      throw err
     }
   }
 
@@ -1062,8 +1069,8 @@ export function upsertAgent(agent: Partial<Agent> & { id: string }): void {
     db.prepare(`UPDATE agents SET ${fields.join(', ')} WHERE id = ?`).run(...values)
   } else {
     db.prepare(`
-      INSERT INTO agents (id, name, role, emoji, mode, status, heartbeat_interval, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO agents (id, name, role, emoji, mode, status, heartbeat_interval, created_at, project_id, template_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       agent.id,
       agent.name ?? agent.id,
@@ -1072,7 +1079,9 @@ export function upsertAgent(agent: Partial<Agent> & { id: string }): void {
       agent.mode ?? 'on-demand',
       agent.status ?? 'idle',
       agent.heartbeat_interval ?? '1h',
-      agent.created_at ?? Date.now()
+      agent.created_at ?? Date.now(),
+      (agent as Partial<Agent>).project_id ?? 'default',
+      (agent as Partial<Agent>).template_id ?? agent.id,
     )
   }
 }
@@ -1095,14 +1104,21 @@ export interface Message {
   created_at: number
   delivered_at: number | null
   completed_at: number | null
+  project_id?: string
 }
 
-export function sendMessage(from: string, to: string, content: string, type: string = 'task'): Message {
+export function sendMessage(
+  from: string,
+  to: string,
+  content: string,
+  type: string = 'task',
+  projectId: string = 'default',
+): Message {
   const now = Date.now()
   const result = db.prepare(`
-    INSERT INTO messages (from_agent, to_agent, content, type, status, created_at)
-    VALUES (?, ?, ?, ?, 'pending', ?)
-  `).run(from, to, content, type, now)
+    INSERT INTO messages (from_agent, to_agent, content, type, status, created_at, project_id)
+    VALUES (?, ?, ?, ?, 'pending', ?, ?)
+  `).run(from, to, content, type, now, projectId)
 
   return db.prepare('SELECT * FROM messages WHERE id = ?').get(result.lastInsertRowid) as Message
 }
@@ -1991,12 +2007,21 @@ export function deleteProjectFromDb(id: string): boolean {
 
   tx() // commit bot DB first
 
-  // Telemetry DB tables with project_id
+  // Telemetry DB tables with project_id. `paw_cycles` is handled separately
+  // because it has no project_id column (cycles are scoped via paw_id FK); a
+  // bare DELETE FROM paw_cycles WHERE project_id = ? throws "no such column"
+  // and orphan cycle rows accumulate indefinitely.
   try {
+    // Clean paw_cycles BY paw_id subquery before paws are deleted.
+    try {
+      db.prepare(
+        'DELETE FROM paw_cycles WHERE paw_id IN (SELECT id FROM paws WHERE project_id = ?)',
+      ).run(id)
+    } catch { /* paws or paw_cycles table may not exist */ }
     for (const table of [
       'research_items', 'board_meetings', 'board_decisions', 'security_score_history', 'security_findings',
       'security_scans', 'feed', 'scheduled_tasks', 'metrics', 'security_auto_fixes', 'project_integrations',
-      'paws', 'paw_cycles', 'metric_health', 'action_item_chat_messages', 'research_chat_messages',
+      'paws', 'metric_health', 'action_item_chat_messages', 'research_chat_messages',
     ]) {
       try { db.prepare(`DELETE FROM ${table} WHERE project_id = ?`).run(id) } catch { /* table may not exist */ }
     }

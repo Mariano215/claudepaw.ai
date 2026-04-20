@@ -627,9 +627,15 @@ function handleMessage(ws: WebSocket, clientId: string, data: Record<string, unk
 }
 
 export function notifyAgentMessage(agentId: string, message: Message): void {
-  // Push to all connected clients that might handle this agent (no project_id -> everyone)
+  // Scope the fanout by the message's project_id so a member on project A
+  // doesn't receive push events for project B's inter-agent traffic. If the
+  // row has no project_id (legacy rows), fall back to null which delivers to
+  // clients without a project filter (dashboards in "All Projects" view).
+  const projectId = typeof (message as Message & { project_id?: string }).project_id === 'string'
+    ? (message as Message & { project_id?: string }).project_id ?? null
+    : null
   for (const client of clients.values()) {
-    if (client.ws.readyState === WebSocket.OPEN && canDeliverToClient(client, null)) {
+    if (client.ws.readyState === WebSocket.OPEN && canDeliverToClient(client, projectId)) {
       client.ws.send(JSON.stringify({
         type: 'new_message',
         agentId,

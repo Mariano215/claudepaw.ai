@@ -375,6 +375,19 @@ export async function runDueTasks(send: Sender): Promise<void> {
   }
   maybeRunAutoArchive()
   maybeRunAutoPurge()
+
+  // Also run the reaper here (not just at startup) so an approval Paw whose
+  // user never responds gets unstuck within one tick of hitting its configured
+  // approval_timeout_sec -- without requiring a bot restart.
+  try {
+    const reaped = reapStalePawCycles(getDb())
+    if (reaped.cyclesReaped > 0 || reaped.pawsUnstuck > 0) {
+      logger.info(reaped, 'Reaper unstuck Paws mid-tick (approval timeout or orphan cycle)')
+    }
+  } catch (err) {
+    logger.warn({ err }, 'reapStalePawCycles mid-tick failed (non-fatal)')
+  }
+
   await executeDueTasks(send)
 }
 
@@ -883,16 +896,20 @@ export async function runTaskNow(task: ScheduledTask, send: Sender): Promise<voi
 
 /**
  * Compute the next run time (milliseconds) from a cron expression.
+ *
+ * Timezone: honors CRON_TZ env var (defaults to America/New_York). Pinning TZ
+ * here prevents DST "spring forward" skip + "fall back" duplicate fires, and
+ * keeps scheduling stable if the host TZ ever changes (e.g. laptop travel).
  */
+const CRON_TZ = process.env.CRON_TZ || 'America/New_York'
+
 export function computeNextRun(cronExpression: string): number {
   const now = Date.now()
-  const interval = cronParser.parseExpression(cronExpression)
+  const interval = cronParser.parseExpression(cronExpression, { tz: CRON_TZ })
   let next = interval.next().getTime() // milliseconds, matches Date.now()
-  // Guard against edge case where next occurrence is already in the past
-  // (can happen when called right at the scheduled minute boundary).
-  // Use the single `now` snapshot for the comparison to avoid a race between
-  // two separate Date.now() calls.
-  if (next <= now) next = interval.next().getTime()
+  // Guard against edge case where next occurrence is already in the past.
+  // Loop (not single retry) so arbitrary clock skew is absorbed.
+  while (next <= now) next = interval.next().getTime()
   return next
 }
 

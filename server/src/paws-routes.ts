@@ -4,11 +4,16 @@ import * as cronParserModule from 'cron-parser'
 import { getDb, getBotDbWrite } from './db.js'
 
 // cron-parser v4 uses parseExpression(), v5 uses CronExpressionParser.parse()
+// Timezone pinned via CRON_TZ env var (default America/New_York) so DST and
+// server-local TZ changes don't silently shift scheduled Paws.
+const CRON_TZ = process.env.CRON_TZ || 'America/New_York'
+
 function parseCron(expression: string): { next(): { getTime(): number } } {
   const mod = cronParserModule as any
-  if (typeof mod.parseExpression === 'function') return mod.parseExpression(expression)
-  if (typeof mod.CronExpressionParser?.parse === 'function') return mod.CronExpressionParser.parse(expression)
-  if (typeof mod.default?.parseExpression === 'function') return mod.default.parseExpression(expression)
+  const opts = { tz: CRON_TZ }
+  if (typeof mod.parseExpression === 'function') return mod.parseExpression(expression, opts)
+  if (typeof mod.CronExpressionParser?.parse === 'function') return mod.CronExpressionParser.parse(expression, opts)
+  if (typeof mod.default?.parseExpression === 'function') return mod.default.parseExpression(expression, opts)
   throw new Error('cron-parser API not found')
 }
 
