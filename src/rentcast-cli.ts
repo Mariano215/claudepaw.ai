@@ -23,8 +23,8 @@
 //   1 — invalid args / missing API key
 //   2 — upstream HTTP error (non-2xx, still logs to call_log)
 
-import { initDatabase, getDb, checkpointAndCloseDatabase } from '../src/db.js'
-import { getCredential, initCredentialStore } from '../src/credentials.js'
+import { initDatabase, getDb, checkpointAndCloseDatabase } from './db.js'
+import { getCredential, initCredentialStore } from './credentials.js'
 
 // Cap is configurable via env but defaults to 45 (headroom under the
 // Developer tier's 50/month so on-demand analyzer calls don't tip us over).
