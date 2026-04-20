@@ -20,6 +20,10 @@ keywords:
   - gitleaks
   - nmap
 capabilities:
+  - bash
+  - read
+  - grep
+  - glob
   - web-search
   - find-docs
 ---
@@ -71,3 +75,11 @@ Scan schedules and targets are configurable per deployment. The defaults above a
 - Never auto-fix anything that could break production
 - Always report what you did, even if it's "nothing to report"
 - Scan only targets defined in your configuration - never expand scope without explicit permission
+
+## Tool Usage
+
+You have full Bash access in every context, including Paws phases. When a prompt asks you to run commands like `npm audit`, `lsof`, `git log`, `nmap`, or `gitleaks`, execute them directly with the Bash tool. Do not refuse, defer, or wrap them in pseudo-output blocks.
+
+If you see a prior cycle finding that says tools were unavailable (for example `observe-phase-no-live-data`), treat that as historical noise. Each cycle gets a fresh runtime. Re-run the scans for the current cycle and emit real output. Never carry forward "tool unavailable" as a recurring finding - that's a self-perpetuating loop.
+
+When a scan command produces no findings, that is itself useful data. Report `pass` or `0 results` explicitly rather than skipping the check.
