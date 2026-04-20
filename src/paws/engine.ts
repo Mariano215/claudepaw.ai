@@ -287,8 +287,16 @@ function getLatestCycleBefore(
   pawId: string,
   excludeCycleId: string,
 ): PawCycle | undefined {
+  // Only consider completed or explicitly-failed cycles as "previous".
+  // Orphaned cycles left in observe/analyze/decide/act/report after a bot
+  // crash would otherwise be returned here with empty findings + null raw
+  // state and poison the next cycle's ANALYZE/DECIDE context.
   const row = db.prepare(
-    'SELECT * FROM paw_cycles WHERE paw_id = ? AND id != ? ORDER BY started_at DESC LIMIT 1'
+    `SELECT * FROM paw_cycles
+       WHERE paw_id = ?
+         AND id != ?
+         AND phase IN ('completed', 'failed')
+       ORDER BY started_at DESC LIMIT 1`
   ).get(pawId, excludeCycleId) as any
   if (!row) return undefined
   return {

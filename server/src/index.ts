@@ -153,10 +153,21 @@ ensureAuthBootstrap(serverDb)
 setupWebSocket(server)
 
 if (process.env.NODE_ENV === 'production' && !process.env.DASHBOARD_JWT_SECRET) {
-  logger.warn('DASHBOARD_JWT_SECRET not set -- OAuth integration flows will fail')
+  // OAuth state JWTs are signed with this secret. Without it, every OAuth
+  // reconnect returns 503 mid-flow — silent degradation that only surfaces
+  // weeks later when someone tries to reconnect an integration. Fail loud.
+  logger.error('CRITICAL: DASHBOARD_JWT_SECRET not set in production -- OAuth integration flows will 503. Generate with: openssl rand -hex 32')
+  process.exit(1)
 }
 if (process.env.NODE_ENV === 'production' && !process.env.WS_SECRET) {
   logger.error('CRITICAL: WS_SECRET not set in production -- WebSocket auth is disabled')
+  process.exit(1)
+}
+if (process.env.NODE_ENV === 'production' && process.env.ALLOW_UNAUTHENTICATED_DASHBOARD === '1') {
+  // Safety guard: the dev bypass grants instant admin. If someone ever copies
+  // a dev .env to production, refuse to boot rather than silently allowing
+  // unauthenticated admin access.
+  logger.error('CRITICAL: ALLOW_UNAUTHENTICATED_DASHBOARD=1 is set in production -- refusing to boot. Unset the variable before starting.')
   process.exit(1)
 }
 if (!process.env.WS_SECRET) {

@@ -150,6 +150,22 @@ async function callAnthropicForBrief(
     return null
   }
 
+  // Gate bypass protection: this path makes a raw Anthropic API call that
+  // would otherwise skip the kill switch. Honor the kill switch here so a
+  // manual or scheduled newsletter trigger cannot burn tokens while the
+  // system is paused.
+  try {
+    const { checkKillSwitch } = await import('../cost/kill-switch-client.js')
+    const sw = await checkKillSwitch()
+    if (sw) {
+      logger.warn({ reason: sw.reason }, 'newsletter brief skipped: kill switch tripped')
+      return null
+    }
+  } catch (err) {
+    logger.warn({ err }, 'newsletter brief kill-switch check failed (fail-closed)')
+    return null
+  }
+
   const themeLabels = topThemes.map((t) => TOPIC_LABELS[t]).join(', ')
   const systemPrompt =
     "You are the editor of The Asymmetry, a senior-executive intelligence brief covering " +

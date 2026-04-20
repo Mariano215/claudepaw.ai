@@ -1,7 +1,8 @@
 import cronParser from 'cron-parser'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { getDueTasks, updateTaskAfterRun, listTasks, getProject, clearStaleRunningTasks, archiveStaleActionItems, purgeArchivedActionItems, getDb, getKvSetting, setKvSetting } from './db.js'
+import { getDueTasks, updateTaskAfterRun, listTasks, getProject, clearStaleRunningTasks, archiveStaleActionItems, purgeArchivedActionItems, getDb, getKvSetting, setKvSetting, getBacklogTasks } from './db.js'
+import { reapStalePawCycles, getBacklogPaws, updatePawNextRun } from './paws/db.js'
 import { runSkillSynthesis } from './learning/synthesizer.js'
 import { reportAgentStatus, reportFeedItem, reportScheduledTasks, reportPawsState } from './dashboard.js'
 import { getAllSouls, getSoul, buildAgentPrompt } from './souls.js'
@@ -247,6 +248,52 @@ export function initScheduler(
   if (cleared > 0) {
     logger.info({ cleared }, 'Reset stale running tasks from previous session')
     syncTasksToDashboard()
+  }
+
+  // Reap orphaned Paw cycles left in an in-progress phase after a crash, and
+  // unstick Paws frozen in `waiting_approval` whose cycle was reaped. Prevents
+  // the "Paw goes silent forever" failure mode and the "next cycle picks up
+  // malformed previous findings" poisoning.
+  try {
+    const reaped = reapStalePawCycles(getDb())
+    if (reaped.cyclesReaped > 0 || reaped.pawsUnstuck > 0) {
+      logger.info(reaped, 'Reaped stale Paw cycles + unstuck approval Paws from previous session')
+    }
+  } catch (err) {
+    logger.warn({ err }, 'reapStalePawCycles failed (non-fatal)')
+  }
+
+  // Skip-missed for backlog protection. If the bot was offline for hours (or
+  // the Mac was asleep overnight), a naive scheduler fires ALL missed tasks
+  // + Paws at once when it resumes — that's a "thundering herd" of LLM calls
+  // hitting cost caps and rate limits simultaneously. Instead, advance each
+  // backlogged item's next_run to its next future occurrence and log the
+  // skip. Tunable via SCHEDULER_MAX_BACKLOG_MS (default 15 minutes).
+  try {
+    const backlogWindowMs = Number(process.env.SCHEDULER_MAX_BACKLOG_MS ?? '') || 15 * 60 * 1000
+    const backlogTasks = getBacklogTasks(backlogWindowMs)
+    for (const task of backlogTasks) {
+      const nextRun = task.schedule ? computeNextRun(task.schedule) : Date.now() + backlogWindowMs
+      updateTaskAfterRun(task.id, 'skipped (backlog)', nextRun)
+    }
+    const backlogPaws = getBacklogPaws(getDb(), backlogWindowMs)
+    for (const paw of backlogPaws) {
+      try {
+        const nextRun = computeNextRun(paw.cron)
+        updatePawNextRun(getDb(), paw.id, nextRun)
+      } catch {
+        // Unparseable cron — leave alone; operator will notice it's not firing
+      }
+    }
+    if (backlogTasks.length > 0 || backlogPaws.length > 0) {
+      logger.warn({
+        tasksSkipped: backlogTasks.length,
+        pawsSkipped: backlogPaws.length,
+        backlogWindowMs,
+      }, 'Skipped backlog from previous outage — advanced next_run to next future occurrence')
+    }
+  } catch (err) {
+    logger.warn({ err }, 'backlog skip-missed failed (non-fatal)')
   }
 
   // Restore archive/purge gate timestamps so restarts don't reset the 12-hour guard
@@ -664,6 +711,23 @@ async function runSingleScheduledTask(task: ScheduledTask, send: Sender): Promis
  * Run a single task immediately (triggered from dashboard "Run Now" button).
  */
 export async function runTaskNow(task: ScheduledTask, send: Sender): Promise<void> {
+  // Kill-switch gate. The cron path checks this at the top of runDueTasks;
+  // the manual "Run Now" path used to rely solely on runAgent's gate, which
+  // leaves the deterministic bypasses (newsletter, security scan, metrics)
+  // uncovered. A tripped kill switch must stop manual triggers too.
+  try {
+    const { checkKillSwitch } = await import('./cost/kill-switch-client.js')
+    const sw = await checkKillSwitch()
+    if (sw) {
+      logger.warn({ taskId: task.id, reason: sw.reason }, 'Run Now blocked by kill switch')
+      try { await send(task.chat_id, `Run Now blocked: kill switch active (${sw.reason}). Clear it from the dashboard to resume.`) } catch { /* ignore send failure */ }
+      return
+    }
+  } catch (err) {
+    logger.warn({ err, taskId: task.id }, 'Run Now kill-switch check failed (fail-closed, aborting)')
+    return
+  }
+
   const wasRunning = runningTasks.has(task.id)
   runningTasks.add(task.id)
   if (wasRunning) {

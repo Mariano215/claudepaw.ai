@@ -611,7 +611,11 @@ router.patch(
   res.json(getAgent(id))
 })
 
-router.post('/agents/:id/heartbeat', (req: Request, res: Response) => {
+// Heartbeats are a bot-only callback; we must not let an authenticated member
+// ping someone else's agent (which would (a) leak that agent's pending message
+// count and (b) overwrite last_active). Admins are allowed for debugging; the
+// bot user passes via requireBotOrAdmin. Regular members are rejected.
+router.post('/agents/:id/heartbeat', requireBotOrAdmin, (req: Request, res: Response) => {
   const id = param(req, 'id')
   const agent = getAgent(id)
   if (!agent) {
@@ -1101,8 +1105,11 @@ router.get('/dashboard', (req: Request, res: Response) => {
   })
 })
 
-router.get('/dashboard/overview', (_req: Request, res: Response) => {
-  res.json(getProjectOverview())
+router.get('/dashboard/overview', (req: Request, res: Response) => {
+  // Scope the overview: members should not see cross-project counts unless
+  // they have access. Admins (allowedProjectIds === null) see everything.
+  const { allowedProjectIds } = resolveProjectScope(req)
+  res.json(getProjectOverview(allowedProjectIds))
 })
 
 router.get('/health', (_req: Request, res: Response) => {
@@ -1164,12 +1171,39 @@ router.post('/security/findings', requireProjectRole('editor'), (req: Request, r
     res.status(400).json({ error: 'findings array is required' })
     return
   }
+  // Cap the array size so a malformed or abusive payload can't block the event
+  // loop for seconds with tens of thousands of upserts.
+  if (findings.length > 1000) {
+    res.status(400).json({ error: 'too many findings in one request (max 1000)' })
+    return
+  }
+  // SECURITY: the caller has editor on `scope.requestedProjectId` (validated
+  // by requireProjectRole + scopeProjects). Without this guard an attacker
+  // could pass `?project_id=A` to pass the gate and then POST findings with
+  // per-row `project_id: "B"`, planting false-positive criticals OR flipping
+  // existing findings in any project (the upsert ON CONFLICT path updates).
+  // Force every finding's project_id to match the gate value; admins can still
+  // cross-post because they have access to every project.
+  const { requestedProjectId } = resolveProjectScope(req)
+  const gateProjectId = requestedProjectId ?? (req.query.project_id as string | undefined) ?? (req.body?.project_id as string | undefined)
+  if (!req.user?.isAdmin && !gateProjectId) {
+    res.status(400).json({ error: 'project_id required' })
+    return
+  }
   let count = 0
   for (const f of findings) {
+    const rowProject = typeof f.project_id === 'string' ? f.project_id : undefined
+    if (!req.user?.isAdmin) {
+      // Force tenant to the gated project. Silently rewriting is better than
+      // rejecting because old callers may not send project_id at all.
+      f.project_id = gateProjectId
+    } else if (rowProject && !rowProject.trim()) {
+      f.project_id = gateProjectId
+    }
     upsertSecurityFinding(f)
     count++
   }
-  logger.info({ count }, 'Bulk upserted security findings')
+  logger.info({ count, gateProjectId }, 'Bulk upserted security findings')
   res.status(201).json({ ok: true, upserted: count })
 })
 
@@ -1241,8 +1275,12 @@ router.post('/security/trigger', requireProjectRole('editor'), (req: Request, re
 
 router.get('/security/autofixes', (req: Request, res: Response) => {
   const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50
-  const { requestedProjectId } = resolveProjectScope(req)
-  res.json(getSecurityAutoFixes(limit, requestedProjectId ?? (req.query.project_id as string | undefined)))
+  const { requestedProjectId, allowedProjectIds } = resolveProjectScope(req)
+  res.json(getSecurityAutoFixes(
+    limit,
+    requestedProjectId ?? (req.query.project_id as string | undefined),
+    allowedProjectIds,
+  ))
 })
 
 // --- Chat ---
@@ -1250,8 +1288,13 @@ router.get('/security/autofixes', (req: Request, res: Response) => {
 router.get('/chat', (req: Request, res: Response) => {
   const limit = parseInt(req.query.limit as string, 10) || 50
   const before = req.query.before ? parseInt(req.query.before as string, 10) : undefined
-  const { requestedProjectId } = resolveProjectScope(req)
-  res.json(queryChatMessages({ limit, before, projectId: requestedProjectId ?? undefined }))
+  const { requestedProjectId, allowedProjectIds } = resolveProjectScope(req)
+  res.json(queryChatMessages({
+    limit,
+    before,
+    projectId: requestedProjectId ?? undefined,
+    allowedProjectIds,
+  }))
 })
 
 router.post('/chat/send', requireProjectRole('viewer'), (req: Request, res: Response) => {
@@ -2908,12 +2951,17 @@ router.get('/graph', requireAdmin, (req: Request, res: Response) => {
 // --- Project Integrations ---
 
 router.get('/integrations', (req: Request, res: Response) => {
-  const { requestedProjectId } = resolveProjectScope(req)
+  const { requestedProjectId, allowedProjectIds } = resolveProjectScope(req)
   if (requestedProjectId) {
+    // Scope middleware already 404's a cross-project requestedProjectId for
+    // members, so by the time we get here requestedProjectId is allowed.
     res.json(getProjectIntegrations(requestedProjectId))
-  } else {
-    res.json(getAllProjectIntegrations())
+    return
   }
+  // No explicit project: admins see everything, members see only their
+  // allowed set. Passing allowedProjectIds (null for admin, string[] for
+  // members) through lets getAllProjectIntegrations apply the scope.
+  res.json(getAllProjectIntegrations(allowedProjectIds))
 })
 
 // --- Metric Health (self-healing surface) ---
@@ -3752,12 +3800,23 @@ router.patch(
   const body = (req.body ?? {}) as Record<string, unknown>
   for (const k of allowed) if (k in body) fields[k] = body[k]
 
-  // Handle project_id move separately with validation
+  // Handle project_id move separately with validation.
+  // SECURITY: the requireProjectRoleForResource('editor', ...) middleware
+  // above only verifies the caller has editor on the SOURCE project. When
+  // moving to a different project we must also verify they have at least
+  // editor on the TARGET project — otherwise an editor on project A can
+  // inject items into any project B in the system.
   let newProjectId: string | undefined
   if ('project_id' in body) {
     const pid = body['project_id'] as string
     const projectExists = bdb.prepare('SELECT id FROM projects WHERE id = ?').get(pid)
     if (!projectExists) return res.status(409).json({ error: `project ${pid} not found` })
+    if (!req.user?.isAdmin) {
+      const role = req.user ? getUserProjectRole(req.user.id, pid) : null
+      if (!roleAtLeast(role, 'editor')) {
+        return res.status(403).json({ error: `editor role required on target project ${pid}` })
+      }
+    }
     fields['project_id'] = pid
     newProjectId = pid
   }
@@ -4043,6 +4102,31 @@ router.post('/action-items/archive-stale', requireAdmin, (_req: Request, res: Re
 
 router.get('/knowledge/stats', (req: Request, res: Response) => {
   try {
+    // Project-scope: admins see all, members only see knowledge tied to
+    // entities whose project_id is in their allowed set. Entities without a
+    // project_id (global) are visible to everyone — they are not tenant data.
+    const { allowedProjectIds, requestedProjectId } = resolveProjectScope(req)
+    if (Array.isArray(allowedProjectIds) && allowedProjectIds.length === 0) {
+      res.json({ entityCounts: [], totalObservations: 0, totalRelations: 0, recentObservations: [], recentChanges: [], embeddingDimension: null })
+      return
+    }
+
+    // Build the entity-scope predicate and its parameter list.
+    let entityScope = ''
+    const scopeParams: string[] = []
+    if (requestedProjectId) {
+      if (Array.isArray(allowedProjectIds) && !allowedProjectIds.includes(requestedProjectId)) {
+        res.json({ entityCounts: [], totalObservations: 0, totalRelations: 0, recentObservations: [], recentChanges: [], embeddingDimension: null })
+        return
+      }
+      entityScope = '(e.project_id = ? OR e.project_id IS NULL)'
+      scopeParams.push(requestedProjectId)
+    } else if (Array.isArray(allowedProjectIds)) {
+      const placeholders = allowedProjectIds.map(() => '?').join(', ')
+      entityScope = `(e.project_id IN (${placeholders}) OR e.project_id IS NULL)`
+      scopeParams.push(...allowedProjectIds)
+    }
+
     const botDb = getBotDb()
     if (!botDb) {
       res.json({ entityCounts: [], totalObservations: 0, totalRelations: 0, recentObservations: [], recentChanges: [], embeddingDimension: null })
@@ -4056,35 +4140,43 @@ router.get('/knowledge/stats', (req: Request, res: Response) => {
       return
     }
 
+    const entitiesWhere = entityScope ? `WHERE ${entityScope}` : ''
     const entityCounts = botDb
-      .prepare('SELECT type, COUNT(*) as count FROM entities GROUP BY type ORDER BY count DESC')
-      .all() as Array<{ type: string; count: number }>
+      .prepare(`SELECT type, COUNT(*) as count FROM entities e ${entitiesWhere} GROUP BY type ORDER BY count DESC`)
+      .all(...scopeParams) as Array<{ type: string; count: number }>
 
+    const obsBaseWhere = entityScope ? `AND ${entityScope}` : ''
     const totalObservations = (
-      botDb.prepare('SELECT COUNT(*) as n FROM observations WHERE valid_until IS NULL').get() as { n: number }
+      botDb.prepare(`
+        SELECT COUNT(*) as n FROM observations o JOIN entities e ON e.id = o.entity_id
+        WHERE o.valid_until IS NULL ${obsBaseWhere}
+      `).get(...scopeParams) as { n: number }
     ).n
 
     const totalRelations = (
-      botDb.prepare('SELECT COUNT(*) as n FROM relations WHERE valid_until IS NULL').get() as { n: number }
+      botDb.prepare(`
+        SELECT COUNT(*) as n FROM relations r JOIN entities e ON e.id = r.from_entity_id
+        WHERE r.valid_until IS NULL ${obsBaseWhere}
+      `).get(...scopeParams) as { n: number }
     ).n
 
     const recentObservations = botDb
       .prepare(`
         SELECT o.content, o.source, o.confidence, o.created_at, e.name as entity_name
         FROM observations o JOIN entities e ON e.id = o.entity_id
-        WHERE o.valid_until IS NULL
+        WHERE o.valid_until IS NULL ${obsBaseWhere}
         ORDER BY o.created_at DESC LIMIT 10
       `)
-      .all()
+      .all(...scopeParams)
 
     const recentChanges = botDb
       .prepare(`
         SELECT o.content, o.valid_until as changed_at, e.name as entity_name
         FROM observations o JOIN entities e ON e.id = o.entity_id
-        WHERE o.valid_until IS NOT NULL
+        WHERE o.valid_until IS NOT NULL ${obsBaseWhere}
         ORDER BY o.valid_until DESC LIMIT 5
       `)
-      .all()
+      .all(...scopeParams)
 
     const embeddingDimension = (
       botDb

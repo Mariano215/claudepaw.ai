@@ -358,9 +358,21 @@ export function queryChatMessages(params: {
   limit?: number
   before?: number
   projectId?: string
+  /**
+   * Three-state project scope: `null` means admin (no filter), `[]` means the
+   * caller has access to no projects (return empty), `string[]` restricts the
+   * query to those project ids. If `projectId` is also supplied, it must be a
+   * subset of `allowedProjectIds` or we return empty.
+   */
+  allowedProjectIds?: string[] | null
 }): { data: ChatMessage[]; has_more: boolean } {
   const tdb = getTelemetryDb()
   if (!tdb) return { data: [], has_more: false }
+
+  // Fast path: caller has no project access → no rows.
+  if (Array.isArray(params.allowedProjectIds) && params.allowedProjectIds.length === 0) {
+    return { data: [], has_more: false }
+  }
 
   const limit = Math.min(params.limit ?? 50, 200)
   const conditions: string[] = []
@@ -370,9 +382,20 @@ export function queryChatMessages(params: {
     conditions.push('e.received_at < ?')
     values.push(params.before)
   }
+
   if (params.projectId) {
+    // Explicit single-project filter. Must be allowed by scope if scope is set.
+    if (Array.isArray(params.allowedProjectIds) && !params.allowedProjectIds.includes(params.projectId)) {
+      return { data: [], has_more: false }
+    }
     conditions.push('e.project_id = ?')
     values.push(params.projectId)
+  } else if (Array.isArray(params.allowedProjectIds)) {
+    // No explicit project, but caller is a non-admin member: restrict to their
+    // allowed set. Admins (allowedProjectIds === null) fall through unfiltered.
+    const placeholders = params.allowedProjectIds.map(() => '?').join(', ')
+    conditions.push(`e.project_id IN (${placeholders})`)
+    values.push(...params.allowedProjectIds)
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
@@ -1403,9 +1426,25 @@ export function getSecurityScore(projectId?: string, allowedProjectIds?: string[
   return { current: current ?? null, history }
 }
 
-export function getSecurityAutoFixes(limit: number = 50, projectId?: string): SecurityAutoFix[] {
+export function getSecurityAutoFixes(
+  limit: number = 50,
+  projectId?: string,
+  allowedProjectIds?: string[] | null,
+): SecurityAutoFix[] {
+  // Three-state scope (consistent with other list helpers):
+  // - allowedProjectIds === null / undefined → admin (no filter)
+  // - allowedProjectIds === []               → no access (empty)
+  // - allowedProjectIds === string[]         → restrict via IN
+  if (Array.isArray(allowedProjectIds) && allowedProjectIds.length === 0) return []
   if (projectId) {
+    if (Array.isArray(allowedProjectIds) && !allowedProjectIds.includes(projectId)) return []
     return db.prepare('SELECT * FROM security_auto_fixes WHERE project_id = ? ORDER BY created_at DESC LIMIT ?').all(projectId, limit) as SecurityAutoFix[]
+  }
+  if (Array.isArray(allowedProjectIds)) {
+    const placeholders = allowedProjectIds.map(() => '?').join(', ')
+    return db.prepare(
+      `SELECT * FROM security_auto_fixes WHERE project_id IN (${placeholders}) ORDER BY created_at DESC LIMIT ?`,
+    ).all(...allowedProjectIds, limit) as SecurityAutoFix[]
   }
   return db.prepare('SELECT * FROM security_auto_fixes ORDER BY created_at DESC LIMIT ?').all(limit) as SecurityAutoFix[]
 }
@@ -1739,16 +1778,29 @@ export interface ProjectOverviewItem {
   recent_activity_24h: number
 }
 
-export function getProjectOverview(): { projects: ProjectOverviewItem[]; totals: { open_findings: number; active_tasks: number; research_total: number } } {
+export function getProjectOverview(
+  allowedProjectIds?: string[] | null,
+): { projects: ProjectOverviewItem[]; totals: { open_findings: number; active_tasks: number; research_total: number } } {
   const bdb = getBotDb()
   if (!bdb) return { projects: [], totals: { open_findings: 0, active_tasks: 0, research_total: 0 } }
+
+  // Scope: null/undefined = admin (no filter), [] = no access (empty), string[] = IN.
+  if (Array.isArray(allowedProjectIds) && allowedProjectIds.length === 0) {
+    return { projects: [], totals: { open_findings: 0, active_tasks: 0, research_total: 0 } }
+  }
+
+  const whereClause = Array.isArray(allowedProjectIds)
+    ? `WHERE p.id IN (${allowedProjectIds.map(() => '?').join(', ')})`
+    : ''
+  const scopeParams: string[] = Array.isArray(allowedProjectIds) ? allowedProjectIds : []
 
   const projects = bdb.prepare(`
     SELECT p.id, p.display_name, p.icon, ps.primary_color
     FROM projects p
     LEFT JOIN project_settings ps ON ps.project_id = p.id
+    ${whereClause}
     ORDER BY p.created_at ASC
-  `).all() as Array<{ id: string; display_name: string; icon: string | null; primary_color: string | null }>
+  `).all(...scopeParams) as Array<{ id: string; display_name: string; icon: string | null; primary_color: string | null }>
 
   const result: ProjectOverviewItem[] = []
   let totalFindings = 0
@@ -1944,7 +1996,7 @@ export function deleteProjectFromDb(id: string): boolean {
     for (const table of [
       'research_items', 'board_meetings', 'board_decisions', 'security_score_history', 'security_findings',
       'security_scans', 'feed', 'scheduled_tasks', 'metrics', 'security_auto_fixes', 'project_integrations',
-      'paws', 'paw_cycles', 'metric_health', 'action_item_chat_messages', 'research_chat_messages', 'costs_line_items',
+      'paws', 'paw_cycles', 'metric_health', 'action_item_chat_messages', 'research_chat_messages',
     ]) {
       try { db.prepare(`DELETE FROM ${table} WHERE project_id = ?`).run(id) } catch { /* table may not exist */ }
     }
@@ -2328,8 +2380,17 @@ export function getProjectIntegrations(projectId: string): ProjectIntegration[] 
   return db.prepare('SELECT * FROM project_integrations WHERE project_id = ? AND enabled = 1 ORDER BY sort_order, id').all(projectId) as ProjectIntegration[]
 }
 
-export function getAllProjectIntegrations(): ProjectIntegration[] {
-  return db.prepare('SELECT * FROM project_integrations WHERE enabled = 1 ORDER BY project_id, sort_order, id').all() as ProjectIntegration[]
+export function getAllProjectIntegrations(allowedProjectIds?: string[] | null): ProjectIntegration[] {
+  // Admins: allowedProjectIds === null -> no filter.
+  // Members with no access: empty array -> return []. Otherwise restrict by IN.
+  if (allowedProjectIds === null || allowedProjectIds === undefined) {
+    return db.prepare('SELECT * FROM project_integrations WHERE enabled = 1 ORDER BY project_id, sort_order, id').all() as ProjectIntegration[]
+  }
+  if (allowedProjectIds.length === 0) return []
+  const placeholders = allowedProjectIds.map(() => '?').join(', ')
+  return db.prepare(
+    `SELECT * FROM project_integrations WHERE enabled = 1 AND project_id IN (${placeholders}) ORDER BY project_id, sort_order, id`,
+  ).all(...allowedProjectIds) as ProjectIntegration[]
 }
 
 export function upsertProjectIntegration(data: Omit<ProjectIntegration, 'id'>): void {

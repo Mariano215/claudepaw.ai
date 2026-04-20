@@ -146,6 +146,20 @@ async function _ollamaEmbed(text: string, baseUrl: string, model: string): Promi
 
 async function _openaiEmbed(text: string, model: string, dimensions?: number): Promise<number[]> {
   if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not set')
+  // Gate bypass protection: OpenAI embeddings are billed; honor the kill
+  // switch so a paused system cannot burn quota via backfill loops.
+  // (Ollama/local providers skip this check — they're free.)
+  try {
+    const { checkKillSwitch } = await import('./cost/kill-switch-client.js')
+    const sw = await checkKillSwitch()
+    if (sw) {
+      logger.warn({ reason: sw.reason }, 'OpenAI embed skipped: kill switch tripped')
+      return []
+    }
+  } catch {
+    // Fail-closed: if we can't verify, don't burn paid quota.
+    return []
+  }
   const body: Record<string, unknown> = { model, input: text }
   if (dimensions) body.dimensions = dimensions
   const res = await fetch('https://api.openai.com/v1/embeddings', {

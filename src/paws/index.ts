@@ -74,12 +74,15 @@ export async function triggerPaw(
 
   const nextRun = computeNextRun(paw.cron)
 
+  // Advance next_run BEFORE running the cycle so that a crash mid-cycle does
+  // not leave the Paw marked immediately-due. Scheduled tasks do the same
+  // (src/scheduler.ts advances before running). Combined with the startup
+  // orphan-cycle reaper in clearStalePawCycles(), this prevents double-fires
+  // after bot restarts interrupting long-running phases (e.g. a retrain Paw
+  // that SSHes to a remote host and takes several minutes).
+  pawsDb.updatePawNextRun(db, pawId, nextRun)
   logger.info({ pawId, nextRun }, 'Triggering paw cycle')
-  try {
-    return await runPawCycle(db, pawId, runAgent, send, sendApproval, pawSend)
-  } finally {
-    pawsDb.updatePawNextRun(db, pawId, nextRun)
-  }
+  return await runPawCycle(db, pawId, runAgent, send, sendApproval, pawSend)
 }
 
 export async function handleApproval(

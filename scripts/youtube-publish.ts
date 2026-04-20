@@ -79,13 +79,15 @@ async function main() {
   const chatId = flags.chat ?? '123456789'
   const preview = (flags.desc ?? flags.title).slice(0, 200)
 
-  const text = `\u25b6\ufe0f YouTube <b>Draft</b> [${post.id}]\n\n` +
-    `<b>Title:</b> ${escapeHtml(flags.title)}\n` +
-    `${escapeHtml(preview)}\n\n` +
+  // CLAUDE.md hard rule: plain text to Telegram, no parse_mode, no HTML/markdown tags.
+  // The channel formatter strips these on the main send path; here we compose plain.
+  const text = `\u25b6\ufe0f YouTube Draft [${post.id}]\n\n` +
+    `Title: ${flags.title}\n` +
+    `${preview}\n\n` +
     `Visibility: ${flags.visibility ?? 'unlisted'}\n` +
-    (flags.tags ? `Tags: ${escapeHtml(flags.tags)}\n` : '') +
-    `Video: ${escapeHtml(videoPath)}\n\n` +
-    `To approve: <code>npm run social approve ${post.id}</code>`
+    (flags.tags ? `Tags: ${flags.tags}\n` : '') +
+    `Video: ${videoPath}\n\n` +
+    `To approve: npm run social approve ${post.id}`
 
   const keyboard = {
     inline_keyboard: [
@@ -103,7 +105,7 @@ async function main() {
       body: JSON.stringify({
         chat_id: chatId,
         text,
-        parse_mode: 'HTML',
+        // NO parse_mode — CLAUDE.md hard rule.
         reply_markup: keyboard,
       }),
     })

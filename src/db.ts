@@ -1160,6 +1160,25 @@ export function getDueTasks(): ScheduledTask[] {
     .all(Date.now()) as ScheduledTask[]
 }
 
+/**
+ * List "backlog" tasks — active tasks whose `next_run` is more than
+ * `maxAgeMs` in the past. Used by the scheduler to skip catch-up runs after a
+ * bot outage: if the bot was offline overnight, firing 20 tasks at once at
+ * restart is worse than skipping them. This is a read-only helper; the
+ * caller is responsible for computing the next future `next_run` and calling
+ * `updateTaskAfterRun(id, 'skipped (backlog)', nextRun)`.
+ */
+export function getBacklogTasks(maxAgeMs: number): ScheduledTask[] {
+  const cutoff = Date.now() - maxAgeMs
+  return getDb()
+    .prepare(
+      `SELECT * FROM scheduled_tasks
+       WHERE status = 'active' AND next_run < ?
+       ORDER BY next_run ASC`,
+    )
+    .all(cutoff) as ScheduledTask[]
+}
+
 export function createTask(
   id: string,
   chatId: string,

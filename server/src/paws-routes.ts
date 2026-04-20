@@ -11,6 +11,17 @@ function parseCron(expression: string): { next(): { getTime(): number } } {
   if (typeof mod.default?.parseExpression === 'function') return mod.default.parseExpression(expression)
   throw new Error('cron-parser API not found')
 }
+
+// Compute the next run time (ms) for a cron expression. Returns now+60s on
+// parse failure so callers never get a stale/past next_run that would fire
+// immediately and stampede on the next scheduler tick.
+function computeNextRunMs(cron: string): number {
+  try {
+    return parseCron(cron).next().getTime()
+  } catch {
+    return Date.now() + 60_000
+  }
+}
 import { broadcastToMac, broadcastPawsUpdate } from './ws.js'
 import { logger } from './logger.js'
 import {
@@ -197,10 +208,11 @@ router.post(
         approval_timeout_sec: config?.approval_timeout_sec ?? 3600,
         phase_instructions: config?.phase_instructions || {},
       }
+      const nextRun = computeNextRunMs(cron)
       db.prepare(`
         INSERT INTO paws (id, project_id, name, agent_id, cron, status, config, next_run, created_at)
-        VALUES (?, ?, ?, ?, ?, 'active', ?, 0, ?)
-      `).run(id, project_id || 'default', name, agent_id, cron, JSON.stringify(pawConfig), Date.now())
+        VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+      `).run(id, project_id || 'default', name, agent_id, cron, JSON.stringify(pawConfig), nextRun, Date.now())
 
       broadcastToMac({ type: 'paw-created', pawId: id, data: { id, name, agent_id, cron, project_id: project_id || 'default', config: pawConfig } })
       broadcastPawsUpdate(project_id || 'default')
@@ -293,16 +305,24 @@ router.post(
       const { id } = req.params
       const result = getDb().prepare("UPDATE paws SET status = 'paused' WHERE id = ?").run(id)
       if (result.changes === 0) return res.status(404).json({ ok: false, error: 'Paw not found' })
-      // Clean up any pending approval cycles
+      // Clean up any pending approval cycles. `paw_cycles` has no
+      // `updated_at` or `approval_requested` columns -- approval_requested
+      // lives inside the JSON `state` column. Match it via json_extract and
+      // don't touch the non-existent column.
       try {
         const bdb = getBotDbWrite()
         if (bdb) {
           bdb.prepare(`
-            UPDATE paw_cycles SET phase = 'failed', error = 'paw paused before approval', updated_at = ?
-            WHERE paw_id = ? AND phase = 'decide' AND approval_requested = 1
+            UPDATE paw_cycles
+               SET phase = 'failed',
+                   error = 'paw paused before approval',
+                   completed_at = ?
+             WHERE paw_id = ?
+               AND phase = 'decide'
+               AND json_extract(state, '$.approval_requested') = 1
           `).run(Date.now(), id)
         }
-      } catch { /* cycle table may not exist */ }
+      } catch (err) { logger.warn({ err, pawId: id }, 'pause: failed to close pending approval cycle') }
       res.json({ ok: true })
     } catch (err) {
       logger.error({ err }, 'POST /paws/:id/pause error')
@@ -320,9 +340,16 @@ router.post(
   requireProjectRoleForResource('editor', getPawProjectId),
   (req: Request, res: Response) => {
     try {
-      const result = getDb().prepare("UPDATE paws SET status = 'active' WHERE id = ?").run(req.params.id)
+      const db = getDb()
+      const row = db.prepare('SELECT cron FROM paws WHERE id = ?').get(req.params.id) as { cron?: string } | undefined
+      if (!row) return res.status(404).json({ ok: false, error: 'Paw not found' })
+      // Recompute next_run so a long pause doesn't leave a stale timestamp
+      // that fires the Paw immediately (and as part of a backlog burst) on
+      // the next scheduler tick.
+      const nextRun = row.cron ? computeNextRunMs(row.cron) : Date.now() + 60_000
+      const result = db.prepare("UPDATE paws SET status = 'active', next_run = ? WHERE id = ?").run(nextRun, req.params.id)
       if (result.changes === 0) return res.status(404).json({ ok: false, error: 'Paw not found' })
-      res.json({ ok: true })
+      res.json({ ok: true, next_run: nextRun })
     } catch (err) {
       logger.error({ err }, 'POST /paws/:id/resume error')
       res.status(500).json({ ok: false, error: 'Internal server error' })

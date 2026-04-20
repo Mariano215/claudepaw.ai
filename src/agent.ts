@@ -67,30 +67,31 @@ export async function runAgent(
   let delimiterID: string | undefined
 
   try {
-    // T3-C: gate checks run before any agent work
-    const gateProjectId = actionPlan?.projectId || runtimeContext?.projectId
-    if (gateProjectId) {
-      const { checkKillSwitch } = await import('./cost/kill-switch-client.js')
-      const sw = await checkKillSwitch()
-      if (sw) {
-        const msg = `System is paused. Kill switch tripped: ${sw.reason}. Ask an admin to clear it from the dashboard.`
-        return buildRefusalResult(msg, `kill-switch active: ${sw.reason}`, startMs)
-      }
+    // T3-C: gate checks run before any agent work.
+    // Kill switch is GLOBAL (not project-scoped); always check regardless of
+    // whether the call has a projectId. Cost gate is per-project; when no
+    // projectId is supplied we attribute to 'default' so spend is still gated
+    // and caps cannot be skipped by omitting the tag.
+    const gateProjectId = actionPlan?.projectId || runtimeContext?.projectId || 'default'
+
+    const { checkKillSwitch } = await import('./cost/kill-switch-client.js')
+    const sw = await checkKillSwitch()
+    if (sw) {
+      const msg = `System is paused. Kill switch tripped: ${sw.reason}. Ask an admin to clear it from the dashboard.`
+      return buildRefusalResult(msg, `kill-switch active: ${sw.reason}`, startMs)
     }
 
     let capOverride: 'ollama' | null = null
-    if (gateProjectId) {
-      const { getCostGateStatus } = await import('./cost/cost-gate.js')
-      const status = await getCostGateStatus(gateProjectId)
-      if (status.action === 'refuse') {
-        const scope = status.triggering_cap === 'daily' ? 'Daily' : 'Monthly'
-        const capAmount = status.monthly_cap_usd ?? status.daily_cap_usd ?? 0
-        const pct = status.percent_of_cap.toFixed(0)
-        const msg = `${scope} cost cap reached (${pct}% of $${capAmount}). Agent refused to run. Raise cap in Settings.`
-        return buildRefusalResult(msg, `cost cap exceeded at ${pct}%`, startMs)
-      }
-      if (status.action === 'override_to_ollama') capOverride = 'ollama'
+    const { getCostGateStatus } = await import('./cost/cost-gate.js')
+    const status = await getCostGateStatus(gateProjectId)
+    if (status.action === 'refuse') {
+      const scope = status.triggering_cap === 'daily' ? 'Daily' : 'Monthly'
+      const capAmount = status.monthly_cap_usd ?? status.daily_cap_usd ?? 0
+      const pct = status.percent_of_cap.toFixed(0)
+      const msg = `${scope} cost cap reached (${pct}% of $${capAmount}). Agent refused to run. Raise cap in Settings.`
+      return buildRefusalResult(msg, `cost cap exceeded at ${pct}%`, startMs)
     }
+    if (status.action === 'override_to_ollama') capOverride = 'ollama'
 
     let finalMessage = message
 

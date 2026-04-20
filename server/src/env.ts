@@ -44,6 +44,11 @@ for (const candidate of candidates) loadEnvFile(candidate)
 // condition instead of silently returning empty credentials.
 export const CREDENTIAL_KEY_MISSING = !process.env.CREDENTIAL_ENCRYPTION_KEY
 
+// AES-256-GCM requires a 32-byte key, stored as 64 hex chars.
+// Validate format so a mispaste (base64, too-short hex, etc) fails loud on
+// boot rather than at first decrypt with a cryptic "Invalid key length".
+const CREDENTIAL_KEY_HEX_RE = /^[0-9a-f]{64}$/i
+
 if (CREDENTIAL_KEY_MISSING) {
   // Fail loud: the server refuses to boot without this key. Every integration
   // depends on decrypting credentials from the bot DB, and a missing key
@@ -58,6 +63,21 @@ if (CREDENTIAL_KEY_MISSING) {
   } else {
     // eslint-disable-next-line no-console
     console.error(`${msg} Aborting startup. Set CREDENTIAL_ENCRYPTION_KEY in .env or pass ALLOW_MISSING_CREDENTIAL_KEY=1 to override.`)
+    process.exit(1)
+  }
+} else if (!CREDENTIAL_KEY_HEX_RE.test(process.env.CREDENTIAL_ENCRYPTION_KEY ?? '')) {
+  // Key present but malformed. Fail loud unless the override is set. Most
+  // common cause: pasting `openssl rand -base64 32` output (44 chars base64)
+  // instead of `openssl rand -hex 32` (64 hex chars).
+  const allowMissing = process.env.ALLOW_MISSING_CREDENTIAL_KEY === '1'
+  const actual = process.env.CREDENTIAL_ENCRYPTION_KEY ?? ''
+  const msg = `[env] CREDENTIAL_ENCRYPTION_KEY has invalid format (got ${actual.length} chars; expected 64 hex chars for AES-256). Generate one with: openssl rand -hex 32`
+  if (allowMissing) {
+    // eslint-disable-next-line no-console
+    console.warn(`${msg}. ALLOW_MISSING_CREDENTIAL_KEY=1 set, continuing in degraded mode.`)
+  } else {
+    // eslint-disable-next-line no-console
+    console.error(`${msg}. Aborting startup.`)
     process.exit(1)
   }
 }

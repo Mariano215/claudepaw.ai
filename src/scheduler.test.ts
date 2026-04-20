@@ -121,6 +121,14 @@ vi.mock('./logger.js', () => ({
   },
 }))
 
+// Default to "kill switch not tripped" for scheduler tests. The client now
+// fail-closes on dashboard-unreachable before the first successful fetch (see
+// src/cost/kill-switch-client.ts), which would otherwise short-circuit every
+// tick. Individual tests that need a tripped switch should override this.
+vi.mock('./cost/kill-switch-client.js', () => ({
+  checkKillSwitch: vi.fn(async () => null),
+}))
+
 import { computeNextRun, runDueTasks, runTaskNow, stopScheduler, initScheduler } from './scheduler.js'
 
 describe('computeNextRun', () => {

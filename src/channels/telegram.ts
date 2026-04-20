@@ -508,6 +508,18 @@ export class TelegramChannel implements Channel {
         const [, action, pawId] = parts
         const approved = action === 'approve'
 
+        // Gate on the clicker's user id — not the chat. If the bot is ever in
+        // a group, an inline-button callback from any group member must be
+        // rejected unless that user is on the allow-list. Mirror the other
+        // approval flow in this file, which passes fromUserId through to the
+        // resolver.
+        const fromUserId = ctx.callbackQuery.from?.id
+        if (!fromUserId || !this.isAuthorised(fromUserId)) {
+          logger.warn({ pawId, action, fromUserId }, 'Paw approval rejected: unauthorized user')
+          try { await ctx.answerCallbackQuery({ text: 'Not authorized to approve this Paw' }) } catch { /* ignore */ }
+          return
+        }
+
         // Answer the callback query (Telegram toast) — must not block approval processing
         // if the query is expired or already answered (e.g. stale button from a previous session)
         try {

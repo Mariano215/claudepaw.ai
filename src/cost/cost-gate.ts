@@ -30,12 +30,35 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>()
 
+// Cap the cache at a reasonable number of projects. Prevents unbounded growth
+// in long-running bots that see many distinct project_id values (e.g. tests,
+// migrations, deleted projects whose entries never get cleared). The cap is
+// generous relative to the current 4-project footprint.
+const MAX_CACHE_ENTRIES = 100
+
+function pruneExpired(now: number): void {
+  for (const [key, entry] of cache) {
+    if (now - entry.at >= TTL_MS) cache.delete(key)
+  }
+}
+
 export async function getCostGateStatus(projectId: string): Promise<CostGateStatus> {
   const now = Date.now()
   const cached = cache.get(projectId)
 
   if (cached !== undefined && now - cached.at < TTL_MS) {
     return cached.value
+  }
+
+  // Opportunistic eviction: on cache-miss, prune expired entries and evict
+  // the oldest entry if we're over the cap. Keeps the map bounded without
+  // needing a separate timer.
+  if (cache.size >= MAX_CACHE_ENTRIES) {
+    pruneExpired(now)
+    if (cache.size >= MAX_CACHE_ENTRIES) {
+      const oldestKey = cache.keys().next().value
+      if (oldestKey !== undefined) cache.delete(oldestKey)
+    }
   }
 
   const baseUrl = DASHBOARD_URL || 'http://127.0.0.1:3000'

@@ -611,6 +611,15 @@ export async function runMetricsCollection(): Promise<string> {
     let healthReason: string | null = null
 
     try {
+      // Reuse the API response from a previous project on the same tick if
+      // another project targets the same (platform, prefix). Prevents
+      // double-billing the YouTube/Twitter quota when two projects share an
+      // account (e.g. "default" + "default" both pointing at the
+      // @your_channel YouTube channel). Write-only before — now read first.
+      const cached = apiCache.get(cacheKey)
+      if (cached && cached.length > 0) {
+        entries = cached
+      }
       if (entries.length === 0) {
         switch (integ.platform) {
           case 'youtube': {

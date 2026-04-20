@@ -10,6 +10,7 @@ import { readEnvFile } from './env.js'
 import { getProject, getProjectSettings } from './db.js'
 import { getCredential } from './credentials.js'
 import { logger } from './logger.js'
+import { computeCostUsd } from './cost/pricing.js'
 
 export type ExecutionProvider = 'claude_desktop' | 'codex_local' | 'anthropic_api' | 'openai_api' | 'openrouter_api' | 'ollama' | 'lm_studio'
 export type FallbackPolicy = 'disabled' | 'enabled'
@@ -923,21 +924,24 @@ const anthropicApiAdapter: AgentExecutionAdapter = {
       .join('\n')
       .trim() || null
 
+    const anthropicUsage = payload?.usage ? {
+      input_tokens: payload.usage.input_tokens ?? null,
+      output_tokens: payload.usage.output_tokens ?? null,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+    } : null
     emitSyntheticEvent(input.onEvent, {
       type: 'result',
       result: text,
       subtype: 'success',
-      total_cost_usd: null,
+      // Compute cost from tokens so the cost gate actually trips for this
+      // provider. Claude Desktop emits this natively; adapters must synthesize.
+      total_cost_usd: computeCostUsd(model, anthropicUsage),
       duration_ms: elapsedMs,
       duration_api_ms: elapsedMs,
       is_error: false,
       num_turns: 1,
-      usage: payload?.usage ? {
-        input_tokens: payload.usage.input_tokens ?? null,
-        output_tokens: payload.usage.output_tokens ?? null,
-        cache_read_input_tokens: null,
-        cache_creation_input_tokens: null,
-      } : null,
+      usage: anthropicUsage,
       modelUsage: null,
       session_id: syntheticSessionId,
     })
@@ -1177,21 +1181,23 @@ const openaiApiAdapter: AgentExecutionAdapter = {
         : '')
       || null
 
+    const openaiUsage = payload?.usage ? {
+      input_tokens: payload.usage.input_tokens ?? payload.usage.prompt_tokens ?? null,
+      output_tokens: payload.usage.output_tokens ?? payload.usage.completion_tokens ?? null,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+    } : null
     emitSyntheticEvent(input.onEvent, {
       type: 'result',
       result: text,
       subtype: 'success',
-      total_cost_usd: null,
+      // Token→USD so cost gate can see this provider's spend.
+      total_cost_usd: computeCostUsd(model, openaiUsage),
       duration_ms: elapsedMs,
       duration_api_ms: elapsedMs,
       is_error: false,
       num_turns: 1,
-      usage: payload?.usage ? {
-        input_tokens: payload.usage.input_tokens ?? payload.usage.prompt_tokens ?? null,
-        output_tokens: payload.usage.output_tokens ?? payload.usage.completion_tokens ?? null,
-        cache_read_input_tokens: null,
-        cache_creation_input_tokens: null,
-      } : null,
+      usage: openaiUsage,
       modelUsage: null,
       session_id: syntheticSessionId,
     })
@@ -1284,21 +1290,24 @@ function makeChatCompletionsAdapter(provider: ExecutionProvider): AgentExecution
             .trim()
         : '') || null
 
+      const chatUsage = payload?.usage ? {
+        input_tokens: payload.usage.prompt_tokens ?? null,
+        output_tokens: payload.usage.completion_tokens ?? null,
+        cache_read_input_tokens: null,
+        cache_creation_input_tokens: null,
+      } : null
       emitSyntheticEvent(input.onEvent, {
         type: 'result',
         result: text,
         subtype: 'success',
-        total_cost_usd: null,
+        // Token→USD. ollama/lm-studio return 0 (free); openrouter computed
+        // against the model-family price. Makes cost gate work for this path.
+        total_cost_usd: computeCostUsd(model, chatUsage),
         duration_ms: elapsedMs,
         duration_api_ms: elapsedMs,
         is_error: false,
         num_turns: 1,
-        usage: payload?.usage ? {
-          input_tokens: payload.usage.prompt_tokens ?? null,
-          output_tokens: payload.usage.completion_tokens ?? null,
-          cache_read_input_tokens: null,
-          cache_creation_input_tokens: null,
-        } : null,
+        usage: chatUsage,
         modelUsage: null,
         session_id: syntheticSessionId,
       })

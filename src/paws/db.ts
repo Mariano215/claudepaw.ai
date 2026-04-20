@@ -145,3 +145,80 @@ export function getDuePaws(db: InstanceType<typeof Database>): Paw[] {
   `).all(Date.now()) as any[]
   return rows.map(r => ({ ...r, config: JSON.parse(r.config) }))
 }
+
+/**
+ * List active Paws whose `next_run` is more than `maxAgeMs` in the past.
+ * Used by the scheduler at startup to detect and skip backlog runs after a
+ * bot outage (see `getBacklogTasks` in src/db.ts for the same pattern on
+ * scheduled_tasks).
+ */
+export function getBacklogPaws(db: InstanceType<typeof Database>, maxAgeMs: number): Paw[] {
+  const cutoff = Date.now() - maxAgeMs
+  const rows = db.prepare(
+    `SELECT * FROM paws WHERE status = 'active' AND next_run < ? ORDER BY next_run ASC`,
+  ).all(cutoff) as any[]
+  return rows.map(r => ({ ...r, config: JSON.parse(r.config) }))
+}
+
+/**
+ * Reap orphan cycles left by bot crashes. Called once at startup before the
+ * scheduler starts ticking. Mirrors `clearStaleRunningTasks()` in src/db.ts.
+ *
+ * - Cycles in an in-progress phase (observe/analyze/decide/act/report) with
+ *   `completed_at IS NULL` and started more than `maxAgeMs` ago are marked
+ *   `phase='failed'` with an explanatory error.
+ * - Paws stuck in `status='waiting_approval'` whose latest cycle was marked
+ *   failed (by the step above) are returned to `active` and given a fresh
+ *   `next_run = Date.now()` so they are picked up on the next tick instead of
+ *   staying silent forever.
+ *
+ * Returns a summary of what was reaped for the startup log.
+ */
+export function reapStalePawCycles(
+  db: InstanceType<typeof Database>,
+  maxAgeMs: number = 30 * 60 * 1000, // 30 min default (longest legitimate phase)
+): { cyclesReaped: number; pawsUnstuck: number } {
+  const cutoff = Date.now() - maxAgeMs
+  const cycleResult = db.prepare(`
+    UPDATE paw_cycles
+       SET phase = 'failed',
+           error = 'bot crashed mid-cycle (startup reaper)',
+           completed_at = ?
+     WHERE phase IN ('observe','analyze','decide','act','report')
+       AND completed_at IS NULL
+       AND started_at < ?
+  `).run(Date.now(), cutoff)
+
+  // Unstick any Paw that is waiting_approval but no longer has an active
+  // approval cycle to respond to (either the cycle was just reaped, or the
+  // approval state has gone stale past the configured timeout).
+  //
+  // For Paws with approval_timeout_sec in their config, honor that. For the
+  // rest we require the latest cycle to have completed or failed.
+  const stuck = db.prepare(`
+    SELECT p.id, p.config, c.id as cycle_id, c.phase as cycle_phase
+      FROM paws p
+      LEFT JOIN (
+        SELECT paw_id, id, phase, started_at
+          FROM paw_cycles
+         WHERE (paw_id, started_at) IN (
+           SELECT paw_id, MAX(started_at) FROM paw_cycles GROUP BY paw_id
+         )
+      ) c ON c.paw_id = p.id
+     WHERE p.status = 'waiting_approval'
+  `).all() as Array<{ id: string; config: string; cycle_id: string | null; cycle_phase: string | null }>
+
+  let pawsUnstuck = 0
+  for (const row of stuck) {
+    const needsUnstick =
+      row.cycle_phase === null ||
+      row.cycle_phase === 'completed' ||
+      row.cycle_phase === 'failed'
+    if (needsUnstick) {
+      db.prepare("UPDATE paws SET status = 'active', next_run = ? WHERE id = ?").run(Date.now(), row.id)
+      pawsUnstuck++
+    }
+  }
+
+  return { cyclesReaped: cycleResult.changes, pawsUnstuck }
+}

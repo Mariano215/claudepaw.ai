@@ -42,6 +42,24 @@ export async function extractFromConversation(
   if (userMessage.startsWith('/')) return
   if (agentResponse.length < 20) return
 
+  // Gate bypass protection: the extraction pipeline makes real LLM calls
+  // against OpenAI/Anthropic/Ollama without going through runAgent, which
+  // means the cost gate and kill switch would otherwise be silently skipped.
+  // Check the kill switch here; the cost gate is coarser-grained so we rely
+  // on the per-turn agent gate to trip before extraction runs at 100% cap
+  // anyway (extraction is secondary to the user response).
+  try {
+    const { checkKillSwitch } = await import('./cost/kill-switch-client.js')
+    const sw = await checkKillSwitch()
+    if (sw) {
+      logger.warn({ reason: sw.reason }, 'extraction skipped: kill switch tripped')
+      return
+    }
+  } catch (err) {
+    logger.warn({ err }, 'extraction kill-switch check failed (fail-closed, skipping)')
+    return
+  }
+
   try {
     const db = getDb()
     const entityNames = (
