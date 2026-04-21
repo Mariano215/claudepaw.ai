@@ -324,12 +324,33 @@ function gatherAgentEvents(telemetry: InstanceType<typeof Database>, hoursBack: 
       ORDER BY cost_usd DESC LIMIT 5`,
   ).all(cutoff) as TopAgent[]
 
+  // Top tools by call count in the window. Only rows from events inside the
+  // same window (guards against stale joined rows). Pure SQL, no LLM involved.
+  let topTools: Array<{ tool_name: string; calls: number; failures: number }> = []
+  try {
+    topTools = telemetry.prepare(
+      `SELECT tc.tool_name AS tool_name,
+              COUNT(*) AS calls,
+              SUM(CASE WHEN tc.success = 0 THEN 1 ELSE 0 END) AS failures
+         FROM tool_calls tc
+         JOIN agent_events e ON e.event_id = tc.event_id
+        WHERE e.received_at >= ?
+          AND tc.tool_name IS NOT NULL
+        GROUP BY tc.tool_name
+        ORDER BY calls DESC LIMIT 5`,
+    ).all(cutoff) as Array<{ tool_name: string; calls: number; failures: number }>
+  } catch {
+    // tool_calls table missing or columns not migrated -- degrade to empty
+    topTools = []
+  }
+
   return {
     total_24h: totalRow.total,
     errors_24h: totalRow.errors,
     avg_duration_ms: totalRow.avg_dur,
     by_provider: byProvider,
     top_agents: topAgents,
+    top_tools: topTools,
   }
 }
 

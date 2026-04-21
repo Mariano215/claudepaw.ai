@@ -516,6 +516,8 @@ export interface EventsQuery {
   project_id?: string | null
   provider?: string | null
   agent_id?: string | null
+  /** Restrict events to those that invoked this tool at least once. */
+  tool_name?: string | null
   limit?: number
 }
 
@@ -610,6 +612,11 @@ export function listEvents(q: EventsQuery): EventsResult {
   if (q.project_id) { where.push('project_id = ?'); params.push(q.project_id) }
   if (q.provider) { where.push('COALESCE(executed_provider, requested_provider) = ?'); params.push(q.provider) }
   if (q.agent_id) { where.push('COALESCE(agent_id, \'unknown\') = ?'); params.push(q.agent_id) }
+  // tool_name: subquery matches events that invoked the named tool at least once
+  if (q.tool_name) {
+    where.push('event_id IN (SELECT DISTINCT event_id FROM tool_calls WHERE tool_name = ?)')
+    params.push(q.tool_name)
+  }
   const whereSql = where.join(' AND ')
 
   const totalRow = telemetry.prepare(
@@ -704,4 +711,181 @@ export function buildHealthReport(periodHours: number = 24): ReportData {
   const { status, issues } = computeOverallStatus(base)
 
   return { ...base, anomalies, overall_status: status, overall_issues: issues }
+}
+
+// -----------------------------------------------------------------------------
+// Tool-invocation usage (feature #17)
+// -----------------------------------------------------------------------------
+
+export interface ToolUsageRow {
+  tool_name: string
+  calls: number
+  failures: number
+  avg_duration_ms: number | null
+}
+
+export interface ToolMatrixRow {
+  tool_name: string
+  cells: Record<string, number>
+  total: number
+}
+
+export interface ToolUsageReport {
+  period: { hours: number; from: number; to: number; label: string }
+  total_calls: number
+  total_failures: number
+  unique_tools: number
+  tools: ToolUsageRow[]
+  matrix: {
+    agents: string[]
+    rows: ToolMatrixRow[]
+  }
+  top_5_tools: Array<{ tool_name: string; calls: number }>
+}
+
+const UNATTRIBUTED_AGENT = '(unattributed)'
+
+/**
+ * Aggregate tool_calls within a rolling window. Joined to agent_events for
+ * project + agent attribution + window filtering. Pure SQL -- no LLM calls
+ * in this code path, matching the core ClaudePaw design principle.
+ *
+ * Three-state scope on allowedProjectIds:
+ *   undefined / null  -> admin, no project filter
+ *   []                -> caller has no project access, return empty
+ *   ['proj-a', ...]   -> WHERE project_id IN (...)
+ *
+ * When project_id is also supplied, it must be a member of allowedProjectIds
+ * or the report returns empty (prevents cross-project read leaks).
+ */
+export function buildToolUsage(params: {
+  hours: number
+  project_id?: string | null
+  agent_id?: string | null
+  allowedProjectIds?: string[] | null
+}): ToolUsageReport {
+  const hours = Math.max(1, Math.round(params.hours))
+  const to = Date.now()
+  const from = to - hours * 60 * 60 * 1000
+  const period = { hours, from, to, label: periodLabel(hours) }
+
+  const emptyReport: ToolUsageReport = {
+    period,
+    total_calls: 0,
+    total_failures: 0,
+    unique_tools: 0,
+    tools: [],
+    matrix: { agents: [], rows: [] },
+    top_5_tools: [],
+  }
+
+  // No-access short-circuit.
+  if (Array.isArray(params.allowedProjectIds) && params.allowedProjectIds.length === 0) {
+    return emptyReport
+  }
+  // Cross-project read attempt -- return empty rather than leak a foreign project.
+  if (
+    params.project_id &&
+    Array.isArray(params.allowedProjectIds) &&
+    !params.allowedProjectIds.includes(params.project_id)
+  ) {
+    return emptyReport
+  }
+
+  const telemetry = getTelemetryDb()
+  if (!telemetry) return emptyReport
+
+  // Build the WHERE clause safely. Every user-derived value goes through
+  // positional parameters; no string interpolation.
+  const where: string[] = ['e.received_at >= ?', 'e.received_at <= ?']
+  const args: Array<number | string> = [from, to]
+
+  if (params.project_id) {
+    where.push('e.project_id = ?')
+    args.push(params.project_id)
+  } else if (Array.isArray(params.allowedProjectIds)) {
+    const placeholders = params.allowedProjectIds.map(() => '?').join(', ')
+    where.push(`e.project_id IN (${placeholders})`)
+    args.push(...params.allowedProjectIds)
+  }
+
+  if (params.agent_id) {
+    where.push('e.agent_id = ?')
+    args.push(params.agent_id)
+  }
+
+  const whereClause = where.join(' AND ')
+
+  // Per-tool aggregates
+  const toolRows = telemetry.prepare(`
+    SELECT
+      tc.tool_name                                AS tool_name,
+      COUNT(*)                                    AS calls,
+      SUM(CASE WHEN tc.success = 0 THEN 1 ELSE 0 END) AS failures,
+      AVG(tc.duration_ms)                         AS avg_duration_ms
+    FROM tool_calls tc
+    JOIN agent_events e ON e.event_id = tc.event_id
+    WHERE ${whereClause}
+      AND tc.tool_name IS NOT NULL
+    GROUP BY tc.tool_name
+    ORDER BY calls DESC
+  `).all(...args) as Array<{
+    tool_name: string
+    calls: number
+    failures: number | null
+    avg_duration_ms: number | null
+  }>
+
+  const tools: ToolUsageRow[] = toolRows.map(r => ({
+    tool_name: r.tool_name,
+    calls: r.calls,
+    failures: r.failures ?? 0,
+    avg_duration_ms: r.avg_duration_ms == null ? null : Math.round(r.avg_duration_ms),
+  }))
+
+  // Agent × tool matrix
+  // Agent × tool matrix. The sentinel label is passed as a positional arg
+  // (once per COALESCE) rather than interpolated, matching the "no string
+  // interpolation" rule in the JSDoc above.
+  const matrixRows = telemetry.prepare(`
+    SELECT
+      tc.tool_name                             AS tool_name,
+      COALESCE(e.agent_id, ?) AS agent_id,
+      COUNT(*)                                 AS calls
+    FROM tool_calls tc
+    JOIN agent_events e ON e.event_id = tc.event_id
+    WHERE ${whereClause}
+      AND tc.tool_name IS NOT NULL
+    GROUP BY tc.tool_name, COALESCE(e.agent_id, ?)
+  `).all(UNATTRIBUTED_AGENT, ...args, UNATTRIBUTED_AGENT) as Array<{ tool_name: string; agent_id: string; calls: number }>
+
+  // Collect distinct agent labels preserving most-used first
+  const agentTotals: Record<string, number> = {}
+  for (const r of matrixRows) {
+    agentTotals[r.agent_id] = (agentTotals[r.agent_id] ?? 0) + r.calls
+  }
+  const agents = Object.keys(agentTotals).sort((a, b) => agentTotals[b]! - agentTotals[a]!)
+
+  // Pivot to { tool_name: { agent: calls } }
+  const toolPivot: Record<string, ToolMatrixRow> = {}
+  for (const r of matrixRows) {
+    const row = toolPivot[r.tool_name] ?? { tool_name: r.tool_name, cells: {}, total: 0 }
+    row.cells[r.agent_id] = (row.cells[r.agent_id] ?? 0) + r.calls
+    row.total += r.calls
+    toolPivot[r.tool_name] = row
+  }
+  const matrixOrdered = Object.values(toolPivot).sort((a, b) => b.total - a.total)
+
+  const total_calls = tools.reduce((sum, t) => sum + t.calls, 0)
+  const total_failures = tools.reduce((sum, t) => sum + t.failures, 0)
+
+  return {
+    period,
+    total_calls,
+    total_failures,
+    unique_tools: tools.length,
+    tools,
+    matrix: { agents, rows: matrixOrdered },
+    top_5_tools: tools.slice(0, 5).map(t => ({ tool_name: t.tool_name, calls: t.calls })),
+  }
 }

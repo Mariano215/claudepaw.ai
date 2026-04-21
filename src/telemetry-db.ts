@@ -252,6 +252,17 @@ export function initTelemetryDatabase(): void {
   runMigration(`ALTER TABLE agent_events ADD COLUMN executed_provider TEXT`)
   runMigration(`ALTER TABLE agent_events ADD COLUMN provider_fallback_applied INTEGER DEFAULT 0`)
 
+  // Tool invocation tracking (#17) -- per-tool timing + outcome on the existing tool_calls table.
+  // Secrets in `tool_input_summary` are redacted + truncated to 200 chars in src/telemetry.ts.
+  runMigration(`ALTER TABLE tool_calls ADD COLUMN started_at INTEGER`)
+  runMigration(`ALTER TABLE tool_calls ADD COLUMN duration_ms INTEGER`)
+  runMigration(`ALTER TABLE tool_calls ADD COLUMN tool_input_summary TEXT`)
+  runMigration(`ALTER TABLE tool_calls ADD COLUMN success INTEGER`)
+  runMigration(`ALTER TABLE tool_calls ADD COLUMN error TEXT`)
+  // Index for per-event tool lookups (dashboard drill-in) and per-tool aggregates
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_tool_calls_event ON tool_calls(event_id)`)
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_tool_calls_name_started ON tool_calls(tool_name, started_at)`)
+
   logger.info('Telemetry database initialized')
 }
 

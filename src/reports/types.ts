@@ -88,6 +88,8 @@ export interface ReportData {
     by_provider: ProviderStat[]
     top_agents: TopAgent[]
     avg_duration_ms: number
+    /** Top tools by call count in the window (feature #17). Empty when no tools invoked. */
+    top_tools: Array<{ tool_name: string; calls: number; failures: number }>
   }
   anomalies: Anomaly[]
   remediations_24h: RemediationRow[]

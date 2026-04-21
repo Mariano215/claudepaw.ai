@@ -191,6 +191,93 @@ export function getScheduledTask(id: string): ScheduledTask | undefined {
   return db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id) as ScheduledTask | undefined
 }
 
+export interface ScheduledTaskAudit {
+  last_run_cost_usd: number | null
+  last_run_duration_ms: number | null
+  last_run_input_tokens: number | null
+  last_run_output_tokens: number | null
+  last_run_cache_read_tokens: number | null
+  last_run_provider: string | null
+  last_run_model: string | null
+  last_run_agent_id: string | null
+  last_run_is_error: number | null
+}
+
+export interface ScheduledTaskWithAudit extends ScheduledTask, ScheduledTaskAudit {}
+
+/**
+ * Pull cost + token + provider metadata for each task's `last_run` timestamp
+ * from telemetry.agent_events. Used by the #sops page to surface silent-run
+ * spend without a separate API round-trip per card.
+ *
+ * Matching heuristic: we pick the most recent agent_event whose received_at
+ * falls within ±5 min of task.last_run AND whose project_id matches AND
+ * source='scheduler'. This handles the scheduler->runAgent->agent_events
+ * path where received_at tracks invocation time, not completion.
+ */
+export function annotateTasksWithAudit(tasks: ScheduledTask[]): ScheduledTaskWithAudit[] {
+  const emptyAudit: ScheduledTaskAudit = {
+    last_run_cost_usd: null,
+    last_run_duration_ms: null,
+    last_run_input_tokens: null,
+    last_run_output_tokens: null,
+    last_run_cache_read_tokens: null,
+    last_run_provider: null,
+    last_run_model: null,
+    last_run_agent_id: null,
+    last_run_is_error: null,
+  }
+  const tel = getTelemetryDb()
+  if (!tel || tasks.length === 0) {
+    return tasks.map(t => ({ ...t, ...emptyAudit }))
+  }
+
+  const stmt = tel.prepare(`
+    SELECT total_cost_usd, duration_ms, input_tokens, output_tokens, cache_read_tokens,
+           executed_provider, model, agent_id, is_error
+      FROM agent_events
+     WHERE project_id = ?
+       AND source = 'scheduler'
+       AND received_at BETWEEN ? AND ?
+     ORDER BY ABS(received_at - ?) ASC
+     LIMIT 1
+  `)
+  const WINDOW_MS = 5 * 60 * 1000
+
+  return tasks.map(t => {
+    if (!t.last_run) return { ...t, ...emptyAudit }
+    const row = stmt.get(
+      t.project_id,
+      t.last_run - WINDOW_MS,
+      t.last_run + WINDOW_MS,
+      t.last_run,
+    ) as Partial<{
+      total_cost_usd: number
+      duration_ms: number
+      input_tokens: number
+      output_tokens: number
+      cache_read_tokens: number
+      executed_provider: string
+      model: string
+      agent_id: string
+      is_error: number
+    }> | undefined
+    if (!row) return { ...t, ...emptyAudit }
+    return {
+      ...t,
+      last_run_cost_usd: row.total_cost_usd ?? null,
+      last_run_duration_ms: row.duration_ms ?? null,
+      last_run_input_tokens: row.input_tokens ?? null,
+      last_run_output_tokens: row.output_tokens ?? null,
+      last_run_cache_read_tokens: row.cache_read_tokens ?? null,
+      last_run_provider: row.executed_provider ?? null,
+      last_run_model: row.model ?? null,
+      last_run_agent_id: row.agent_id ?? null,
+      last_run_is_error: row.is_error ?? null,
+    }
+  })
+}
+
 export function updateScheduledTaskStatus(id: string, status: 'active' | 'paused'): boolean {
   const result = db.prepare("UPDATE scheduled_tasks SET status = ? WHERE id = ?").run(status, id)
   return result.changes > 0
@@ -317,6 +404,46 @@ export function getTelemetryDb(): Database.Database | null {
     // full table scan on a table that grows by ~1 row per agent call (multi-GB
     // over a few months).
     telemetryDb.exec(`CREATE INDEX IF NOT EXISTS idx_agent_events_project_time ON agent_events(project_id, received_at)`)
+
+    // Tool-invocation tracking (#17). The bot produces one row per Claude SDK
+    // tool_use block and syncs them here alongside agent_events. Kept schema
+    // parity with store/telemetry.db on the bot.
+    telemetryDb.exec(`
+      CREATE TABLE IF NOT EXISTS tool_calls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL REFERENCES agent_events(event_id),
+        tool_use_id TEXT,
+        tool_name TEXT,
+        parent_tool_use_id TEXT,
+        elapsed_seconds REAL,
+        started_at INTEGER,
+        duration_ms INTEGER,
+        tool_input_summary TEXT,
+        success INTEGER,
+        error TEXT
+      )
+    `)
+    // Idempotent column adds for servers upgrading from older shapes of
+    // tool_calls. Deployed production had only {id, event_id, tool_name,
+    // elapsed_seconds} on first boot -- add the full set here so insertChatEvent
+    // never hits "no such column".
+    for (const col of [
+      ['tool_use_id', 'TEXT'],
+      ['parent_tool_use_id', 'TEXT'],
+      ['elapsed_seconds', 'REAL'],
+      ['started_at', 'INTEGER'],
+      ['duration_ms', 'INTEGER'],
+      ['tool_input_summary', 'TEXT'],
+      ['success', 'INTEGER'],
+      ['error', 'TEXT'],
+    ] as const) {
+      if (!hasColumn(telemetryDb, 'tool_calls', col[0])) {
+        telemetryDb.exec(`ALTER TABLE tool_calls ADD COLUMN ${col[0]} ${col[1]}`)
+      }
+    }
+    telemetryDb.exec(`CREATE INDEX IF NOT EXISTS idx_tool_calls_event ON tool_calls(event_id)`)
+    telemetryDb.exec(`CREATE INDEX IF NOT EXISTS idx_tool_calls_name_started ON tool_calls(tool_name, started_at)`)
+
     telemetryDb.exec(`
       CREATE TABLE IF NOT EXISTS cost_line_items (
         id TEXT PRIMARY KEY,
@@ -439,7 +566,16 @@ export function queryChatMessages(params: {
 export function insertChatEvent(row: Record<string, unknown>): void {
   const tdb = getTelemetryDb()
   if (!tdb) return
-  tdb.prepare(`
+  insertChatEventIntoDb(tdb, row)
+}
+
+/**
+ * Test-visible worker that performs the parent + tool_calls insert against an
+ * explicit Database handle. Keeps `insertChatEvent()` simple (no parameters) for
+ * production callers while letting tests bypass the cached telemetry handle.
+ */
+export function insertChatEventIntoDb(tdb: Database.Database, row: Record<string, unknown>): void {
+  const eventInsert = tdb.prepare(`
     INSERT OR IGNORE INTO agent_events (
       event_id, project_id, chat_id, session_id,
       received_at, memory_injected_at, agent_started_at, agent_ended_at, response_sent_at,
@@ -457,37 +593,76 @@ export function insertChatEvent(row: Record<string, unknown>): void {
       @source, @model_usage_json, @prompt_text, @result_text, @agent_id,
       @requested_provider, @executed_provider, @provider_fallback_applied
     )
-  `).run({
-    event_id: row.event_id ?? null,
-    project_id: row.project_id ?? 'default',
-    chat_id: row.chat_id ?? null,
-    session_id: row.session_id ?? null,
-    received_at: row.received_at ?? null,
-    memory_injected_at: row.memory_injected_at ?? null,
-    agent_started_at: row.agent_started_at ?? null,
-    agent_ended_at: row.agent_ended_at ?? null,
-    response_sent_at: row.response_sent_at ?? null,
-    prompt_summary: row.prompt_summary ?? null,
-    result_summary: row.result_summary ?? null,
-    model: row.model ?? null,
-    input_tokens: row.input_tokens ?? null,
-    output_tokens: row.output_tokens ?? null,
-    cache_read_tokens: row.cache_read_tokens ?? null,
-    cache_creation_tokens: row.cache_creation_tokens ?? null,
-    total_cost_usd: row.total_cost_usd ?? null,
-    duration_ms: row.duration_ms ?? null,
-    duration_api_ms: row.duration_api_ms ?? null,
-    num_turns: row.num_turns ?? null,
-    is_error: row.is_error ?? 0,
-    source: row.source ?? null,
-    model_usage_json: row.model_usage_json ?? null,
-    prompt_text: row.prompt_text ?? null,
-    result_text: row.result_text ?? null,
-    agent_id: row.agent_id ?? null,
-    requested_provider: row.requested_provider ?? null,
-    executed_provider: row.executed_provider ?? null,
-    provider_fallback_applied: row.provider_fallback_applied ?? 0,
+  `)
+
+  const toolInsert = tdb.prepare(`
+    INSERT INTO tool_calls (
+      event_id, tool_use_id, tool_name, parent_tool_use_id, elapsed_seconds,
+      started_at, duration_ms, tool_input_summary, success, error
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+
+  // Tool calls arrive as an optional array on the synced row. Persist them in
+  // the same transaction as the parent event so the FK is guaranteed to
+  // resolve, and so a partial push never leaves orphan tool rows behind.
+  // Hard cap at 500 rows per event as a DoS guard -- a single Claude SDK run
+  // never legitimately exceeds ~50 tool invocations; anything above 500 is a
+  // loop bug or malicious payload, so we drop the tail rather than block the
+  // event loop on a 10k-row INSERT.
+  const MAX_TOOL_CALLS_PER_EVENT = 500
+  const rawToolCalls = (Array.isArray(row.tool_calls) ? row.tool_calls : []).slice(0, MAX_TOOL_CALLS_PER_EVENT)
+
+  const runTx = tdb.transaction(() => {
+    eventInsert.run({
+      event_id: row.event_id ?? null,
+      project_id: row.project_id ?? 'default',
+      chat_id: row.chat_id ?? null,
+      session_id: row.session_id ?? null,
+      received_at: row.received_at ?? null,
+      memory_injected_at: row.memory_injected_at ?? null,
+      agent_started_at: row.agent_started_at ?? null,
+      agent_ended_at: row.agent_ended_at ?? null,
+      response_sent_at: row.response_sent_at ?? null,
+      prompt_summary: row.prompt_summary ?? null,
+      result_summary: row.result_summary ?? null,
+      model: row.model ?? null,
+      input_tokens: row.input_tokens ?? null,
+      output_tokens: row.output_tokens ?? null,
+      cache_read_tokens: row.cache_read_tokens ?? null,
+      cache_creation_tokens: row.cache_creation_tokens ?? null,
+      total_cost_usd: row.total_cost_usd ?? null,
+      duration_ms: row.duration_ms ?? null,
+      duration_api_ms: row.duration_api_ms ?? null,
+      num_turns: row.num_turns ?? null,
+      is_error: row.is_error ?? 0,
+      source: row.source ?? null,
+      model_usage_json: row.model_usage_json ?? null,
+      prompt_text: row.prompt_text ?? null,
+      result_text: row.result_text ?? null,
+      agent_id: row.agent_id ?? null,
+      requested_provider: row.requested_provider ?? null,
+      executed_provider: row.executed_provider ?? null,
+      provider_fallback_applied: row.provider_fallback_applied ?? 0,
+    })
+
+    for (const tc of rawToolCalls as Array<Record<string, unknown>>) {
+      if (!tc || typeof tc !== 'object') continue
+      toolInsert.run(
+        row.event_id ?? null,
+        tc.tool_use_id ?? null,
+        tc.tool_name ?? null,
+        tc.parent_tool_use_id ?? null,
+        tc.elapsed_seconds ?? null,
+        tc.started_at ?? null,
+        tc.duration_ms ?? null,
+        tc.tool_input_summary ?? null,
+        tc.success == null ? null : (tc.success ? 1 : 0),
+        tc.error ?? null,
+      )
+    }
   })
+
+  runTx()
 }
 
 let db: Database.Database

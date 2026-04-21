@@ -24,7 +24,7 @@ import {
   upsertSecurityScore, getSecurityScore,
   getSecurityAutoFixes, recordSecurityAutoFix,
   queryChatMessages,
-  getAllScheduledTasks, getScheduledTask, updateScheduledTaskStatus, createScheduledTask, updateScheduledTask, deleteScheduledTask,
+  getAllScheduledTasks, getScheduledTask, updateScheduledTaskStatus, createScheduledTask, updateScheduledTask, deleteScheduledTask, annotateTasksWithAudit,
   getResearchItems, getResearchItem, upsertResearchItem, updateResearchItemStatus, updateResearchInvestigatedAt, deleteResearchItem, getResearchStats,
   getLatestBoardMeeting, getBoardMeetingHistory, getBoardMeeting,
   createBoardMeeting, createBoardDecision,
@@ -66,7 +66,7 @@ if (!PROJECT_ROOT) {
   logger.warn('PROJECT_ROOT not set -- agent file operations will fail')
 }
 import { getCostSummary, getLineItems, upsertLineItem, updateLineItem, deleteLineItem } from './costs.js'
-import { buildHealthReport, buildTimeseries, listEvents } from './health-report.js'
+import { buildHealthReport, buildTimeseries, listEvents, buildToolUsage } from './health-report.js'
 import {
   getChatHistory,
   saveChatMessage,
@@ -1269,6 +1269,7 @@ router.get('/health/events', requireAdmin, (req: Request, res: Response) => {
       project_id: (req.query.project_id as string) || null,
       provider: (req.query.provider as string) || null,
       agent_id: (req.query.agent_id as string) || null,
+      tool_name: (req.query.tool_name as string) || null,
     })
 
     // CSV export when ?format=csv
@@ -1300,6 +1301,30 @@ router.get('/health/events', requireAdmin, (req: Request, res: Response) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     logger.error({ err }, '/health/events failed')
+    res.status(500).json({ error: msg })
+  }
+})
+
+// Tool-invocation usage (feature #17). Aggregates tool_calls within a window:
+// totals, per-tool stats, agent × tool matrix, top-5. Admin-only today, but
+// we still resolve and forward project scope so the gate can be relaxed to
+// project-member roles later without a SQL rewrite or a cross-project leak.
+router.get('/health/tools', requireAdmin, (req: Request, res: Response) => {
+  try {
+    const hoursParam = Number(req.query.hours)
+    const hours = Number.isFinite(hoursParam) && hoursParam > 0 && hoursParam <= 24 * 365
+      ? Math.round(hoursParam) : 24
+    const { requestedProjectId, allowedProjectIds } = resolveProjectScope(req)
+    const report = buildToolUsage({
+      hours,
+      project_id: requestedProjectId || (req.query.project_id as string) || null,
+      agent_id: (req.query.agent_id as string) || null,
+      allowedProjectIds,
+    })
+    res.json(report)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    logger.error({ err }, '/health/tools failed')
     res.status(500).json({ error: msg })
   }
 })
@@ -1505,7 +1530,11 @@ router.post('/chat/events', requireBotOrAdmin, (req: Request, res: Response) => 
 router.get('/tasks', (req: Request, res: Response) => {
   const { requestedProjectId, allowedProjectIds } = resolveProjectScope(req)
   const tasks = getAllScheduledTasks(requestedProjectId ?? undefined, allowedProjectIds)
-  res.json(tasks)
+  // Annotate each task with its last-run cost / duration / provider pulled
+  // from telemetry.agent_events so the #sops page can surface silent-run
+  // spend. Adds ~1 SQLite query per task, all hot paths in-memory.
+  const audited = annotateTasksWithAudit(tasks)
+  res.json(audited)
 })
 
 router.get(

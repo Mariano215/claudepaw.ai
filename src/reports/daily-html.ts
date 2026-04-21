@@ -355,6 +355,41 @@ function topAgentsCard(data: ReportData): string {
 </table>`
 }
 
+function topToolsCard(data: ReportData): string {
+  const tools = data.agent_events.top_tools ?? []
+  if (tools.length === 0) return ''
+  const rows = tools
+    .map(t => `
+      <tr style="border-top:1px solid ${COLORS.border};color:${COLORS.text};">
+        <td style="padding:10px 0;">${escapeHtml(t.tool_name)}</td>
+        <td style="padding:10px 0;text-align:right;font-variant-numeric:tabular-nums;">${fmtNumber(t.calls)}</td>
+        <td style="padding:10px 0;text-align:right;color:${t.failures > 0 ? COLORS.red : COLORS.textMuted};">${t.failures}</td>
+      </tr>`)
+    .join('')
+  return `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${COLORS.bgCard};border:1px solid ${COLORS.border};border-radius:12px;margin-bottom:20px;">
+  <tr>
+    <td style="padding:18px 24px;border-bottom:1px solid ${COLORS.border};">
+      <div style="font-size:11px;letter-spacing:1.5px;color:${COLORS.textMuted};text-transform:uppercase;">Top Tools (by calls, ${escapeHtml(data.period.label)})</div>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:0 24px 20px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;">
+        <thead>
+          <tr style="color:${COLORS.textMuted};text-align:left;">
+            <th style="padding:10px 0 6px;font-weight:500;">Tool</th>
+            <th style="padding:10px 0 6px;font-weight:500;text-align:right;">Calls</th>
+            <th style="padding:10px 0 6px;font-weight:500;text-align:right;">Failures</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </td>
+  </tr>
+</table>`
+}
+
 function remediationsCard(data: ReportData): string {
   const items = data.remediations_24h ?? []
   if (items.length === 0) {
@@ -454,6 +489,7 @@ export function renderDailyHtml(data: ReportData): string {
   ${tasksCard(data)}
   ${providersCard(data)}
   ${topAgentsCard(data)}
+  ${topToolsCard(data)}
   ${remediationsCard(data)}
   ${anomaliesCard(data)}
 

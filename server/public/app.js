@@ -6202,6 +6202,25 @@ function buildSopCardEl(task) {
   header.appendChild(iconEl);
   header.appendChild(titleEl);
 
+  // Cost badge: shows last-run spend so silent cron tasks aren't invisible.
+  if (task.last_run_cost_usd != null) {
+    var costBadge = document.createElement('span');
+    costBadge.className = 'sop-cost-badge';
+    var costVal = Number(task.last_run_cost_usd);
+    costBadge.textContent = costVal < 0.005 ? '$0.00' : costVal < 1 ? '$' + costVal.toFixed(3) : '$' + costVal.toFixed(2);
+    if (costVal >= 1) costBadge.classList.add('sop-cost-badge--warn');
+    if (costVal >= 2) costBadge.classList.add('sop-cost-badge--high');
+    costBadge.title = 'Last run cost — ' + (task.last_run_provider || '?') + ' / ' + (task.last_run_model || '?');
+    header.appendChild(costBadge);
+  }
+  // Error badge if the last run failed.
+  if (task.last_run_is_error) {
+    var errBadge = document.createElement('span');
+    errBadge.className = 'sop-cost-badge sop-cost-badge--error';
+    errBadge.textContent = 'ERR';
+    header.appendChild(errBadge);
+  }
+
   var body = document.createElement('div');
   body.className = 'sop-card__body';
   var promptPreview = (task.prompt || '').length > 80 ? task.prompt.substring(0, 80) + '...' : (task.prompt || '--');
@@ -6218,6 +6237,26 @@ function buildSopCardEl(task) {
     row.appendChild(v);
     body.appendChild(row);
   });
+
+  // Result preview + "View result" link when the task has run before.
+  if (task.last_result) {
+    var resultRow = document.createElement('div');
+    resultRow.className = 'sop-result-preview';
+    var preview = document.createElement('div');
+    preview.className = 'sop-result-preview__text';
+    var resultText = String(task.last_result);
+    preview.textContent = resultText.length > 140 ? resultText.slice(0, 140).trim() + '…' : resultText;
+    resultRow.appendChild(preview);
+    if (resultText.length > 140) {
+      var openBtn = document.createElement('button');
+      openBtn.type = 'button';
+      openBtn.className = 'sop-result-preview__open';
+      openBtn.textContent = 'View full result';
+      openBtn.addEventListener('click', function() { openSopResultModal(task); });
+      resultRow.appendChild(openBtn);
+    }
+    body.appendChild(resultRow);
+  }
 
   var footer = document.createElement('div');
   footer.className = 'sop-card__footer';
@@ -14036,9 +14075,11 @@ async function fetchUsageData() {
   const host = document.querySelector('[data-bind="usage-report"]');
   try {
     const qs = _usageFilterQs();
-    const [report, ts] = await Promise.all([
+    // Tool usage is gracefully optional (older server builds may 404). Degraded mode shows the page without it.
+    const [report, ts, tools] = await Promise.all([
       fetchFromAPI(`/api/v1/health/report?hours=${_usageState.period}${qs}`),
       fetchFromAPI(`/api/v1/health/timeseries?hours=${_usageState.period}${qs}`),
+      fetchFromAPI(`/api/v1/health/tools?hours=${_usageState.period}${qs}`).catch(() => null),
     ]);
     if (!report) {
       if (host) {
@@ -14053,6 +14094,7 @@ async function fetchUsageData() {
     }
     _usageState.data = report;
     _usageState.timeseries = ts;
+    _usageState.tools = tools || null;
     renderUsagePage(report);
     renderUsageFilters(report);
     renderUsageChart(ts);
@@ -14081,6 +14123,7 @@ function renderUsagePage(data) {
     usageTasksCard(data),
     usageProvidersCard(data),
     usageAgentsCard(data),
+    usageToolsCard(_usageState.tools),
     usageRemediationsCard(data),
     usageAnomaliesCard(data),
   ].join('');
@@ -14098,6 +14141,18 @@ function renderUsagePage(data) {
       } else if (kind === 'provider') {
         const p = row.getAttribute('data-provider');
         if (p) openUsageDrawer({ provider: p }, p + ' — events');
+      } else if (kind === 'tool') {
+        const t = row.getAttribute('data-tool');
+        const a = row.getAttribute('data-tool-agent');
+        if (t) {
+          const q = { tool_name: t };
+          let title = t + ' — events';
+          if (a && a !== '(unattributed)') {
+            q.agent_id = a;
+            title = a + ' × ' + t + ' — events';
+          }
+          openUsageDrawer(q, title);
+        }
       }
     });
   });
@@ -14305,6 +14360,68 @@ function usageAgentsCard(data) {
         <th style="font-weight:500;padding:10px 0 6px;text-align:right;">Cost</th>
         <th style="font-weight:500;padding:10px 0 6px;text-align:right;">Errors</th>
       </tr></thead><tbody>${rows}</tbody></table>
+    </div>`;
+}
+
+// Tool-invocation usage card (#17). Shows totals, per-tool summary, and an
+// agent × tool heatmap. Each cell opens the event drawer filtered to that
+// agent/tool pair. Untrusted values are routed through _usageEsc before
+// interpolation; numbers are finite checks via _usageNumber.
+function usageToolsCard(tools) {
+  if (!tools || !tools.tools || tools.total_calls === 0) return '';
+  const summaryLine = `${_usageNumber(tools.total_calls)} calls · ${_usageNumber(tools.total_failures)} failures · ${_usageNumber(tools.unique_tools)} distinct tools`;
+
+  const perTool = (tools.tools || []).slice(0, 20).map(t => {
+    const errClr = t.failures > 0 ? 'var(--red)' : 'var(--text-muted)';
+    const dur = t.avg_duration_ms == null ? '–' : _usageEsc(t.avg_duration_ms + ' ms');
+    return `<tr class="usage-row-clickable" data-usage-drill="tool" data-tool="${_usageEsc(t.tool_name)}" style="border-top:1px solid var(--border);" title="Click to see events that used ${_usageEsc(t.tool_name)}">
+      <td style="padding:10px 0;font-family:var(--font-mono,monospace);">${_usageEsc(t.tool_name)}</td>
+      <td style="padding:10px 0;text-align:right;">${_usageNumber(t.calls)}</td>
+      <td style="padding:10px 0;text-align:right;color:${errClr};">${t.failures}</td>
+      <td style="padding:10px 0;text-align:right;color:var(--text-muted);">${dur}</td>
+    </tr>`;
+  }).join('');
+
+  // Matrix rendering: compute max cell for heatmap intensity
+  const agents = tools.matrix && tools.matrix.agents ? tools.matrix.agents : [];
+  const rows = tools.matrix && tools.matrix.rows ? tools.matrix.rows : [];
+  let maxCell = 0;
+  for (const r of rows) for (const a of agents) maxCell = Math.max(maxCell, r.cells[a] || 0);
+
+  const matrixHtml = rows.length > 0 && agents.length > 0 ? `
+    <div style="overflow-x:auto;margin-top:18px;">
+      <table class="usage-tool-matrix" style="width:100%;font-size:12px;border-collapse:collapse;">
+        <thead><tr>
+          <th style="padding:6px 10px;text-align:left;color:var(--text-muted);font-weight:500;position:sticky;left:0;background:var(--bg-card);">Tool \\ Agent</th>
+          ${agents.map(a => `<th style="padding:6px 8px;color:var(--text-muted);font-weight:500;text-align:right;white-space:nowrap;">${_usageEsc(a)}</th>`).join('')}
+          <th style="padding:6px 10px;color:var(--text-muted);font-weight:500;text-align:right;">Total</th>
+        </tr></thead>
+        <tbody>
+          ${rows.slice(0, 30).map(r => `<tr>
+            <td style="padding:4px 10px;font-family:var(--font-mono,monospace);position:sticky;left:0;background:var(--bg-card);">${_usageEsc(r.tool_name)}</td>
+            ${agents.map(a => {
+              const v = r.cells[a] || 0;
+              if (v === 0) return `<td style="padding:2px 8px;text-align:right;color:var(--text-muted);opacity:0.4;">·</td>`;
+              const intensity = maxCell > 0 ? (v / maxCell) : 0;
+              const bg = `rgba(88,101,242,${(0.15 + intensity * 0.55).toFixed(2)})`;
+              return `<td class="usage-row-clickable" data-usage-drill="tool" data-tool="${_usageEsc(r.tool_name)}" data-tool-agent="${_usageEsc(a)}" style="padding:2px 8px;text-align:right;background:${bg};font-variant-numeric:tabular-nums;cursor:pointer;" title="Click to see ${_usageEsc(a)} × ${_usageEsc(r.tool_name)} events">${_usageNumber(v)}</td>`;
+            }).join('')}
+            <td style="padding:2px 10px;text-align:right;font-weight:600;">${_usageNumber(r.total)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : '';
+
+  return `
+    <div class="usage-card">
+      <div class="usage-card__head">Tool invocations <span style="color:var(--text-muted);font-weight:400;font-size:12px;margin-left:10px;">${_usageEsc(summaryLine)}</span></div>
+      <table style="width:100%;font-size:13px;"><thead><tr style="color:var(--text-muted);text-align:left;">
+        <th style="font-weight:500;padding:10px 0 6px;">Tool</th>
+        <th style="font-weight:500;padding:10px 0 6px;text-align:right;">Calls</th>
+        <th style="font-weight:500;padding:10px 0 6px;text-align:right;">Failures</th>
+        <th style="font-weight:500;padding:10px 0 6px;text-align:right;">Avg duration</th>
+      </tr></thead><tbody>${perTool}</tbody></table>
+      ${matrixHtml}
     </div>`;
 }
 
@@ -14531,6 +14648,7 @@ async function openUsageDrawer(query, title) {
   if (!merged.project_id && _usageState.filters.project_id) merged.project_id = _usageState.filters.project_id;
   if (!merged.provider && _usageState.filters.provider) merged.provider = _usageState.filters.provider;
   if (!merged.agent_id && _usageState.filters.agent_id) merged.agent_id = _usageState.filters.agent_id;
+  // tool_name passes through unchanged -- no global filter for it today.
   if (merged.from === undefined && merged.to === undefined) {
     merged.hours = _usageState.period;
   }
@@ -14583,6 +14701,7 @@ function _usageEventsQs(q) {
   if (q.project_id) parts.push('project_id=' + encodeURIComponent(q.project_id));
   if (q.provider) parts.push('provider=' + encodeURIComponent(q.provider));
   if (q.agent_id) parts.push('agent_id=' + encodeURIComponent(q.agent_id));
+  if (q.tool_name) parts.push('tool_name=' + encodeURIComponent(q.tool_name));
   parts.push('limit=500');
   return parts.join('&');
 }
@@ -14629,4 +14748,144 @@ function exportUsageDrawerCsv() {
   if (!_usageState.drawerState) return;
   const qs = _usageEventsQs(_usageState.drawerState.query) + '&format=csv';
   window.open('/api/v1/health/events?' + qs, '_blank');
+}
+
+// ============================================================================
+// Scheduled task audit trail — "View full result" modal for #sops cards
+// ============================================================================
+
+function _sopMoney(n) {
+  if (n == null) return '--';
+  var v = Number(n);
+  if (!Number.isFinite(v)) return '--';
+  if (v < 0.005) return '$0.00';
+  if (v < 1) return '$' + v.toFixed(3);
+  return '$' + v.toFixed(2);
+}
+
+function _sopDur(ms) {
+  if (!ms || ms < 0) return '--';
+  if (ms < 1000) return Math.round(ms) + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  return (ms / 60000).toFixed(1) + 'm';
+}
+
+function _sopNum(n) {
+  if (n == null) return '--';
+  return new Intl.NumberFormat('en-US').format(Math.round(n));
+}
+
+function _sopEsc(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function openSopResultModal(task) {
+  var existing = document.querySelector('[data-bind="sop-result-modal"]');
+  if (existing) existing.remove();
+
+  var modal = document.createElement('div');
+  modal.setAttribute('data-bind', 'sop-result-modal');
+  modal.className = 'sop-result-modal';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-label', 'Scheduled task result');
+
+  var backdrop = document.createElement('div');
+  backdrop.className = 'sop-result-modal__backdrop';
+  backdrop.addEventListener('click', function() { modal.remove(); });
+  modal.appendChild(backdrop);
+
+  var panel = document.createElement('div');
+  panel.className = 'sop-result-modal__panel';
+
+  // Header
+  var header = document.createElement('header');
+  header.className = 'sop-result-modal__header';
+  var titleEl = document.createElement('div');
+  titleEl.className = 'sop-result-modal__title';
+  titleEl.textContent = formatTaskTitle(task.id);
+  var closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'btn btn-secondary';
+  closeBtn.innerHTML = '<i data-lucide="x" style="width:14px;height:14px;"></i>';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.addEventListener('click', function() { modal.remove(); });
+  header.appendChild(titleEl);
+  header.appendChild(closeBtn);
+  panel.appendChild(header);
+
+  // Summary bar
+  var summary = document.createElement('div');
+  summary.className = 'sop-result-modal__summary';
+  var summaryParts = [];
+  if (task.last_run) {
+    summaryParts.push('<span><strong>Ran</strong> ' + _sopEsc(new Date(task.last_run).toLocaleString()) + '</span>');
+  }
+  if (task.last_run_cost_usd != null) {
+    summaryParts.push('<span><strong>Cost</strong> ' + _sopMoney(task.last_run_cost_usd) + '</span>');
+  }
+  if (task.last_run_duration_ms != null) {
+    summaryParts.push('<span><strong>Duration</strong> ' + _sopDur(task.last_run_duration_ms) + '</span>');
+  }
+  if (task.last_run_provider) {
+    summaryParts.push('<span><strong>Provider</strong> ' + _sopEsc(task.last_run_provider) + '</span>');
+  }
+  if (task.last_run_model) {
+    summaryParts.push('<span><strong>Model</strong> ' + _sopEsc(task.last_run_model) + '</span>');
+  }
+  if (task.last_run_input_tokens != null || task.last_run_output_tokens != null) {
+    var inT = task.last_run_input_tokens || 0;
+    var outT = task.last_run_output_tokens || 0;
+    var cacheT = task.last_run_cache_read_tokens || 0;
+    summaryParts.push('<span><strong>Tokens</strong> ' + _sopNum(inT) + ' in / ' + _sopNum(outT) + ' out' + (cacheT > 0 ? ' / ' + _sopNum(cacheT) + ' cache' : '') + '</span>');
+  }
+  summary.innerHTML = summaryParts.join(' &nbsp;•&nbsp; ');
+  panel.appendChild(summary);
+
+  // Prompt collapsible
+  if (task.prompt) {
+    var promptSection = document.createElement('details');
+    promptSection.className = 'sop-result-modal__details';
+    var promptTitle = document.createElement('summary');
+    promptTitle.textContent = 'Prompt';
+    promptSection.appendChild(promptTitle);
+    var promptBody = document.createElement('pre');
+    promptBody.className = 'sop-result-modal__pre';
+    promptBody.textContent = String(task.prompt);
+    promptSection.appendChild(promptBody);
+    panel.appendChild(promptSection);
+  }
+
+  // Result
+  var resultSection = document.createElement('div');
+  resultSection.className = 'sop-result-modal__body';
+  var resultTitle = document.createElement('div');
+  resultTitle.className = 'sop-result-modal__section-title';
+  resultTitle.textContent = 'Result';
+  resultSection.appendChild(resultTitle);
+  var resultPre = document.createElement('pre');
+  resultPre.className = 'sop-result-modal__pre sop-result-modal__pre--result';
+  resultPre.textContent = String(task.last_result || '(no result)');
+  resultSection.appendChild(resultPre);
+  panel.appendChild(resultSection);
+
+  modal.appendChild(panel);
+  document.body.appendChild(modal);
+
+  if (typeof lucide !== 'undefined') lucide.createIcons();
+
+  // Escape to close
+  var escHandler = function(e) {
+    if (e.key === 'Escape') {
+      modal.remove();
+      document.removeEventListener('keydown', escHandler);
+    }
+  };
+  document.addEventListener('keydown', escHandler);
 }

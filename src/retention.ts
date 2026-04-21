@@ -16,17 +16,32 @@ function resolveRetentionDays(): number {
   return Math.round(raw)
 }
 
-export function purgeOldAgentEvents(): { deleted: number; retentionDays: number } {
+export function purgeOldAgentEvents(): { deleted: number; retentionDays: number; toolCallsDeleted: number } {
   const retentionDays = resolveRetentionDays()
   const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000
   const db = getTelemetryDb()
-  const result = db.prepare(
-    `DELETE FROM agent_events WHERE received_at < ?`,
-  ).run(cutoff)
-  const deleted = Number(result.changes ?? 0)
+
+  // better-sqlite3 enables foreign_keys by default, so we must delete child
+  // tool_calls rows BEFORE deleting the parent agent_events rows or the DELETE
+  // throws with FOREIGN KEY constraint failed. Wrap both in a single
+  // transaction so a partial purge never leaves the DB in an inconsistent state.
+  const purgeTx = db.transaction((cutoffMs: number) => {
+    const toolRes = db.prepare(`
+      DELETE FROM tool_calls
+      WHERE event_id IN (SELECT event_id FROM agent_events WHERE received_at < ?)
+    `).run(cutoffMs)
+    const evtRes = db.prepare(`DELETE FROM agent_events WHERE received_at < ?`).run(cutoffMs)
+    return {
+      toolCallsDeleted: Number(toolRes.changes ?? 0),
+      deleted: Number(evtRes.changes ?? 0),
+    }
+  })
+
+  const { toolCallsDeleted, deleted } = purgeTx(cutoff)
+
   if (deleted > 0) {
     logger.info(
-      { deleted, retentionDays, cutoff },
+      { deleted, toolCallsDeleted, retentionDays, cutoff },
       '[retention] Purged old agent_events',
     )
     // Reclaim disk after a large purge.
@@ -36,7 +51,7 @@ export function purgeOldAgentEvents(): { deleted: number; retentionDays: number 
       logger.debug({ err }, '[retention] wal_checkpoint failed')
     }
   }
-  return { deleted, retentionDays }
+  return { deleted, retentionDays, toolCallsDeleted }
 }
 
 /**
