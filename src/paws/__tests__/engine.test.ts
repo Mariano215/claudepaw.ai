@@ -93,6 +93,67 @@ describe('runPawCycle', () => {
     expect(mockSend).toHaveBeenCalledWith('12345', expect.stringContaining('need your call'))
   })
 
+  it('skips ACT/REPORT and sends nothing on a quiet cycle (no findings, no decisions)', async () => {
+    createPaw(db, {
+      id: 'test-paw',
+      project_id: 'default',
+      name: 'Test Paw',
+      agent_id: 'auditor',
+      cron: '0 */4 * * *',
+      config: testConfig,
+    })
+
+    mockRunAgent
+      .mockResolvedValueOnce({ text: 'OBSERVE: Score 100/100, 0 open findings' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({ decisions: [], max_severity: 0 }) })
+
+    const cycleId = await runPawCycle(db, 'test-paw', mockRunAgent, mockSend)
+
+    const cycle = getCycle(db, cycleId)
+    expect(cycle!.phase).toBe('completed')
+    expect(cycle!.report).toBeNull()
+    // Only the 3 early phases ran -- ACT and REPORT are skipped.
+    expect(mockRunAgent).toHaveBeenCalledTimes(3)
+    // No Telegram notification for quiet cycles.
+    expect(mockSend).not.toHaveBeenCalled()
+  })
+
+  it('skips ACT/REPORT when findings exist but are all known (is_new: false) with no actions', async () => {
+    createPaw(db, {
+      id: 'test-paw',
+      project_id: 'default',
+      name: 'Test Paw',
+      agent_id: 'auditor',
+      cron: '0 */4 * * *',
+      config: testConfig,
+    })
+
+    mockRunAgent
+      .mockResolvedValueOnce({ text: 'OBSERVE: same 2 known open ports' })
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        findings: [
+          { id: 'f1', severity: 2, title: 'Port 80 open', detail: 'known', is_new: false },
+          { id: 'f2', severity: 1, title: 'Port 443 open', detail: 'known', is_new: false },
+        ],
+      }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        decisions: [
+          { finding_id: 'f1', action: 'skip', reason: 'already tracked' },
+          { finding_id: 'f2', action: 'skip', reason: 'already tracked' },
+        ],
+        max_severity: 2,
+      }) })
+
+    const cycleId = await runPawCycle(db, 'test-paw', mockRunAgent, mockSend)
+
+    const cycle = getCycle(db, cycleId)
+    expect(cycle!.phase).toBe('completed')
+    expect(cycle!.report).toBeNull()
+    expect(mockRunAgent).toHaveBeenCalledTimes(3)
+    expect(mockSend).not.toHaveBeenCalled()
+  })
+
   it('records error if a phase fails', async () => {
     createPaw(db, {
       id: 'test-paw',

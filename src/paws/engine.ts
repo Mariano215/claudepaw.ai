@@ -226,6 +226,22 @@ export async function resumePawCycle(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * True when the cycle has something worth running ACT/REPORT for:
+ *   - at least one finding is new (is_new: true), OR
+ *   - at least one decision plans to act or escalate.
+ *
+ * Quiet cycles (no findings, or only known findings with no planned actions)
+ * skip ACT and REPORT entirely and complete silently -- no Telegram ping.
+ * This prevents the "All clear. Score 100/100, no changes since last scan."
+ * noise every 4h from monitoring paws like sentinel-patrol.
+ */
+function hasMeaningfulWork(findings: PawFinding[], decisions: PawDecision[]): boolean {
+  const hasNewFindings = findings.some(f => f.is_new === true)
+  const hasPlannedActions = decisions.some(d => d.action === 'act' || d.action === 'escalate')
+  return hasNewFindings || hasPlannedActions
+}
+
 async function runActAndReport(
   db: InstanceType<typeof Database>,
   cycleId: string,
@@ -236,6 +252,19 @@ async function runActAndReport(
   runAgent: AgentRunner,
   send: Sender,
 ): Promise<void> {
+  // Quiet cycle short-circuit: nothing new, no planned actions.
+  // Mark completed, skip ACT/REPORT/Telegram to cut noise + cost.
+  if (!hasMeaningfulWork(findings, decisions)) {
+    updateCycle(db, cycleId, {
+      phase: 'completed',
+      report: null,
+      completed_at: Date.now(),
+      state,
+    })
+    logger.debug({ pawId: paw.id, cycleId }, '[paws] Quiet cycle - skipping ACT/REPORT/notify')
+    return
+  }
+
   updateCycle(db, cycleId, { phase: 'act' })
   const actResult = await runPhase(paw, 'act', { findings, decisions }, runAgent)
 

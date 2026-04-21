@@ -30,7 +30,12 @@ afterEach(() => {
 })
 
 describe('full cycle integration', () => {
-  it('runs a complete low-severity cycle end-to-end and persists all state', async () => {
+  it('completes a quiet cycle silently -- no ACT, no REPORT, no Telegram ping', async () => {
+    // Regression test for the sentinel-patrol noise bug: monitoring paws
+    // running every 4h were sending "All clear. Score 100/100, no changes"
+    // messages on every cycle. Quiet cycles (no new findings, no actionable
+    // decisions) should persist state and complete, but not run ACT or REPORT
+    // and not send a Telegram notification.
     createPaw(db, {
       id: 'sentinel-patrol',
       project_id: 'default',
@@ -55,36 +60,70 @@ describe('full cycle integration', () => {
         ],
         max_severity: 1,
       }) })
-      .mockResolvedValueOnce({ text: 'No actions taken. All findings are expected baseline.' })
-      .mockResolvedValueOnce({ text: 'All clear. 2 expected ports, no new findings. No action needed.' })
 
     const cycleId = await runPawCycle(db, 'sentinel-patrol', mockAgent, mockSend)
 
-    // Verify cycle completed
+    // Cycle is still persisted and marked completed.
     const cycle = getCycle(db, cycleId)
     expect(cycle).toBeDefined()
     expect(cycle!.phase).toBe('completed')
     expect(cycle!.completed_at).toBeGreaterThan(0)
     expect(cycle!.error).toBeNull()
 
-    // Verify all state was persisted
+    // OBSERVE/ANALYZE/DECIDE state is persisted.
     expect(cycle!.state.observe_raw).toContain('Port scan complete')
     expect(cycle!.state.analysis).toBeTruthy()
     expect(cycle!.state.decisions).toHaveLength(2)
-    expect(cycle!.state.act_result).toContain('No actions taken')
     expect(cycle!.state.approval_requested).toBe(false)
 
-    // Verify findings were persisted
+    // ACT was skipped.
+    expect(cycle!.state.act_result).toBeNull()
+
+    // Findings from ANALYZE are still persisted for the next cycle's context.
     expect(cycle!.findings).toHaveLength(2)
     expect(cycle!.findings[0].id).toBe('port-80')
 
-    // Verify report was persisted
-    expect(cycle!.report).toContain('All clear')
+    // REPORT was skipped.
+    expect(cycle!.report).toBeNull()
 
-    // Verify agent was called 5 times (one per phase)
+    // Only 3 agent calls (OBSERVE, ANALYZE, DECIDE) -- ACT and REPORT never ran.
+    expect(mockAgent).toHaveBeenCalledTimes(3)
+
+    // No Telegram notification for a quiet cycle.
+    expect(mockSend).not.toHaveBeenCalled()
+  })
+
+  it('runs all 5 phases end-to-end when findings are new (meaningful cycle)', async () => {
+    createPaw(db, {
+      id: 'sentinel-patrol',
+      project_id: 'default',
+      name: 'Sentinel Security Patrol',
+      agent_id: 'auditor',
+      cron: '0 */4 * * *',
+      config: baseConfig,
+    })
+
+    const mockAgent = vi.fn()
+      .mockResolvedValueOnce({ text: 'Port scan complete. NEW finding: port 8080 now open.' })
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        findings: [
+          { id: 'port-8080', severity: 2, title: 'Port 8080 unexpectedly open', detail: 'Not in baseline', is_new: true },
+        ],
+      }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        decisions: [{ finding_id: 'port-8080', action: 'act', reason: 'Investigate new listener' }],
+        max_severity: 2,
+      }) })
+      .mockResolvedValueOnce({ text: 'ACT: Logged port 8080 for follow-up.' })
+      .mockResolvedValueOnce({ text: 'New port 8080 detected and logged for review.' })
+
+    const cycleId = await runPawCycle(db, 'sentinel-patrol', mockAgent, mockSend)
+
+    const cycle = getCycle(db, cycleId)
+    expect(cycle!.phase).toBe('completed')
+    expect(cycle!.state.act_result).toContain('port 8080')
+    expect(cycle!.report).toContain('port 8080')
     expect(mockAgent).toHaveBeenCalledTimes(5)
-
-    // Verify Telegram report was sent
     expect(mockSend).toHaveBeenCalledWith('123456789', expect.stringContaining('Cycle complete'))
   })
 
