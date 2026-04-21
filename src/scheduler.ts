@@ -953,6 +953,10 @@ function mapTaskToAgent(taskId: string, projectSlug?: string): string {
     'fop-weekly-content-plan': 'marketing-lead',
     'fop-weekly-social-report': 'social-manager',
     'fop-weekly-blog-post': 'content-creator',
+    'fop-weekly-blog-draft': 'content-creator',
+    'fop-social-crossposter': 'social-manager',
+    'fop-monthly-newsletter': 'content-creator',
+    'fop-hourly-health-check': 'orchestrator',
     'fop-board-meeting': 'orchestrator',
   }
   return legacy[taskId] ?? 'system'

@@ -145,10 +145,17 @@ describe('postInstagram', () => {
 
   it('does two-step create+publish and returns PublishResult', async () => {
     const fetchMock = vi.fn()
+      // Step 1: container creation
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ id: 'container-111' }),
       })
+      // Step 1.5: container status poll -> FINISHED
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ status_code: 'FINISHED' }),
+      })
+      // Step 2: publish
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ id: 'media-222' }),
@@ -156,7 +163,8 @@ describe('postInstagram', () => {
 
     vi.stubGlobal('fetch', fetchMock)
 
-    const result = await postInstagram('Caption text', TEST_CONFIG, 'https://cdn.example.com/img.jpg')
+    // _pollDelayMs=0 so the status poll loop doesn't sleep in tests
+    const result = await postInstagram('Caption text', TEST_CONFIG, 'https://cdn.example.com/img.jpg', 0)
 
     expect(result.success).toBe(true)
     expect(result.platform_post_id).toBe('media-222')
@@ -170,8 +178,13 @@ describe('postInstagram', () => {
     expect(containerBody.get('image_url')).toBe('https://cdn.example.com/img.jpg')
     expect((containerOpts.headers as Record<string, string>)['Authorization']).toBe('Bearer page-token-xyz')
 
-    // Step 2: publish
-    const [publishUrl, publishOpts] = fetchMock.mock.calls[1] as [string, RequestInit]
+    // Step 1.5: status poll
+    const [statusUrl] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(statusUrl).toContain('container-111')
+    expect(statusUrl).toContain('status_code')
+
+    // Step 2: publish (call index 2 now)
+    const [publishUrl, publishOpts] = fetchMock.mock.calls[2] as [string, RequestInit]
     expect(publishUrl).toContain('/ig-user-001/media_publish')
     const publishBody = new URLSearchParams(publishOpts.body as string)
     expect(publishBody.get('creation_id')).toBe('container-111')
@@ -191,10 +204,17 @@ describe('postInstagram', () => {
 
   it('returns success: false if publish step fails', async () => {
     vi.stubGlobal('fetch', vi.fn()
+      // Step 1: container creation
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ id: 'container-111' }),
       })
+      // Step 1.5: status poll -> FINISHED
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ status_code: 'FINISHED' }),
+      })
+      // Step 2: publish fails
       .mockResolvedValueOnce({
         ok: false,
         status: 500,
@@ -202,7 +222,7 @@ describe('postInstagram', () => {
       }),
     )
 
-    const result = await postInstagram('Caption', TEST_CONFIG, 'https://cdn.example.com/img.jpg')
+    const result = await postInstagram('Caption', TEST_CONFIG, 'https://cdn.example.com/img.jpg', 0)
     expect(result.success).toBe(false)
     expect(result.error).toMatch(/Instagram publish API 500/)
   })

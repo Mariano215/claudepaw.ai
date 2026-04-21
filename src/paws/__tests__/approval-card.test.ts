@@ -53,41 +53,32 @@ describe('buildApprovalCard', () => {
     expect(card.text).toContain('⚪ low')
   })
 
-  it('renders [Fix X] only for auto_fixable findings, [→ Dashboard] otherwise', () => {
-    const findings: TestFinding[] = [
-      { id: 'f1', title: 'Fixable', detail: '', severity: 4, target: '/path/to/proj', auto_fixable: 1 },
-      { id: 'f2', title: 'Manual', detail: '', severity: 4, target: 'server-x', auto_fixable: 0 },
-    ]
-    const card = buildApprovalCard(paw, 'ClaudePaw', findings, 1700000000000)
-    // row 0 = fixable
-    expect(card.keyboard.inline_keyboard[0][0].text).toBe('Fix proj')
-    expect(card.keyboard.inline_keyboard[0][0].callback_data).toBe('pf:fix:f1')
-    expect(card.keyboard.inline_keyboard[0][1].text).toBe('Dismiss')
-    expect(card.keyboard.inline_keyboard[0][1].callback_data).toBe('pf:dismiss:f1')
-    // row 1 = manual
-    expect(card.keyboard.inline_keyboard[1][0].text).toBe('→ Dashboard')
-    expect(card.keyboard.inline_keyboard[1][0].callback_data).toBe('pf:dash:f2')
-  })
-
-  it('includes a [Dismiss All] row with the paw id', () => {
+  it('includes dashboard review note in footer text', () => {
     const findings: TestFinding[] = [
       { id: 'f1', title: 'a', detail: '', severity: 4, target: 't', auto_fixable: 0 },
     ]
     const card = buildApprovalCard(paw, 'ClaudePaw', findings, 1700000000000)
-    const last = card.keyboard.inline_keyboard[card.keyboard.inline_keyboard.length - 1]
-    expect(last).toEqual([{ text: 'Dismiss All', callback_data: 'pf:dismiss-all:sentinel-patrol:1700000000' }])
+    expect(card.text).toContain('Review full findings on the dashboard')
   })
 
-  it('caps keyboard at 7 per-finding rows + overflow + dismiss-all when > 7 findings', () => {
+  it('keyboard has exactly one row with Approve and Skip at cycle level', () => {
+    const findings: TestFinding[] = [
+      { id: 'f1', title: 'a', detail: '', severity: 4, target: 't', auto_fixable: 0 },
+      { id: 'f2', title: 'b', detail: '', severity: 3, target: 't', auto_fixable: 1 },
+    ]
+    const card = buildApprovalCard(paw, 'ClaudePaw', findings, 1700000000000)
+    expect(card.keyboard.inline_keyboard).toHaveLength(1)
+    expect(card.keyboard.inline_keyboard[0][0]).toEqual({ text: 'Approve', callback_data: 'paw:approve:sentinel-patrol' })
+    expect(card.keyboard.inline_keyboard[0][1]).toEqual({ text: 'Skip', callback_data: 'paw:skip:sentinel-patrol' })
+  })
+
+  it('keyboard stays minimal even with many findings', () => {
     const findings: TestFinding[] = Array.from({ length: 10 }, (_, i) => ({
       id: `f${i}`, title: `t${i}`, detail: '', severity: 4, target: 't', auto_fixable: 0,
     }))
     const card = buildApprovalCard(paw, 'ClaudePaw', findings, 1700000000000)
-    // 7 finding rows + 1 overflow row + 1 dismiss-all row = 9 total
-    expect(card.keyboard.inline_keyboard).toHaveLength(9)
-    const overflow = card.keyboard.inline_keyboard[7]
-    expect(overflow[0].text).toBe('→ Dashboard for full list')
-    expect(overflow[0].callback_data).toBe('pf:dash-all:sentinel-patrol')
+    // Always just one row: Approve / Skip
+    expect(card.keyboard.inline_keyboard).toHaveLength(1)
     // text body still lists all 10
     for (let i = 0; i < 10; i++) {
       expect(card.text).toContain(`t${i}`)

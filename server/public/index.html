@@ -8,10 +8,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700;800;900&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20260419b">
+  <link rel="stylesheet" href="style.css?v=20260421b">
   <script defer src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
 </head>
 <body class="sidebar-expanded">
 
@@ -75,6 +76,10 @@
       <a href="#knowledge" class="sidebar-link" data-page="page-knowledge">
         <i data-lucide="brain-circuit"></i>
         <span>Knowledge</span>
+      </a>
+      <a href="#usage" class="sidebar-link sidebar-link--admin-only" data-page="page-usage" style="display:none">
+        <i data-lucide="activity"></i>
+        <span>Usage</span>
       </a>
       <a href="#users" class="sidebar-link sidebar-link--admin-only" data-page="page-users" style="display:none">
         <i data-lucide="users"></i>
@@ -395,6 +400,83 @@
             </table>
           </div>
         </div>
+
+      </section>
+
+      <!-- ==================== PAGE: USAGE ==================== -->
+      <section id="page-usage" class="page" data-page-title="Usage" aria-label="Usage & Health Report" hidden>
+
+        <div class="page-header">
+          <h2 class="page-title">Usage &amp; Health</h2>
+          <p class="page-subtitle">Live snapshot. Mirrors the daily report email. 180-day history retained.</p>
+          <div class="page-header__actions">
+            <button class="btn btn-secondary" data-usage-refresh title="Refresh all data">
+              <i data-lucide="refresh-cw" style="width:14px;height:14px;"></i>
+              <span>Refresh</span>
+            </button>
+            <select class="btn btn-secondary" data-usage-period aria-label="Report period">
+              <option value="24">Last 24 hours</option>
+              <option value="168">Last 7 days</option>
+              <option value="720">Last 30 days</option>
+              <option value="2160">Last 90 days</option>
+              <option value="4320">Last 180 days</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Filter chips -->
+        <div class="usage-filters" data-bind="usage-filters" style="display:none;">
+          <span class="usage-filters__label">Filters</span>
+          <div class="usage-filters__group" data-usage-filter-group="project_id">
+            <span class="usage-filters__header">Project</span>
+            <div class="usage-filters__chips" data-usage-filter-chips="project_id"></div>
+          </div>
+          <div class="usage-filters__group" data-usage-filter-group="provider">
+            <span class="usage-filters__header">Provider</span>
+            <div class="usage-filters__chips" data-usage-filter-chips="provider"></div>
+          </div>
+          <div class="usage-filters__group" data-usage-filter-group="agent_id">
+            <span class="usage-filters__header">Agent</span>
+            <div class="usage-filters__chips" data-usage-filter-chips="agent_id"></div>
+          </div>
+          <button class="usage-filters__clear" data-usage-filters-clear>Clear</button>
+        </div>
+
+        <!-- Timeseries chart -->
+        <div class="usage-card usage-chart-card" data-bind="usage-chart-card" style="display:none;">
+          <div class="usage-card__head">Spend over time</div>
+          <div class="usage-chart-container">
+            <canvas id="usage-timeseries-chart" aria-label="Cost timeseries by provider"></canvas>
+          </div>
+          <div class="usage-chart-footer" data-bind="usage-chart-summary"></div>
+        </div>
+
+        <div class="usage-page-body" data-bind="usage-report">
+          <div style="padding:40px;text-align:center;color:var(--text-muted);">Loading…</div>
+        </div>
+
+        <!-- Drill-in drawer -->
+        <aside class="usage-drawer" data-bind="usage-drawer" aria-hidden="true">
+          <div class="usage-drawer__backdrop" data-usage-drawer-close></div>
+          <div class="usage-drawer__panel">
+            <header class="usage-drawer__header">
+              <div class="usage-drawer__title" data-bind="usage-drawer-title">Events</div>
+              <div class="usage-drawer__actions">
+                <button class="btn btn-secondary" data-usage-drawer-csv title="Export as CSV">
+                  <i data-lucide="download" style="width:14px;height:14px;"></i>
+                  <span>CSV</span>
+                </button>
+                <button class="btn btn-secondary" data-usage-drawer-close aria-label="Close">
+                  <i data-lucide="x" style="width:14px;height:14px;"></i>
+                </button>
+              </div>
+            </header>
+            <div class="usage-drawer__summary" data-bind="usage-drawer-summary"></div>
+            <div class="usage-drawer__body" data-bind="usage-drawer-body">
+              <div style="padding:40px;text-align:center;color:var(--text-muted);">Loading…</div>
+            </div>
+          </div>
+        </aside>
 
       </section>
 
@@ -1640,6 +1722,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20260419k"></script>
+  <script src="app.js?v=20260421b"></script>
 </body>
 </html>

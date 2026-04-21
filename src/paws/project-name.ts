@@ -1,6 +1,8 @@
 // src/paws/project-name.ts
 // Tiny, isolated helper so engine code does not need to import the big db module.
 
+import { getProject } from '../db.js'
+
 type ProjectRow = { id: string; name: string }
 type Lookup = (id: string) => ProjectRow | undefined
 
@@ -12,11 +14,13 @@ export function __setProjectLookupForTests(fn: Lookup | undefined): void {
 }
 
 function defaultLookup(id: string): ProjectRow | undefined {
-  // Dynamic import so tests that stub the lookup never need a real DB.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { getProject } = require('../db.js') as {
-    getProject: (id: string) => ProjectRow | undefined
-  }
+  // Previously this used `require('../db.js')` inside the function so tests
+  // that stub the lookup never loaded the real DB module. That broke at
+  // runtime because the project is ESM and `require` is undefined at module
+  // scope, causing OBSERVE to succeed but ANALYZE/DECIDE to crash with
+  // "require is not defined" when the engine built an approval card.
+  // Tests continue to work because they call __setProjectLookupForTests
+  // before hitting this path, so the real getProject import is never invoked.
   return getProject(id)
 }
 

@@ -209,6 +209,9 @@ describe('runPawCycle', () => {
     expect(chatId).toBe('12345')
     expect(text).toContain('🛡 Sentinel Security Patrol')
     expect(text).toContain('ClaudePaw  •  1 finding')
-    expect(keyboard.inline_keyboard.at(-1)[0].callback_data).toMatch(/^pf:dismiss-all:sentinel-patrol:\d+$/)
+    // Simplified keyboard: one row with Approve / Skip at cycle level
+    expect(keyboard.inline_keyboard).toHaveLength(1)
+    expect(keyboard.inline_keyboard[0][0].callback_data).toBe('paw:approve:sentinel-patrol')
+    expect(keyboard.inline_keyboard[0][1].callback_data).toBe('paw:skip:sentinel-patrol')
   })
 })

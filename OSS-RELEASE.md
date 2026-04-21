@@ -32,7 +32,7 @@ npm run sync:oss
 Then in the OSS repo:
 
 ```bash
-cd /Volumes/T7/Projects/claudepaw-oss
+cd .
 git status
 npm test
 ```

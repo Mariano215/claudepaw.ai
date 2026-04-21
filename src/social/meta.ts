@@ -105,6 +105,8 @@ export async function postInstagram(
   text: string,
   config: MetaConfig,
   imageUrl: string,
+  /** @internal test-only: override poll delay (ms). Default 3000. */
+  _pollDelayMs = 3000,
 ): Promise<PublishResult> {
   const igUserId = config.igUserId
   const accessToken = config.defaultPageToken
@@ -141,6 +143,37 @@ export async function postInstagram(
     const creationId = containerData.id
     if (!creationId) {
       return { success: false, error: 'No creation_id in Instagram container response' }
+    }
+
+    // Step 1.5: Poll container status until FINISHED.
+    // IG fetches the remote image asynchronously; publish fails with
+    // "Media ID is not available" (code 9007) if called too early.
+    const maxPolls = 20
+    let containerReady = false
+    for (let i = 0; i < maxPolls; i++) {
+      if (_pollDelayMs > 0) await new Promise((r) => setTimeout(r, _pollDelayMs))
+      const statusResponse = await fetch(
+        `${API_BASE}/${creationId}?fields=status_code,status&access_token=${encodeURIComponent(accessToken)}`,
+      )
+      if (!statusResponse.ok) {
+        const body = await statusResponse.text()
+        logger.warn({ attempt: i + 1, status: statusResponse.status, body }, 'IG container status check failed')
+        continue
+      }
+      const statusJson = (await statusResponse.json()) as { status_code?: string; status?: string; error?: { message?: string } }
+      if (statusJson.status_code === 'FINISHED') {
+        containerReady = true
+        break
+      }
+      if (statusJson.status_code === 'ERROR' || statusJson.status_code === 'EXPIRED') {
+        return { success: false, error: `Instagram container ${statusJson.status_code}: ${statusJson.status ?? 'no details'}` }
+      }
+      // IN_PROGRESS or PUBLISHED - keep polling (PUBLISHED shouldn't happen here but handle gracefully)
+      logger.debug({ attempt: i + 1, status_code: statusJson.status_code }, 'IG container still processing')
+    }
+
+    if (!containerReady) {
+      return { success: false, error: `Instagram container did not finish within ${(maxPolls * _pollDelayMs) / 1000}s` }
     }
 
     // Step 2: Publish the container

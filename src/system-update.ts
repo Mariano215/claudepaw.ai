@@ -9,7 +9,7 @@ export interface UpgradeResult {
   upgraded: boolean
 }
 
-const GITHUB_REPO = 'your-username/your-repo'
+const GITHUB_REPO = 'YourGitHubUser/claudepaw.ai'
 
 export async function getCommitsBehind(gitHash: string): Promise<number> {
   try {

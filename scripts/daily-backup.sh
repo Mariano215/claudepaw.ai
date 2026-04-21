@@ -4,10 +4,10 @@
 # Runs via ClaudePaw scheduler
 
 REPOS=(
-  "/Volumes/T7/Projects/ClaudePaw"
-  "/Volumes/T7/Projects/Business/example-business"
-  "/Volumes/T7/Projects/Content/example-content"
-  "/Volumes/T7/Projects/Content/github-security-audit"
+  "$HOME/claudepaw"
+  "/path/to/project"
+  "/path/to/project"
+  "/path/to/project"
 )
 
 total=0

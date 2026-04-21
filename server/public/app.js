@@ -3136,6 +3136,7 @@ function navigateToPage(pageId, pushState = true) {
   if (pageId === 'page-paws') fetchPaws();
   if (pageId === 'page-performance') { renderPerfCards(); fetchYouTubeData(); fetchAnalyticsMetrics(); fetchSocialMetrics(); }
   if (pageId === 'page-costs') initCostsPage();
+  if (pageId === 'page-usage') initUsagePage();
   if (pageId === 'page-action-plan') initActionPlanPage();
   if (pageId === 'page-health') initHealthPage();
   if (pageId === 'page-webhooks') fetchWebhooks();
@@ -3191,6 +3192,7 @@ function initNavigation() {
       'pipeline': 'page-pipeline',
       'performance': 'page-performance',
       'costs': 'page-costs',
+      'usage': 'page-usage',
       'health': 'page-health',
       'security': 'page-security',
       'chat': 'page-chat',
@@ -13977,3 +13979,654 @@ ProjectBus.on(() => {
   const page = document.querySelector('section.page.active');
   if (page && page.id === 'page-users') renderUsersPage();
 });
+
+// ============================================================================
+// Usage Page — live mirror of the daily usage report email + timeseries + drill-in
+// All HTML string building in this module passes user-facing text through
+// _usageEsc() which HTML-escapes &, <, >, ", '. No untrusted content reaches
+// innerHTML unescaped.
+// ============================================================================
+
+let _usageState = {
+  initialized: false,
+  period: 24,
+  data: null,
+  timeseries: null,
+  refreshing: false,
+  filters: { project_id: null, provider: null, agent_id: null },
+  chart: null,
+  drawerState: null,
+};
+
+async function initUsagePage() {
+  if (!_usageState.initialized) {
+    _usageState.initialized = true;
+
+    const btn = document.querySelector('[data-usage-refresh]');
+    if (btn) btn.addEventListener('click', () => fetchUsageData());
+
+    const sel = document.querySelector('[data-usage-period]');
+    if (sel) {
+      sel.value = String(_usageState.period);
+      sel.addEventListener('change', (e) => {
+        _usageState.period = parseInt(e.target.value, 10) || 24;
+        fetchUsageData();
+      });
+    }
+
+    const clearBtn = document.querySelector('[data-usage-filters-clear]');
+    if (clearBtn) clearBtn.addEventListener('click', () => clearUsageFilters());
+
+    document.querySelectorAll('[data-usage-drawer-close]').forEach(el => {
+      el.addEventListener('click', () => closeUsageDrawer());
+    });
+    const csvBtn = document.querySelector('[data-usage-drawer-csv]');
+    if (csvBtn) csvBtn.addEventListener('click', () => exportUsageDrawerCsv());
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && _usageState.drawerState) closeUsageDrawer();
+    });
+  }
+  await fetchUsageData();
+}
+
+async function fetchUsageData() {
+  if (_usageState.refreshing) return;
+  _usageState.refreshing = true;
+  const host = document.querySelector('[data-bind="usage-report"]');
+  try {
+    const qs = _usageFilterQs();
+    const [report, ts] = await Promise.all([
+      fetchFromAPI(`/api/v1/health/report?hours=${_usageState.period}${qs}`),
+      fetchFromAPI(`/api/v1/health/timeseries?hours=${_usageState.period}${qs}`),
+    ]);
+    if (!report) {
+      if (host) {
+        // Escape-free literal string (no interpolated user content).
+        host.textContent = '';
+        const div = document.createElement('div');
+        div.style.cssText = 'padding:40px;text-align:center;color:var(--text-muted);';
+        div.textContent = 'Unable to load report (not authorized, or server unavailable).';
+        host.appendChild(div);
+      }
+      return;
+    }
+    _usageState.data = report;
+    _usageState.timeseries = ts;
+    renderUsagePage(report);
+    renderUsageFilters(report);
+    renderUsageChart(ts);
+  } finally {
+    _usageState.refreshing = false;
+  }
+}
+
+function _usageFilterQs() {
+  const f = _usageState.filters;
+  const parts = [];
+  if (f.project_id) parts.push('project_id=' + encodeURIComponent(f.project_id));
+  if (f.provider) parts.push('provider=' + encodeURIComponent(f.provider));
+  if (f.agent_id) parts.push('agent_id=' + encodeURIComponent(f.agent_id));
+  return parts.length ? '&' + parts.join('&') : '';
+}
+
+function renderUsagePage(data) {
+  const host = document.querySelector('[data-bind="usage-report"]');
+  if (!host) return;
+  host.innerHTML = [
+    usageKillSwitch(data),
+    usageStatusBanner(data),
+    usageCostCard(data),
+    usagePawsCard(data),
+    usageTasksCard(data),
+    usageProvidersCard(data),
+    usageAgentsCard(data),
+    usageRemediationsCard(data),
+    usageAnomaliesCard(data),
+  ].join('');
+
+  // Wire click-to-drill on any row tagged with data-usage-drill.
+  host.querySelectorAll('[data-usage-drill]').forEach(row => {
+    const kind = row.getAttribute('data-usage-drill');
+    row.addEventListener('click', () => {
+      if (kind === 'project') {
+        const pid = row.getAttribute('data-project');
+        if (pid) openUsageDrawer({ project_id: pid }, pid + ' — events');
+      } else if (kind === 'agent') {
+        const aid = row.getAttribute('data-agent');
+        if (aid) openUsageDrawer({ agent_id: aid }, aid + ' — events');
+      } else if (kind === 'provider') {
+        const p = row.getAttribute('data-provider');
+        if (p) openUsageDrawer({ provider: p }, p + ' — events');
+      }
+    });
+  });
+
+  if (window.lucide && typeof lucide.createIcons === 'function') {
+    lucide.createIcons();
+  }
+}
+
+// ---- usage renderers (vanilla JS string builders) ----
+
+function _usageEsc(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function _usageMoney(n) {
+  if (n === null || n === undefined) return '--';
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '--';
+  if (v < 0.005) return '$0.00';
+  if (v < 1) return '$' + v.toFixed(3);
+  return '$' + v.toFixed(2);
+}
+
+function _usageNumber(n) {
+  return new Intl.NumberFormat('en-US').format(Math.round(n || 0));
+}
+
+function _usageDur(ms) {
+  if (!ms || ms < 0) return '-';
+  if (ms < 1000) return Math.round(ms) + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  return (ms / 60000).toFixed(1) + 'm';
+}
+
+function _usageTs(ms) {
+  if (!ms) return '-';
+  const d = new Date(ms);
+  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+}
+
+function usageStatusBanner(data) {
+  const color =
+    data.overall_status === 'green' ? 'var(--green, #22c55e)' :
+    data.overall_status === 'yellow' ? 'var(--amber, #eab308)' : 'var(--red, #ef4444)';
+  const label =
+    data.overall_status === 'green' ? 'All systems healthy' :
+    data.overall_status === 'yellow' ? 'Needs attention' : 'Issues detected';
+  const issues = data.overall_issues && data.overall_issues.length
+    ? `<div style="margin-top:10px;color:var(--text-muted);font-size:13px;">${data.overall_issues.map(_usageEsc).join(' &nbsp;•&nbsp; ')}</div>`
+    : '';
+  return `
+    <div class="usage-card" style="border:1px solid ${color};">
+      <div style="font-size:11px;letter-spacing:1.5px;color:var(--text-muted);text-transform:uppercase;">System Status</div>
+      <div style="font-size:22px;font-weight:700;margin-top:6px;">
+        <span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${color};margin-right:10px;vertical-align:middle;box-shadow:0 0 12px ${color};"></span>${label}
+      </div>
+      ${issues}
+    </div>`;
+}
+
+function usageKillSwitch(data) {
+  if (!data.kill_switch || !data.kill_switch.active) return '';
+  return `
+    <div class="usage-card" style="background:#3a0d10;border:2px solid var(--red,#ef4444);">
+      <div style="font-size:12px;letter-spacing:1.5px;color:var(--red,#ef4444);text-transform:uppercase;font-weight:700;">⚠ Kill Switch Active</div>
+      <div style="font-size:18px;font-weight:700;margin-top:8px;">All agent execution is halted</div>
+      <div style="font-size:13px;color:var(--text-muted);margin-top:6px;">
+        ${data.kill_switch.reason ? 'Reason: ' + _usageEsc(data.kill_switch.reason) : ''}
+        ${data.kill_switch.set_at ? ' &nbsp;•&nbsp; Tripped ' + _usageEsc(_usageTs(data.kill_switch.set_at)) : ''}
+        ${data.kill_switch.set_by ? ' &nbsp;•&nbsp; by ' + _usageEsc(data.kill_switch.set_by) : ''}
+      </div>
+    </div>`;
+}
+
+function usageCostCard(data) {
+  const c = data.cost || {};
+  const rows = (c.per_project || []).map(p => {
+    const pct = p.pct_of_cap;
+    const bar = pct === null
+      ? '<span style="color:var(--text-muted);font-size:12px;">no cap</span>'
+      : `<span style="display:inline-block;width:120px;height:8px;background:var(--border);border-radius:4px;overflow:hidden;vertical-align:middle;"><span style="display:inline-block;width:${Math.min(100, Math.max(0, pct))}%;height:100%;background:${pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--green)'};"></span></span> <span style="margin-left:8px;font-weight:600;">${pct.toFixed(0)}%</span>`;
+    return `<tr class="usage-row-clickable" data-usage-drill="project" data-project="${_usageEsc(p.project_id)}" style="border-top:1px solid var(--border);" title="Click to see events for this project">
+      <td style="padding:10px 0;">${_usageEsc(p.project_id)}</td>
+      <td style="padding:10px 0;text-align:right;">${_usageMoney(p.today)}</td>
+      <td style="padding:10px 0;text-align:right;">${_usageMoney(p.mtd)}</td>
+      <td style="padding:10px 0;text-align:right;">${bar}</td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="usage-card">
+      <div class="usage-card__head">Cost &amp; Usage</div>
+      <div class="usage-kpi-row">
+        <div class="usage-kpi">
+          <div class="usage-kpi__label">Today</div>
+          <div class="usage-kpi__value">${_usageMoney(c.today_usd)}</div>
+          <div class="usage-kpi__delta">vs yesterday ${_usageMoney(c.yesterday_usd)}</div>
+        </div>
+        <div class="usage-kpi">
+          <div class="usage-kpi__label">Month to date</div>
+          <div class="usage-kpi__value">${_usageMoney(c.mtd_usd)}</div>
+          <div class="usage-kpi__delta">${c.mtd_cap ? 'cap ' + _usageMoney(c.mtd_cap) : 'no cap set'}</div>
+        </div>
+        <div class="usage-kpi">
+          <div class="usage-kpi__label">Calls</div>
+          <div class="usage-kpi__value">${_usageNumber(data.agent_events.total_24h)}</div>
+          <div class="usage-kpi__delta" style="${data.agent_events.errors_24h ? 'color:var(--red);' : ''}">${data.agent_events.errors_24h} errors</div>
+        </div>
+      </div>
+      ${rows ? `<div style="margin-top:16px;"><div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">By Project</div>
+        <table style="width:100%;font-size:13px;"><thead><tr style="color:var(--text-muted);text-align:left;"><th style="font-weight:500;padding:6px 0;">Project</th><th style="font-weight:500;padding:6px 0;text-align:right;">Today</th><th style="font-weight:500;padding:6px 0;text-align:right;">MTD</th><th style="font-weight:500;padding:6px 0;text-align:right;">Cap Usage</th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}
+    </div>`;
+}
+
+function usagePawsCard(data) {
+  const p = data.paws || { active: 0, waiting_approval: 0, paused: 0, failed_cycles_24h: [] };
+  const pill = (text, color, bg) => `<span style="display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600;background:${bg};color:${color};margin-right:6px;">${text}</span>`;
+  const badges =
+    pill(p.active + ' active', 'var(--green,#22c55e)', 'rgba(34,197,94,0.13)') +
+    pill(p.waiting_approval + ' waiting approval', p.waiting_approval > 0 ? 'var(--amber,#eab308)' : 'var(--text-muted)', p.waiting_approval > 0 ? 'rgba(234,179,8,0.13)' : 'var(--border)') +
+    pill(p.paused + ' paused', 'var(--text-muted)', 'var(--border)');
+  const failures = (p.failed_cycles_24h || []).map(f => `
+    <div style="background:var(--bg-soft);padding:10px 14px;border-radius:8px;margin-bottom:8px;border-left:3px solid var(--red,#ef4444);">
+      <div style="font-weight:600;">${_usageEsc(f.paw_id)}</div>
+      <div style="font-size:12px;color:var(--text-muted);">${_usageEsc(_usageTs(f.failed_at))}</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;font-family:ui-monospace,Menlo,monospace;">${_usageEsc((f.error || '').slice(0, 200))}${(f.error || '').length > 200 ? '…' : ''}</div>
+    </div>`).join('');
+  return `
+    <div class="usage-card">
+      <div class="usage-card__head">Paws Health</div>
+      <div>${badges}</div>
+      ${failures ? `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px;">
+        <div style="font-size:12px;color:var(--red);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Failed cycles (last 24h)</div>
+        ${failures}
+      </div>` : ''}
+    </div>`;
+}
+
+function usageTasksCard(data) {
+  const t = data.scheduled_tasks || { total_active: 0, failures_24h: [] };
+  const rows = (t.failures_24h || []).map(f => `
+    <div style="background:var(--bg-soft);padding:10px 14px;border-radius:8px;margin-bottom:8px;border-left:3px solid var(--amber,#eab308);">
+      <div style="font-weight:600;">${_usageEsc(f.id)}</div>
+      <div style="font-size:12px;color:var(--text-muted);">${_usageEsc(f.project_id)} &nbsp;•&nbsp; ${_usageEsc(_usageTs(f.last_run))}</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;font-family:ui-monospace,Menlo,monospace;">${_usageEsc((f.error || '').slice(0, 200))}${(f.error || '').length > 200 ? '…' : ''}</div>
+    </div>`).join('');
+  return `
+    <div class="usage-card">
+      <div class="usage-card__head">Scheduled Tasks</div>
+      <div>${t.total_active} active</div>
+      ${rows ? `<div style="margin-top:14px;">
+        <div style="font-size:12px;color:var(--amber);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Failures (last 24h)</div>
+        ${rows}
+      </div>` : '<div style="color:var(--text-muted);font-size:13px;margin-top:6px;">No failures in the last 24h.</div>'}
+    </div>`;
+}
+
+function usageProvidersCard(data) {
+  const prov = (data.agent_events && data.agent_events.by_provider) || [];
+  if (prov.length === 0) return '';
+  const rows = prov.map(p => {
+    const pct = p.count > 0 ? (p.errors / p.count) * 100 : 0;
+    const color = p.errors === 0 ? 'var(--text-muted)' : pct > 10 ? 'var(--red)' : 'var(--amber)';
+    return `<tr class="usage-row-clickable" data-usage-drill="provider" data-provider="${_usageEsc(p.provider)}" style="border-top:1px solid var(--border);" title="Click to see events for this provider">
+      <td style="padding:10px 0;">${_usageEsc(p.provider)}</td>
+      <td style="padding:10px 0;text-align:right;">${_usageNumber(p.count)}</td>
+      <td style="padding:10px 0;text-align:right;color:${color};">${p.errors}${p.count > 0 ? ' (' + pct.toFixed(1) + '%)' : ''}</td>
+    </tr>`;
+  }).join('');
+  return `
+    <div class="usage-card">
+      <div class="usage-card__head">Execution Providers
+        <span style="float:right;font-size:12px;color:var(--text-muted);font-weight:400;text-transform:none;letter-spacing:0;">Avg duration ${_usageDur(data.agent_events.avg_duration_ms)}</span>
+      </div>
+      <table style="width:100%;font-size:13px;"><thead><tr style="color:var(--text-muted);text-align:left;">
+        <th style="font-weight:500;padding:10px 0 6px;">Provider</th>
+        <th style="font-weight:500;padding:10px 0 6px;text-align:right;">Calls</th>
+        <th style="font-weight:500;padding:10px 0 6px;text-align:right;">Errors</th>
+      </tr></thead><tbody>${rows}</tbody></table>
+    </div>`;
+}
+
+function usageAgentsCard(data) {
+  const top = (data.agent_events && data.agent_events.top_agents) || [];
+  if (top.length === 0) return '';
+  const rows = top.map(a => `<tr class="usage-row-clickable" data-usage-drill="agent" data-agent="${_usageEsc(a.agent_id || 'unknown')}" style="border-top:1px solid var(--border);" title="Click to see events for this agent">
+    <td style="padding:10px 0;">${_usageEsc(a.agent_id || 'unknown')}</td>
+    <td style="padding:10px 0;text-align:right;">${_usageNumber(a.calls)}</td>
+    <td style="padding:10px 0;text-align:right;">${_usageMoney(a.cost_usd)}</td>
+    <td style="padding:10px 0;text-align:right;color:${a.errors > 0 ? 'var(--red)' : 'var(--text-muted)'};">${a.errors}</td>
+  </tr>`).join('');
+  return `
+    <div class="usage-card">
+      <div class="usage-card__head">Top Agents (by spend)</div>
+      <table style="width:100%;font-size:13px;"><thead><tr style="color:var(--text-muted);text-align:left;">
+        <th style="font-weight:500;padding:10px 0 6px;">Agent</th>
+        <th style="font-weight:500;padding:10px 0 6px;text-align:right;">Calls</th>
+        <th style="font-weight:500;padding:10px 0 6px;text-align:right;">Cost</th>
+        <th style="font-weight:500;padding:10px 0 6px;text-align:right;">Errors</th>
+      </tr></thead><tbody>${rows}</tbody></table>
+    </div>`;
+}
+
+function usageRemediationsCard(data) {
+  const r = data.remediations_24h || [];
+  if (r.length === 0) {
+    return `
+      <div class="usage-card">
+        <div class="usage-card__head">Auto-Remediations</div>
+        <div style="color:var(--text-muted);font-size:13px;">No auto-fixes applied in the last 24h.</div>
+      </div>`;
+  }
+  const rows = r.map(x => `
+    <div style="background:var(--bg-soft);padding:10px 14px;border-radius:8px;margin-bottom:8px;border-left:3px solid var(--accent);">
+      <div style="font-weight:600;">${_usageEsc(x.remediation_id)}</div>
+      <div style="font-size:12px;color:var(--text-muted);">${_usageEsc(_usageTs(x.started_at))}</div>
+      <div style="font-size:13px;margin-top:4px;">${_usageEsc(x.summary)}</div>
+    </div>`).join('');
+  return `
+    <div class="usage-card">
+      <div class="usage-card__head">Auto-Remediations (last 24h)</div>
+      ${rows}
+    </div>`;
+}
+
+function usageAnomaliesCard(data) {
+  const a = data.anomalies || [];
+  if (a.length === 0) return '';
+  const rows = a.map(x => {
+    const color = x.level === 'crit' ? 'var(--red)' : x.level === 'warn' ? 'var(--amber)' : 'var(--text-muted)';
+    return `<div style="padding:10px 0;border-top:1px solid var(--border);font-size:13px;">
+      <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:10px;vertical-align:middle;"></span>${_usageEsc(x.message)}
+    </div>`;
+  }).join('');
+  return `
+    <div class="usage-card">
+      <div class="usage-card__head">Anomalies</div>
+      ${rows}
+    </div>`;
+}
+
+// ============================================================================
+// Usage page — filters, chart, drawer helpers
+// All untrusted values go through _usageEsc before being interpolated.
+// ============================================================================
+
+function renderUsageFilters(data) {
+  const host = document.querySelector('[data-bind="usage-filters"]');
+  if (!host) return;
+
+  const projects = (data.cost && data.cost.per_project ? data.cost.per_project.map(p => p.project_id) : []).filter(Boolean);
+  const providers = (data.agent_events && data.agent_events.by_provider ? data.agent_events.by_provider.map(p => p.provider) : []).filter(Boolean);
+  const agents = (data.agent_events && data.agent_events.top_agents ? data.agent_events.top_agents.map(a => a.agent_id || 'unknown') : []).filter(Boolean);
+
+  function chipGroup(key, values) {
+    const el = host.querySelector('[data-usage-filter-chips="' + key + '"]');
+    if (!el) return;
+    el.innerHTML = values.map(v => {
+      const active = _usageState.filters[key] === v;
+      return '<button type="button" class="usage-chip" aria-pressed="' + active + '" data-filter-value="' + _usageEsc(v) + '">' + _usageEsc(v) + '</button>';
+    }).join('');
+    el.querySelectorAll('.usage-chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        toggleUsageFilter(key, btn.getAttribute('data-filter-value'));
+      });
+    });
+  }
+
+  chipGroup('project_id', projects);
+  chipGroup('provider', providers);
+  chipGroup('agent_id', agents);
+
+  host.style.display = (projects.length || providers.length || agents.length) ? 'flex' : 'none';
+}
+
+function toggleUsageFilter(key, value) {
+  _usageState.filters[key] = _usageState.filters[key] === value ? null : value;
+  fetchUsageData();
+}
+
+function clearUsageFilters() {
+  _usageState.filters = { project_id: null, provider: null, agent_id: null };
+  fetchUsageData();
+}
+
+const USAGE_PROVIDER_COLORS = {
+  'claude_desktop': '#00ff9f',
+  'anthropic_api':  '#a78bfa',
+  'openai_api':     '#00d4ff',
+  'openrouter_api': '#ff00aa',
+  'ollama':         '#ffaa00',
+  'lm_studio':      '#ff3355',
+  'codex_local':    '#22c55e',
+  'unknown':        '#50506e',
+};
+
+function _usageProviderColor(name) {
+  return USAGE_PROVIDER_COLORS[name] || '#6366f1';
+}
+
+function renderUsageChart(ts) {
+  const card = document.querySelector('[data-bind="usage-chart-card"]');
+  const canvas = document.getElementById('usage-timeseries-chart');
+  if (!card || !canvas || !ts) return;
+
+  if (!window.Chart) {
+    card.style.display = 'none';
+    setTimeout(() => renderUsageChart(_usageState.timeseries), 500);
+    return;
+  }
+
+  card.style.display = '';
+
+  const providerSet = new Set();
+  for (const p of ts.points) {
+    for (const k of Object.keys(p.by_provider || {})) providerSet.add(k);
+  }
+  const providers = Array.from(providerSet).sort();
+
+  const datasets = providers.map(name => ({
+    label: name,
+    data: ts.points.map(p => Number((p.by_provider || {})[name] || 0)),
+    backgroundColor: _usageProviderColor(name) + '40',
+    borderColor: _usageProviderColor(name),
+    borderWidth: 1.5,
+    pointRadius: 0,
+    fill: true,
+    tension: 0.25,
+    stack: 'cost',
+  }));
+
+  if (_usageState.chart) {
+    _usageState.chart.destroy();
+    _usageState.chart = null;
+  }
+
+  const bucketLabel = ts.bucket === 'hour' ? 'Hourly' : 'Daily';
+  const totalCost = ts.points.reduce((s, p) => s + (p.cost_usd || 0), 0);
+  const totalCalls = ts.points.reduce((s, p) => s + (p.calls || 0), 0);
+
+  // Category scale with pre-formatted string labels (no date adapter needed).
+  const labelStrings = ts.points.map(p => {
+    const d = new Date(p.ts);
+    return ts.bucket === 'hour'
+      ? d.toLocaleTimeString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', hour12: true })
+      : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  });
+
+  _usageState.chart = new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: { labels: labelStrings, datasets: datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      onClick: (evt, elements) => {
+        if (!elements || !elements.length) return;
+        const idx = elements[0].index;
+        const point = ts.points[idx];
+        if (!point) return;
+        const width = ts.bucket === 'hour' ? 3600000 : 86400000;
+        openUsageDrawer(
+          { from: point.ts, to: point.ts + width },
+          bucketLabel + ' bucket: ' + new Date(point.ts).toLocaleString()
+        );
+      },
+      scales: {
+        x: {
+          type: 'category',
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          ticks: {
+            color: '#8a8aac',
+            maxTicksLimit: ts.bucket === 'hour' ? 12 : 20,
+            autoSkip: true,
+          },
+          stacked: false,
+        },
+        y: {
+          stacked: true,
+          beginAtZero: true,
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          ticks: { color: '#8a8aac', callback: (v) => '$' + Number(v).toFixed(2) },
+        },
+      },
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#8a8aac', boxWidth: 10, padding: 10 } },
+        tooltip: { callbacks: { label: (ctx) => ctx.dataset.label + ': $' + Number(ctx.parsed.y).toFixed(3) } },
+      },
+    },
+  });
+
+  const summary = document.querySelector('[data-bind="usage-chart-summary"]');
+  if (summary) {
+    summary.textContent = '';
+    const p = document.createElement('span');
+    p.textContent = bucketLabel + ' buckets';
+    summary.appendChild(p);
+    const sep1 = document.createElement('span');
+    sep1.innerHTML = ' &nbsp;•&nbsp; ';
+    summary.appendChild(sep1);
+    const p2 = document.createElement('span');
+    p2.textContent = 'Total: ' + _usageMoney(totalCost);
+    summary.appendChild(p2);
+    const sep2 = document.createElement('span');
+    sep2.innerHTML = ' &nbsp;•&nbsp; ';
+    summary.appendChild(sep2);
+    const p3 = document.createElement('span');
+    p3.textContent = 'Calls: ' + _usageNumber(totalCalls);
+    summary.appendChild(p3);
+    const sep3 = document.createElement('span');
+    sep3.innerHTML = ' &nbsp;•&nbsp; ';
+    summary.appendChild(sep3);
+    const p4 = document.createElement('span');
+    p4.textContent = 'Click any bucket to see events';
+    summary.appendChild(p4);
+  }
+}
+
+async function openUsageDrawer(query, title) {
+  const drawer = document.querySelector('[data-bind="usage-drawer"]');
+  if (!drawer) return;
+
+  const merged = Object.assign({}, query);
+  if (!merged.project_id && _usageState.filters.project_id) merged.project_id = _usageState.filters.project_id;
+  if (!merged.provider && _usageState.filters.provider) merged.provider = _usageState.filters.provider;
+  if (!merged.agent_id && _usageState.filters.agent_id) merged.agent_id = _usageState.filters.agent_id;
+  if (merged.from === undefined && merged.to === undefined) {
+    merged.hours = _usageState.period;
+  }
+
+  _usageState.drawerState = { title: title, query: merged };
+  drawer.setAttribute('aria-hidden', 'false');
+
+  const titleEl = document.querySelector('[data-bind="usage-drawer-title"]');
+  if (titleEl) titleEl.textContent = title;
+
+  const body = document.querySelector('[data-bind="usage-drawer-body"]');
+  if (body) {
+    body.textContent = '';
+    const loading = document.createElement('div');
+    loading.style.cssText = 'padding:40px;text-align:center;color:var(--text-muted);';
+    loading.textContent = 'Loading…';
+    body.appendChild(loading);
+  }
+  const sum = document.querySelector('[data-bind="usage-drawer-summary"]');
+  if (sum) sum.textContent = '';
+
+  const qs = _usageEventsQs(merged);
+  const data = await fetchFromAPI('/api/v1/health/events?' + qs);
+  if (!data) {
+    if (body) {
+      body.textContent = '';
+      const err = document.createElement('div');
+      err.style.cssText = 'padding:40px;text-align:center;color:var(--red);';
+      err.textContent = 'Failed to load events.';
+      body.appendChild(err);
+    }
+    return;
+  }
+  renderUsageDrawerBody(data);
+  if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+}
+
+function closeUsageDrawer() {
+  const drawer = document.querySelector('[data-bind="usage-drawer"]');
+  if (!drawer) return;
+  drawer.setAttribute('aria-hidden', 'true');
+  _usageState.drawerState = null;
+}
+
+function _usageEventsQs(q) {
+  const parts = [];
+  if (q.hours) parts.push('hours=' + q.hours);
+  if (q.from !== undefined) parts.push('from=' + q.from);
+  if (q.to !== undefined) parts.push('to=' + q.to);
+  if (q.project_id) parts.push('project_id=' + encodeURIComponent(q.project_id));
+  if (q.provider) parts.push('provider=' + encodeURIComponent(q.provider));
+  if (q.agent_id) parts.push('agent_id=' + encodeURIComponent(q.agent_id));
+  parts.push('limit=500');
+  return parts.join('&');
+}
+
+function renderUsageDrawerBody(data) {
+  const body = document.querySelector('[data-bind="usage-drawer-body"]');
+  const sum = document.querySelector('[data-bind="usage-drawer-summary"]');
+  if (!body) return;
+
+  if (sum) {
+    const parts = [data.total_count + ' events', _usageMoney(data.total_cost) + ' total'];
+    if (data.events.length < data.total_count) parts.push('showing newest ' + data.events.length);
+    sum.innerHTML = parts.map(_usageEsc).join(' &nbsp;•&nbsp; ');
+  }
+
+  if (data.events.length === 0) {
+    body.textContent = '';
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding:40px;text-align:center;color:var(--text-muted);';
+    empty.textContent = 'No events in this window.';
+    body.appendChild(empty);
+    return;
+  }
+
+  body.innerHTML = data.events.map(e => {
+    const timeHM = new Date(e.received_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+    const timeDate = new Date(e.received_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const errBadge = e.is_error ? '<span class="usage-event__error">ERR</span> ' : '';
+    return '' +
+      '<div class="usage-event-row">' +
+        '<div class="usage-event__time">' + _usageEsc(timeDate) + '<br>' + _usageEsc(timeHM) + '</div>' +
+        '<div class="usage-event__body">' +
+          '<div class="usage-event__agent">' + errBadge + _usageEsc(e.agent_id || 'unknown') + ' &nbsp;<span style="color:var(--text-muted);font-weight:400;font-size:11px;">' + _usageEsc(e.project_id) + '</span></div>' +
+          '<div class="usage-event__meta">' + _usageEsc(e.source || '?') + ' &nbsp;•&nbsp; ' + _usageEsc(e.executed_provider || '?') + ' &nbsp;•&nbsp; ' + _usageEsc(e.model || '?') + '</div>' +
+          '<div class="usage-event__prompt">' + _usageEsc((e.prompt_summary || '').slice(0, 220)) + '</div>' +
+        '</div>' +
+        '<div class="usage-event__cost">' + _usageMoney(e.total_cost_usd) + '</div>' +
+        '<div class="usage-event__dur">' + _usageDur(e.duration_ms) + '</div>' +
+      '</div>';
+  }).join('');
+}
+
+function exportUsageDrawerCsv() {
+  if (!_usageState.drawerState) return;
+  const qs = _usageEventsQs(_usageState.drawerState.query) + '&format=csv';
+  window.open('/api/v1/health/events?' + qs, '_blank');
+}

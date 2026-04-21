@@ -319,6 +319,30 @@ async function main(): Promise<void> {
   runDecaySweep()
   setInterval(runDecaySweep, 24 * 60 * 60 * 1000)
 
+  // 4a. Remediations engine -- auto-fixes for common issues. Every 5 min.
+  //     See src/remediations/ for registered remediations.
+  try {
+    const { initRemediationsSchema } = await import('./remediations/db.js')
+    const { runAllRemediations } = await import('./remediations/runner.js')
+    initRemediationsSchema()
+    // Fire once on boot so the daily report has same-day data, then every 5 min.
+    runAllRemediations().catch((err) => logger.error({ err }, '[remediations] initial run failed'))
+    setInterval(() => {
+      runAllRemediations().catch((err) => logger.error({ err }, '[remediations] tick failed'))
+    }, 5 * 60 * 1000)
+  } catch (err) {
+    logger.error({ err }, '[remediations] Failed to initialize -- continuing without auto-fixes')
+  }
+
+  // 4b. Retention: purge agent_events older than AGENT_EVENTS_RETENTION_DAYS
+  //     (default 180). Runs 60s after boot, then every 6h.
+  try {
+    const { startRetentionJob } = await import('./retention.js')
+    startRetentionJob()
+  } catch (err) {
+    logger.error({ err }, '[retention] Failed to start -- telemetry.db will grow unbounded')
+  }
+
   // 5. Connect to dashboard server
   connectDashboard()
   reportFeedItem('system', 'ClaudePaw started', `PID ${process.pid} | Channels: ${CHANNELS_ENABLED.join(', ')}`)

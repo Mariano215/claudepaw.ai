@@ -22,6 +22,20 @@ export interface PawConfig {
   chat_id: string
   approval_timeout_sec: number
   phase_instructions?: Partial<Record<PawPhase, string>>
+  /**
+   * Optional named collector that runs BEFORE the OBSERVE LLM call.
+   * Collectors are deterministic TypeScript functions registered in
+   * `src/paws/collectors/index.ts`. They gather raw data (gh, fetch,
+   * DB queries, etc.) and return structured JSON. The engine stuffs
+   * that JSON into the OBSERVE prompt so the agent never has to call
+   * tools to gather -- it only analyzes. This insulates paws from the
+   * current execution provider's tool-use capabilities.
+   */
+  observe_collector?: string
+  /**
+   * Optional arguments passed to the collector at runtime (JSON-serialized).
+   */
+  observe_collector_args?: Record<string, unknown>
 }
 
 export interface PawCycle {

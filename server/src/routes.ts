@@ -66,6 +66,7 @@ if (!PROJECT_ROOT) {
   logger.warn('PROJECT_ROOT not set -- agent file operations will fail')
 }
 import { getCostSummary, getLineItems, upsertLineItem, updateLineItem, deleteLineItem } from './costs.js'
+import { buildHealthReport, buildTimeseries, listEvents } from './health-report.js'
 import {
   getChatHistory,
   saveChatMessage,
@@ -1150,6 +1151,157 @@ router.get('/health', (_req: Request, res: Response) => {
 router.get('/health/bot', (_req: Request, res: Response) => {
   const snapshots = getBotHealthSnapshots()
   res.json({ snapshots, services: [] })
+})
+
+// --- Remediations log sync from bot ---
+
+interface IncomingRemediation {
+  remediation_id?: string
+  bot_row_id?: number
+  started_at?: number
+  completed_at?: number
+  acted?: number | boolean
+  summary?: string
+  detail?: string | null
+  errors?: string | null
+}
+
+router.post('/internal/remediations', requireBotOrAdmin, (req: Request, res: Response) => {
+  const body = req.body
+  const rows: IncomingRemediation[] = Array.isArray(body?.rows)
+    ? body.rows
+    : Array.isArray(body)
+      ? body
+      : [body]
+
+  let inserted = 0
+  const stmt = getDb().prepare(`
+    INSERT INTO remediations
+      (remediation_id, started_at, completed_at, acted, summary, detail, errors, bot_row_id, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (remediation_id, started_at) DO UPDATE SET
+      completed_at = excluded.completed_at,
+      acted = excluded.acted,
+      summary = excluded.summary,
+      detail = excluded.detail,
+      errors = excluded.errors,
+      bot_row_id = excluded.bot_row_id,
+      synced_at = excluded.synced_at
+  `)
+  const now = Date.now()
+  for (const r of rows) {
+    if (!r?.remediation_id || typeof r.started_at !== 'number' || typeof r.completed_at !== 'number' || !r.summary) {
+      continue
+    }
+    stmt.run(
+      r.remediation_id,
+      r.started_at,
+      r.completed_at,
+      r.acted ? 1 : 0,
+      r.summary,
+      r.detail ?? null,
+      r.errors ?? null,
+      r.bot_row_id ?? null,
+      now,
+    )
+    inserted++
+  }
+  res.json({ ok: true, inserted })
+})
+
+// --- Health Report (mirror of daily email, for the dashboard Health page) ---
+
+router.get('/health/report', requireAdmin, (req: Request, res: Response) => {
+  try {
+    const hoursParam = Number(req.query.hours)
+    const hours = Number.isFinite(hoursParam) && hoursParam > 0 && hoursParam <= 24 * 365
+      ? Math.round(hoursParam)
+      : 24
+    const report = buildHealthReport(hours)
+    res.json(report)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    logger.error({ err }, '/health/report failed')
+    res.status(500).json({ error: msg })
+  }
+})
+
+// Time-series for the Usage page chart. Buckets auto-pick hour (<=48h) or
+// day (>48h) unless explicitly overridden via ?bucket=hour|day.
+router.get('/health/timeseries', requireAdmin, (req: Request, res: Response) => {
+  try {
+    const hoursParam = Number(req.query.hours)
+    const hours = Number.isFinite(hoursParam) && hoursParam > 0 && hoursParam <= 24 * 365
+      ? Math.round(hoursParam) : 24
+    const bucket = req.query.bucket === 'hour' || req.query.bucket === 'day'
+      ? (req.query.bucket as 'hour' | 'day') : undefined
+    const result = buildTimeseries({
+      hours,
+      bucket,
+      project_id: (req.query.project_id as string) || null,
+      provider: (req.query.provider as string) || null,
+      agent_id: (req.query.agent_id as string) || null,
+    })
+    res.json(result)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    logger.error({ err }, '/health/timeseries failed')
+    res.status(500).json({ error: msg })
+  }
+})
+
+// Event-level drill-in: returns individual agent_events with prompt previews
+// so the Usage page can show exactly what spent money, with a CSV export.
+router.get('/health/events', requireAdmin, (req: Request, res: Response) => {
+  try {
+    const hoursParam = Number(req.query.hours)
+    const hours = Number.isFinite(hoursParam) && hoursParam > 0 ? Math.round(hoursParam) : undefined
+    const fromParam = Number(req.query.from)
+    const toParam = Number(req.query.to)
+    const limitParam = Number(req.query.limit)
+    const limit = Number.isFinite(limitParam) ? Math.max(1, Math.min(1000, Math.round(limitParam))) : 200
+
+    const result = listEvents({
+      hours,
+      from: Number.isFinite(fromParam) ? fromParam : undefined,
+      to: Number.isFinite(toParam) ? toParam : undefined,
+      limit,
+      project_id: (req.query.project_id as string) || null,
+      provider: (req.query.provider as string) || null,
+      agent_id: (req.query.agent_id as string) || null,
+    })
+
+    // CSV export when ?format=csv
+    if (req.query.format === 'csv') {
+      const headers = ['time_iso', 'project_id', 'agent_id', 'source', 'model', 'executed_provider',
+        'input_tokens', 'output_tokens', 'cache_read_tokens', 'total_cost_usd', 'duration_ms', 'is_error', 'prompt_summary']
+      const escCsv = (v: unknown): string => {
+        if (v === null || v === undefined) return ''
+        const s = String(v)
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
+      }
+      const lines = [headers.join(',')]
+      for (const e of result.events) {
+        lines.push([
+          new Date(e.received_at).toISOString(),
+          e.project_id, e.agent_id ?? '', e.source ?? '', e.model ?? '', e.executed_provider ?? '',
+          e.input_tokens ?? '', e.output_tokens ?? '', e.cache_read_tokens ?? '',
+          e.total_cost_usd ?? '', e.duration_ms ?? '', e.is_error,
+          e.prompt_summary ?? '',
+        ].map(escCsv).join(','))
+      }
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+      res.setHeader('Content-Disposition', `attachment; filename="claudepaw-events-${Date.now()}.csv"`)
+      res.send(lines.join('\n'))
+      return
+    }
+
+    res.json(result)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    logger.error({ err }, '/health/events failed')
+    res.status(500).json({ error: msg })
+  }
 })
 
 // --- Security ---

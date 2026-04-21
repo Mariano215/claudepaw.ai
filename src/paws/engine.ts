@@ -4,6 +4,7 @@ import type { Paw, PawPhase, PawCycleState, PawFinding, PawDecision, PawCycle, A
 import { buildApprovalCard, type ApprovalFinding } from './approval-card.js'
 import { getProjectName } from './project-name.js'
 import { getPaw, createCycle, updateCycle, getCycle, updatePawStatus } from './db.js'
+import { runCollector } from './collectors/index.js'
 import { guardChain } from '../guard/index.js'
 import { logger } from '../logger.js'
 import { extractAndLogFindings } from '../research.js'
@@ -32,15 +33,38 @@ export async function runPawCycle(
     const previousCycle = getLatestCycleBefore(db, pawId, cycleId)
 
     // OBSERVE
-    const observeResult = await runPhase(paw, 'observe', {
-      previousFindings: previousCycle?.findings ?? [],
-      previousState: previousCycle?.state ?? null,
-    }, runAgent)
+    // If the paw declares a collector, use deterministic TS code to gather raw
+    // data. Otherwise fall back to an LLM-driven observe (legacy path). The
+    // collector path is preferred: zero LLM cost, cannot hallucinate, and works
+    // on every execution provider.
+    let observeResult: string
+    const collectorName = paw.config.observe_collector
+    if (collectorName) {
+      const collected = await runCollector(collectorName, {
+        pawId,
+        projectId: paw.project_id,
+        args: paw.config.observe_collector_args,
+      })
+      // Serialize into the string shape the rest of the pipeline expects.
+      // `observe_raw` is stored as a string and later substituted into the
+      // ANALYZE prompt, so JSON stringify keeps downstream code unchanged.
+      observeResult = JSON.stringify(collected, null, 2)
+      logger.info(
+        { pawId, collector: collectorName, errorCount: collected.errors?.length ?? 0 },
+        '[paws] OBSERVE via collector',
+      )
+    } else {
+      observeResult = await runPhase(paw, 'observe', {
+        previousFindings: previousCycle?.findings ?? [],
+        previousState: previousCycle?.state ?? null,
+      }, runAgent)
 
-    // Extract research findings from the observe output (free-form text)
-    extractAndLogFindings(observeResult, paw.agent_id, paw.project_id).catch(err =>
-      logger.warn({ err, pawId }, '[paws] Research extraction failed (observe)')
-    )
+      // Extract research findings from the observe output (free-form text).
+      // Only relevant on the LLM path -- collector output is structured JSON.
+      extractAndLogFindings(observeResult, paw.agent_id, paw.project_id).catch(err =>
+        logger.warn({ err, pawId }, '[paws] Research extraction failed (observe)')
+      )
+    }
 
     const state: PawCycleState = {
       observe_raw: observeResult,

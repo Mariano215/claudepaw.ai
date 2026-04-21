@@ -905,6 +905,23 @@ export function initDatabase(): Database.Database {
       set_by         TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_kill_switch_log_toggled_at ON kill_switch_log(toggled_at_ms DESC);
+
+    -- Remediations log: mirrored from the bot via POST /api/v1/internal/remediations.
+    -- Bot is the source of truth; this is a read-only cache for the dashboard.
+    CREATE TABLE IF NOT EXISTS remediations (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      remediation_id  TEXT    NOT NULL,
+      started_at      INTEGER NOT NULL,
+      completed_at    INTEGER NOT NULL,
+      acted           INTEGER NOT NULL DEFAULT 0,
+      summary         TEXT    NOT NULL,
+      detail          TEXT,
+      errors          TEXT,
+      bot_row_id      INTEGER,
+      synced_at       INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (remediation_id, started_at)
+    );
+    CREATE INDEX IF NOT EXISTS idx_remediations_started ON remediations(started_at DESC);
   `)
   db.prepare('INSERT OR IGNORE INTO system_state (id, updated_at) VALUES (1, ?)').run(Date.now())
 
