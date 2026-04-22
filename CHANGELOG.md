@@ -37,7 +37,7 @@ This file follows a lightweight Keep a Changelog style and is intended for human
 - Example Company weekly briefing, content-plan, and festival-scan tasks now receive structured Gmail, calendar, and sheet context from the scheduler before the model runs, instead of relying on in-prompt shell commands.
 
 ### Fixed
-- Fixed Paw Trader alert spam by suppressing blind low-score signals before they page the operator and cooling down repeat alerts after a recent committee veto on the same asset/strategy.
+- Fixed Paw Trader alert spam by suppressing blind low-score signals before they page the operator and persisting skip, timeout, and committee-abstain dismissals so the same asset/strategy/side stays quiet unless score or enrichment changes materially or 24 hours pass.
 - Fixed Paw Trader committee rationale calibration so risk/trader explanations now see the configured score floor and stop labeling valid low-end signals as "noise" without threshold context.
 - Fixed `cp-competitive-watch` false alarms by moving it onto a deterministic feed collector and only approval-gating new findings that cite evidence URLs from the current observation set.
 - Blocked dashboard `Run Now` on paws already waiting for approval and hardened paw finding dedupe so previously surfaced items stay known unless they return at higher severity.
