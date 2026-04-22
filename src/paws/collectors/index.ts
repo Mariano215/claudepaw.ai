@@ -21,6 +21,7 @@
 //   3. Set `observe_collector: 'my-collector'` on the paw config in DB
 
 import { logger } from '../../logger.js'
+import { competitiveLandscapeCollector } from './competitive-landscape.js'
 import { githubCommunityCollector } from './github-community.js'
 
 export interface CollectorContext {
@@ -102,3 +103,4 @@ export async function runCollector(
 // -----------------------------------------------------------------------------
 
 registerCollector('github-community', githubCommunityCollector)
+registerCollector('competitive-landscape', competitiveLandscapeCollector)

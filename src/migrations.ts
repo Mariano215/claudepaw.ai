@@ -15,6 +15,7 @@
 
 import type Database from 'better-sqlite3'
 import { logger } from './logger.js'
+import { competitiveWatchPhaseInstructions } from './paws/competitive-watch.js'
 import { msChannelPulsePhaseInstructions } from './paws/ms-channel-pulse.js'
 import { msSocialCadencePhaseInstructions } from './paws/ms-social-cadence.js'
 import { msTrendScannerPhaseInstructions } from './paws/ms-trend-scanner.js'
@@ -155,6 +156,33 @@ const MIGRATIONS: Migration[] = [
       updatePaw('ms-trend-scanner', 5, msTrendScannerPhaseInstructions)
       updatePaw('ms-channel-pulse', 5, msChannelPulsePhaseInstructions)
       updatePaw('ms-social-cadence', 4, msSocialCadencePhaseInstructions)
+    },
+  },
+  {
+    version: 5,
+    description: 'Move ClaudePaw competitive watch to deterministic feed collection with evidence-gated findings',
+    up: (db) => {
+      const row = db
+        .prepare(`SELECT config FROM paws WHERE id = 'cp-competitive-watch'`)
+        .get() as { config: string } | undefined
+
+      if (!row) return
+
+      let config: Record<string, unknown> = {}
+      try {
+        config = JSON.parse(row.config) as Record<string, unknown>
+      } catch {
+        config = {}
+      }
+
+      const nextConfig = {
+        ...config,
+        observe_collector: 'competitive-landscape',
+        observe_collector_args: { window_days: 14 },
+        phase_instructions: competitiveWatchPhaseInstructions,
+      }
+
+      db.prepare(`UPDATE paws SET config = ? WHERE id = 'cp-competitive-watch'`).run(JSON.stringify(nextConfig))
     },
   },
   // Add future migrations here:

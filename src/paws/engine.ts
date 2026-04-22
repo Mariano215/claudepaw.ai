@@ -8,6 +8,7 @@ import { runCollector } from './collectors/index.js'
 import { guardChain } from '../guard/index.js'
 import { logger } from '../logger.js'
 import { extractAndLogFindings } from '../research.js'
+import { normalizeUrl } from '../newsletter/feeds.js'
 
 type AgentRunResult = {
   text: string | null
@@ -22,6 +23,7 @@ type AgentRunResult = {
 type AgentRunner = (prompt: string) => Promise<AgentRunResult>
 type Sender = (chatId: string, text: string) => Promise<void>
 const FINDING_DEDUPE_HISTORY_LIMIT = 10
+const COMPETITIVE_WATCH_PAW_ID = 'cp-competitive-watch'
 
 /**
  * Run a single Paw cycle through all phases.
@@ -98,7 +100,7 @@ export async function runPawCycle(
       // Agent may wrap JSON in markdown code fences -- strip them before parsing
       const cleaned = analyzeResult.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim()
       const parsed = JSON.parse(cleaned)
-      findings = parsed.findings ?? []
+      findings = normalizeFindings(parsed.findings)
     } catch {
       // Extract a useful title from the first sentence of the agent's response
       const firstLine = analyzeResult.split(/[.\n]/).filter(s => s.trim().length > 5)[0]?.trim() ?? 'Analysis complete'
@@ -111,6 +113,7 @@ export async function runPawCycle(
         is_new: true,
       }]
     }
+    findings = sanitizeFindingsForPaw(paw, observeResult, findings)
     findings = forceSeenFindingsToKnown(db, pawId, cycleId, findings)
 
     state.analysis = analyzeResult
@@ -126,8 +129,8 @@ export async function runPawCycle(
     let maxSeverity = 0
     try {
       const parsed = JSON.parse(decideResult)
-      decisions = parsed.decisions ?? []
-      maxSeverity = parsed.max_severity ?? Math.max(0, ...findings.map(f => f.severity))
+      decisions = normalizeDecisions(parsed.decisions, findings)
+      maxSeverity = Math.max(0, ...findings.map(f => f.severity))
     } catch {
       maxSeverity = Math.max(0, ...findings.map(f => f.severity))
     }
@@ -136,7 +139,11 @@ export async function runPawCycle(
     updateCycle(db, cycleId, { state })
 
     // Check if approval is needed
-    if (maxSeverity >= paw.config.approval_threshold) {
+    const actionFindings = findings.filter(
+      f => f.is_new !== false && f.severity >= paw.config.approval_threshold,
+    )
+
+    if (actionFindings.length > 0) {
       state.approval_requested = true
       updateCycle(db, cycleId, { state })
 
@@ -144,7 +151,6 @@ export async function runPawCycle(
       updatePawStatus(db, pawId, 'waiting_approval')
 
       // Build plain-English approval message
-      const actionFindings = findings.filter(f => f.severity >= paw.config.approval_threshold)
       const projectName = getProjectName(paw.project_id)
 
       // PawFinding does not carry target / auto_fixable; defaults keep non-security paws
@@ -273,6 +279,117 @@ function normalizeFindingToken(value: string | null | undefined): string {
     .replace(/[^a-z0-9#]+/g, ' ')
     .trim()
     .replace(/\s+/g, ' ')
+}
+
+function clampSeverity(value: unknown): number {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 1
+  return Math.max(1, Math.min(5, Math.round(n)))
+}
+
+function normalizeFindings(value: unknown): PawFinding[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((raw): PawFinding[] => {
+    if (!raw || typeof raw !== 'object') return []
+    const item = raw as Record<string, unknown>
+    const title = typeof item.title === 'string' ? item.title.trim() : ''
+    const detail = typeof item.detail === 'string' ? item.detail.trim() : ''
+    if (!title || !detail) return []
+
+    const id = typeof item.id === 'string' && item.id.trim()
+      ? item.id.trim()
+      : normalizeFindingToken(title).replace(/\s+/g, '-')
+
+    const evidence_urls = Array.isArray(item.evidence_urls)
+      ? Array.from(new Set(
+        item.evidence_urls
+          .filter((url): url is string => typeof url === 'string' && url.trim().length > 0)
+          .map(url => normalizeUrl(url.trim())),
+      )).slice(0, 3)
+      : undefined
+
+    return [{
+      id,
+      severity: clampSeverity(item.severity),
+      title,
+      detail,
+      is_new: item.is_new !== false,
+      ...(evidence_urls && evidence_urls.length > 0 ? { evidence_urls } : {}),
+    }]
+  })
+}
+
+function normalizeDecisions(value: unknown, findings: PawFinding[]): PawDecision[] {
+  if (!Array.isArray(value)) return []
+  const findingById = new Map(findings.map(f => [f.id, f]))
+  const validActions = new Set(['act', 'skip', 'escalate'])
+
+  return value.flatMap((raw): PawDecision[] => {
+    if (!raw || typeof raw !== 'object') return []
+    const item = raw as Record<string, unknown>
+    const findingId = typeof item.finding_id === 'string' ? item.finding_id.trim() : ''
+    const action = typeof item.action === 'string' ? item.action.trim() : ''
+    const reason = typeof item.reason === 'string' ? item.reason.trim() : ''
+    const finding = findingById.get(findingId)
+    if (!findingId || !finding) return []
+    if (!validActions.has(action)) return []
+    if (finding.is_new === false && action !== 'skip') {
+      return [{
+        finding_id: findingId,
+        action: 'skip',
+        reason: 'suppressed by engine: finding already known',
+      }]
+    }
+    return [{
+      finding_id: findingId,
+      action: action as PawDecision['action'],
+      reason: reason || 'no reason given',
+    }]
+  })
+}
+
+function sanitizeFindingsForPaw(
+  paw: Paw,
+  observeRaw: string,
+  findings: PawFinding[],
+): PawFinding[] {
+  if (paw.id === COMPETITIVE_WATCH_PAW_ID && paw.config.observe_collector === 'competitive-landscape') {
+    return sanitizeCompetitiveLandscapeFindings(observeRaw, findings)
+  }
+  return findings
+}
+
+function getCompetitiveCollectorEvidenceUrls(observeRaw: string): Set<string> {
+  try {
+    const parsed = JSON.parse(observeRaw) as { raw_data?: { articles?: Array<{ url?: string }> } }
+    const articles = Array.isArray(parsed?.raw_data?.articles) ? parsed.raw_data.articles : []
+    return new Set(
+      articles
+        .map(article => typeof article?.url === 'string' ? normalizeUrl(article.url) : '')
+        .filter(Boolean),
+    )
+  } catch {
+    return new Set()
+  }
+}
+
+function sanitizeCompetitiveLandscapeFindings(
+  observeRaw: string,
+  findings: PawFinding[],
+): PawFinding[] {
+  const observedUrls = getCompetitiveCollectorEvidenceUrls(observeRaw)
+  if (observedUrls.size === 0) {
+    logger.warn('[paws] Competitive watch collector returned no evidence URLs; suppressing findings')
+    return []
+  }
+
+  return findings.flatMap((finding): PawFinding[] => {
+    const evidence_urls = Array.isArray(finding.evidence_urls)
+      ? finding.evidence_urls.filter(url => observedUrls.has(normalizeUrl(url)))
+      : []
+    if (evidence_urls.length === 0) return []
+    return [{ ...finding, evidence_urls }]
+  })
 }
 
 function buildSeenFindingMaps(cycles: PawCycle[]): { byId: Map<string, number>; byTitle: Map<string, number> } {

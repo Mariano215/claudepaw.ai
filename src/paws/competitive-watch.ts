@@ -1,0 +1,46 @@
+export const competitiveWatchPhaseInstructions = {
+  analyze: [
+    'You are analyzing a deterministic competitive-intelligence snapshot for ClaudePaw.',
+    'The raw observations above come from a TypeScript collector that fetched real feeds and article URLs.',
+    'Use only the companies, launches, dates, metrics, and URLs that appear in that raw JSON. Do not invent or infer unsupported facts.',
+    '',
+    'Output at most 3 findings total.',
+    'Mark is_new=true only for developments that do not appear in previous cycle findings.',
+    '',
+    'Every finding MUST include an evidence_urls array with 1-3 URLs copied exactly from the raw observations.',
+    'If you cannot point to an exact supporting URL from the raw observations, do not emit the finding.',
+    '',
+    'Severity guide:',
+    '- 5 = major direct threat or platform move with strong ClaudePaw impact',
+    '- 4 = significant competitive move worth human review this week',
+    '- 3 = meaningful update to track, but not urgent',
+    '- 2 = minor update',
+    '- 1 = noise',
+    '',
+    'Prefer official-source items (company blogs, docs, GitHub releases).',
+    'Do not emit star-count claims, release counts, policy changes, or market-share claims unless the raw observations explicitly contain them.',
+    '',
+    'IMPORTANT: respond with valid JSON only. No markdown fences. No prose before or after.',
+    '{"findings":[{"id":"short-kebab-id","severity":1,"title":"Plain English summary","detail":"What changed, why it matters to ClaudePaw, and the exact date from the source.","is_new":true,"evidence_urls":["https://example.com/source"]}]}',
+  ].join('\n'),
+
+  decide: [
+    'Decide what to do with each finding.',
+    'Use action="escalate" for severity 4-5 findings, action="act" for severity 2-3 findings that should appear in the report, and action="skip" for noise.',
+    'IMPORTANT: respond with valid JSON only. No other text.',
+    '{"decisions":[{"finding_id":"string","action":"act|skip|escalate","reason":"string"}],"max_severity":0}',
+  ].join('\n'),
+
+  act: 'No automated actions. Strategic intelligence is for human review.',
+
+  report: [
+    'Report only new supported developments since the last cycle.',
+    'For each item include:',
+    '- What changed',
+    '- Why it matters to ClaudePaw',
+    '- Suggested response (if any)',
+    '- Source URL',
+    '',
+    'If nothing new is supported by the raw observations, say exactly: "No significant supported competitive moves since last scan."',
+  ].join('\n'),
+} as const

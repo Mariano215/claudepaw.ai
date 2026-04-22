@@ -66,6 +66,7 @@ export interface PawFinding {
   title: string
   detail: string
   is_new: boolean
+  evidence_urls?: string[]
 }
 
 export interface PawDecision {
