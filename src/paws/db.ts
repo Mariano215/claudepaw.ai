@@ -1,6 +1,7 @@
 // src/paws/db.ts
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
+import cronParser from 'cron-parser'
 import type { Paw, PawStatus, PawConfig, PawCycle, PawCycleState, PawFinding } from './types.js'
 
 export function initPawsTables(db: InstanceType<typeof Database>): void {
@@ -160,6 +161,21 @@ export function getBacklogPaws(db: InstanceType<typeof Database>, maxAgeMs: numb
   return rows.map(r => ({ ...r, config: JSON.parse(r.config) }))
 }
 
+const CRON_TZ = process.env.CRON_TZ || 'America/New_York'
+
+function computeRecoveredNextRun(cron: string, currentNextRun: number, now: number): number {
+  if (currentNextRun > now) return currentNextRun
+  try {
+    const interval = cronParser.parseExpression(cron, { tz: CRON_TZ, currentDate: new Date(now) })
+    let next = interval.next().getTime()
+    while (next <= now) next = interval.next().getTime()
+    return next
+  } catch {
+    // Invalid cron should not cause an immediate rerun storm after an approval timeout.
+    return now + 60_000
+  }
+}
+
 /**
  * Reap orphan cycles left by bot crashes. Called once at startup before the
  * scheduler starts ticking. Mirrors `clearStaleRunningTasks()` in src/db.ts.
@@ -168,9 +184,9 @@ export function getBacklogPaws(db: InstanceType<typeof Database>, maxAgeMs: numb
  *   `completed_at IS NULL` and started more than `maxAgeMs` ago are marked
  *   `phase='failed'` with an explanatory error.
  * - Paws stuck in `status='waiting_approval'` whose latest cycle was marked
- *   failed (by the step above) are returned to `active` and given a fresh
- *   `next_run = Date.now()` so they are picked up on the next tick instead of
- *   staying silent forever.
+ *   failed (by the step above) are returned to `active` and resumed on their
+ *   normal schedule. If their stored `next_run` is already stale, it advances
+ *   to the next cron occurrence instead of re-firing immediately.
  *
  * Returns a summary of what was reaped for the startup log.
  */
@@ -196,7 +212,7 @@ export function reapStalePawCycles(
   //      Paw's configured approval_timeout_sec — treat the silent user as an
   //      implicit skip so the Paw can resume its normal schedule.
   const stuck = db.prepare(`
-    SELECT p.id, p.config, c.id as cycle_id, c.phase as cycle_phase, c.started_at as cycle_started_at
+    SELECT p.id, p.config, p.cron, p.next_run, c.id as cycle_id, c.phase as cycle_phase, c.started_at as cycle_started_at
       FROM paws p
       LEFT JOIN (
         SELECT paw_id, id, phase, started_at
@@ -206,7 +222,7 @@ export function reapStalePawCycles(
          )
       ) c ON c.paw_id = p.id
      WHERE p.status = 'waiting_approval'
-  `).all() as Array<{ id: string; config: string; cycle_id: string | null; cycle_phase: string | null; cycle_started_at: number | null }>
+  `).all() as Array<{ id: string; config: string; cron: string; next_run: number; cycle_id: string | null; cycle_phase: string | null; cycle_started_at: number | null }>
 
   let pawsUnstuck = 0
   const now = Date.now()
@@ -240,7 +256,8 @@ export function reapStalePawCycles(
     }
 
     if (latestResolved || approvalTimedOut) {
-      db.prepare("UPDATE paws SET status = 'active', next_run = ? WHERE id = ?").run(now, row.id)
+      const resumedNextRun = computeRecoveredNextRun(row.cron, row.next_run, now)
+      db.prepare("UPDATE paws SET status = 'active', next_run = ? WHERE id = ?").run(resumedNextRun, row.id)
       pawsUnstuck++
     }
   }

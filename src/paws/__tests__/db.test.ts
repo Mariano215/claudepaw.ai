@@ -1,7 +1,7 @@
 // src/paws/__tests__/db.test.ts
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
-import { initPawsTables, createPaw, getPaw, listPaws, updatePawStatus, deletePaw, createCycle, updateCycle, getCycle, listCycles, getLatestCycle } from '../db.js'
+import { initPawsTables, createPaw, getPaw, listPaws, updatePawStatus, updatePawNextRun, deletePaw, createCycle, updateCycle, getCycle, listCycles, getLatestCycle, reapStalePawCycles } from '../db.js'
 import type { PawConfig, PawCycleState } from '../types.js'
 
 let db: InstanceType<typeof Database>
@@ -22,12 +22,15 @@ const emptyCycleState: PawCycleState = {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-04-22T09:00:00-04:00'))
   db = new Database(':memory:')
   initPawsTables(db)
 })
 
 afterEach(() => {
   db.close()
+  vi.useRealTimers()
 })
 
 describe('paws table', () => {
@@ -106,5 +109,32 @@ describe('paw_cycles table', () => {
     const c2 = createCycle(db, 'p1')
     const latest = getLatestCycle(db, 'p1')
     expect(latest!.id).toBe(c2)
+  })
+
+  it('unsticks timed-out approvals without forcing an immediate rerun', () => {
+    createPaw(db, {
+      id: 'p1',
+      project_id: 'default',
+      name: 'P1',
+      agent_id: 'a',
+      cron: '0 9 * * *',
+      config: testConfig,
+    })
+
+    const cycleId = createCycle(db, 'p1')
+    updatePawStatus(db, 'p1', 'waiting_approval')
+    updatePawNextRun(db, 'p1', Date.now() - 60_000)
+    updateCycle(db, cycleId, { phase: 'decide' })
+    db.prepare('UPDATE paw_cycles SET started_at = ? WHERE id = ?').run(Date.now() - 10 * 60 * 1000, cycleId)
+
+    const reaped = reapStalePawCycles(db)
+
+    expect(reaped.pawsUnstuck).toBe(1)
+    expect(getPaw(db, 'p1')!.status).toBe('active')
+    expect(getPaw(db, 'p1')!.next_run).toBeGreaterThan(Date.now())
+
+    const cycle = getCycle(db, cycleId)
+    expect(cycle!.phase).toBe('failed')
+    expect(cycle!.error).toBe('approval timeout — user did not respond')
   })
 })

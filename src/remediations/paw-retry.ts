@@ -19,6 +19,15 @@ const REMEDIATION_ID = 'paw-retry'
 const FAILURE_WINDOW_MS = 30 * 60 * 1000 // only retry recent failures
 const RETRY_DELAY_MS = 10 * 60 * 1000    // wait 10 min after failure
 const MAX_RETRIES_24H = 3                 // per paw
+const NON_RETRYABLE_ERROR_PATTERNS = [
+  /approval timeout/i,
+  /auto-skipped after/i,
+  /agent returned no text/i,
+  /require is not defined/i,
+  /kill switch/i,
+  /cost cap/i,
+  /refused to run/i,
+]
 
 interface FailedCycleRow {
   cycle_id: string
@@ -27,6 +36,11 @@ interface FailedCycleRow {
   completed_at: number
   error: string | null
   next_run: number
+}
+
+function isRetryableError(error: string | null): boolean {
+  if (!error?.trim()) return true
+  return !NON_RETRYABLE_ERROR_PATTERNS.some((pattern) => pattern.test(error))
 }
 
 export const pawRetryRemediation: RemediationDefinition = {
@@ -72,6 +86,11 @@ export const pawRetryRemediation: RemediationDefinition = {
     const skipped: Array<{ paw_id: string; reason: string }> = []
 
     for (const row of rows) {
+      if (!isRetryableError(row.error)) {
+        skipped.push({ paw_id: row.paw_id, reason: `non-retryable error: ${row.error}` })
+        continue
+      }
+
       // Per-paw rate limit: count prior runs where WE retried THIS paw in 24h.
       // We look at the full `retried` array in each prior log entry to catch
       // cases where a multi-retry run touched the same paw.

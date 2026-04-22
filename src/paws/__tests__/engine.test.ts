@@ -173,6 +173,55 @@ describe('runPawCycle', () => {
     expect(cycle!.error).toContain('Agent crashed')
   })
 
+  it('records phase context when the agent throws before returning text', async () => {
+    createPaw(db, {
+      id: 'test-paw',
+      project_id: 'default',
+      name: 'Test Paw',
+      agent_id: 'auditor',
+      cron: '0 */4 * * *',
+      config: testConfig,
+    })
+
+    mockRunAgent.mockRejectedValueOnce(new Error('fetch failed'))
+
+    const cycleId = await runPawCycle(db, 'test-paw', mockRunAgent, mockSend)
+
+    const cycle = getCycle(db, cycleId)
+    expect(cycle!.phase).toBe('failed')
+    expect(cycle!.error).toBe('OBSERVE phase failed: fetch failed')
+  })
+
+  it('records empty-result diagnostics for no-text phases', async () => {
+    createPaw(db, {
+      id: 'test-paw',
+      project_id: 'default',
+      name: 'Test Paw',
+      agent_id: 'auditor',
+      cron: '0 */4 * * *',
+      config: testConfig,
+    })
+
+    mockRunAgent
+      .mockResolvedValueOnce({ text: 'OBSERVE: Festival data gathered' })
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        findings: [
+          { id: 'f1', severity: 3, title: 'Deadline soon', detail: 'Verify immediately', is_new: true },
+        ],
+      }) })
+      .mockResolvedValueOnce({
+        text: null,
+        emptyReason: 'Agent finished successfully but produced an empty result (likely the model returned no text after using 2 tools). 1 turns, 9s.',
+      })
+
+    const cycleId = await runPawCycle(db, 'test-paw', mockRunAgent, mockSend)
+
+    const cycle = getCycle(db, cycleId)
+    expect(cycle!.phase).toBe('failed')
+    expect(cycle!.error).toContain('Agent returned no text for decide phase')
+    expect(cycle!.error).toContain('produced an empty result')
+  })
+
   it('uses pawSend with a keyboard when maxSeverity >= threshold', async () => {
     createPaw(db, {
       id: 'sentinel-patrol',

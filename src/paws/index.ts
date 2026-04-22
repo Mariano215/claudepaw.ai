@@ -63,7 +63,7 @@ export function getDuePaws(): Paw[] {
 
 export async function triggerPaw(
   pawId: string,
-  runAgent: (prompt: string) => Promise<{ text: string | null }>,
+  runAgent: (prompt: string) => Promise<{ text: string | null; emptyReason?: string; resultSubtype?: string }>,
   send: Sender,
   sendApproval?: ApprovalSender,
   pawSend?: PawSender,
@@ -88,7 +88,7 @@ export async function triggerPaw(
 export async function handleApproval(
   pawId: string,
   approved: boolean,
-  runAgent: (prompt: string) => Promise<{ text: string | null }>,
+  runAgent: (prompt: string) => Promise<{ text: string | null; emptyReason?: string; resultSubtype?: string }>,
   send: Sender,
   pawSend?: PawSender,
 ): Promise<void> {
@@ -118,20 +118,20 @@ export async function processPawApproval(
   const { runAgent } = await import('../agent.js')
   const { getSoul, buildAgentPrompt } = await import('../souls.js')
 
-  const agentRunner = async (prompt: string): Promise<{ text: string | null }> => {
+  const agentRunner = async (prompt: string): Promise<{ text: string | null; emptyReason?: string; resultSubtype?: string }> => {
     const soul = paw.agent_id ? getSoul(paw.agent_id) : undefined
     let fullPrompt = prompt
     if (soul) {
       fullPrompt = `${buildAgentPrompt(soul, paw.project_id)}\n\n---\n\n${prompt}`
     }
-    const { text } = await runAgent(fullPrompt, undefined, undefined, undefined, undefined, {
+    const { text, emptyReason, resultSubtype } = await runAgent(fullPrompt, undefined, undefined, undefined, undefined, {
       projectId: paw.project_id,
       source: paw.agent_id ?? 'paw',
     }, {
       projectId: paw.project_id,
       agentId: paw.agent_id ?? 'paw',
     })
-    return { text }
+    return { text, emptyReason, resultSubtype }
   }
 
   await handleApproval(pawId, approved, agentRunner, send, pawSend)

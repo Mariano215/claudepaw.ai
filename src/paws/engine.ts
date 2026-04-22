@@ -9,7 +9,17 @@ import { guardChain } from '../guard/index.js'
 import { logger } from '../logger.js'
 import { extractAndLogFindings } from '../research.js'
 
-type AgentRunner = (prompt: string) => Promise<{ text: string | null }>
+type AgentRunResult = {
+  text: string | null
+  emptyReason?: string
+  resultSubtype?: string
+  eventCount?: number
+  assistantTurns?: number
+  toolUses?: number
+  durationSec?: number
+}
+
+type AgentRunner = (prompt: string) => Promise<AgentRunResult>
 type Sender = (chatId: string, text: string) => Promise<void>
 
 /**
@@ -378,9 +388,19 @@ async function runPhase(
   const hardened = guardChain.hardenPrompt('', basePrompt)
   const prompt = `${hardened.systemPrompt}\n\n${basePrompt}`
 
-  const result = await runAgent(prompt)
+  let result: AgentRunResult
+  try {
+    result = await runAgent(prompt)
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    throw new Error(`${phase.toUpperCase()} phase failed: ${errMsg}`)
+  }
   if (!result.text || result.text.trim().length === 0) {
-    throw new Error(`Agent returned no text for ${phase} phase`)
+    const detail = result.emptyReason
+      ?? (result.resultSubtype ? `Agent ended with subtype "${result.resultSubtype}".` : '')
+    throw new Error(detail
+      ? `Agent returned no text for ${phase} phase. ${detail}`
+      : `Agent returned no text for ${phase} phase`)
   }
   return result.text
 }

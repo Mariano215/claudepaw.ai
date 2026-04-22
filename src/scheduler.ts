@@ -428,20 +428,20 @@ async function executeDueTasks(send: Sender): Promise<void> {
           runningPaws.add(paw.id)
           try {
             const { runAgent: importedRunAgent } = await import('./agent.js')
-            const agentRunner = async (prompt: string): Promise<{ text: string | null }> => {
+            const agentRunner = async (prompt: string): Promise<{ text: string | null; emptyReason?: string; resultSubtype?: string }> => {
               const soul = getSoul(paw.agent_id)
               let fullPrompt = prompt
               if (soul) {
                 fullPrompt = `${buildAgentPrompt(soul, paw.project_id)}\n\n---\n\n${prompt}`
               }
-              const { text } = await importedRunAgent(fullPrompt, undefined, undefined, undefined, undefined, {
+              const { text, emptyReason, resultSubtype } = await importedRunAgent(fullPrompt, undefined, undefined, undefined, undefined, {
                 projectId: paw.project_id,
                 source: paw.agent_id,
               }, {
                 projectId: paw.project_id,
                 agentId: paw.agent_id,
               })
-              return { text }
+              return { text, emptyReason, resultSubtype }
             }
             await triggerPaw(paw.id, agentRunner, send, storedSendApproval, storedPawSend)
           } catch (err) {

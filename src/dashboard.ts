@@ -573,7 +573,7 @@ function handleServerMessage(msg: Record<string, unknown>): void {
       import('./souls.js'),
     ]).then(([{ triggerPaw, getPaw }, { getSoul, buildAgentPrompt }]) => {
       const paw = getPaw(pawId)
-      const agentRunner = async (prompt: string): Promise<{ text: string | null }> => {
+      const agentRunner = async (prompt: string): Promise<{ text: string | null; emptyReason?: string; resultSubtype?: string }> => {
         const agentId = paw?.agent_id
         const projectId = paw?.project_id ?? 'default'
         const soul = agentId ? getSoul(agentId) : undefined
@@ -581,14 +581,14 @@ function handleServerMessage(msg: Record<string, unknown>): void {
         if (soul) {
           fullPrompt = `${buildAgentPrompt(soul, projectId)}\n\n---\n\n${prompt}`
         }
-        const { text } = await runAgent(fullPrompt, undefined, undefined, undefined, undefined, {
+        const { text, emptyReason, resultSubtype } = await runAgent(fullPrompt, undefined, undefined, undefined, undefined, {
           projectId,
           source: agentId ?? 'paw',
         }, {
           projectId,
           agentId: agentId ?? 'paw',
         })
-        return { text }
+        return { text, emptyReason, resultSubtype }
       }
       triggerPaw(pawId, agentRunner, sendFn).catch((err) => {
         logger.error({ err, pawId }, 'Run-paw execution failed')
