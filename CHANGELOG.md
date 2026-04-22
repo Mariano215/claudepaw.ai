@@ -25,6 +25,7 @@ This file follows a lightweight Keep a Changelog style and is intended for human
 - Google OAuth token refresh no longer marks an integration `disconnected` on transient network errors; only hard auth failures (`invalid_grant`, token revoked) flip the flag. Transient failures fall back to the existing token and log a warning.
 
 ### Changed
+- Updated repo docs with a clearer command cheat sheet for commit, push, deploy, OSS sync, and Paw Trader mirror sync workflows.
 - Migrated local TTS defaults, setup docs, dashboard labels, and content guidance from Voxtral on port 8091 to Chatterbox on port 8095 using the new `/v1/tts` `{text, voice}` API with `default` as the default voice.
 - Scheduled task prompts are now prefixed with a preamble instructing agents to skip `git status`/`git diff` and not ask about uncommitted changes, which was previously stalling `newsletter-monday` and `security-weekly-audit` runs.
 - `augmentTaskPrompt()` in the scheduler catches auth/token errors from context builders and runs the task with a degraded-context note instead of killing the whole run.
@@ -36,6 +37,7 @@ This file follows a lightweight Keep a Changelog style and is intended for human
 - Example Company weekly briefing, content-plan, and festival-scan tasks now receive structured Gmail, calendar, and sheet context from the scheduler before the model runs, instead of relying on in-prompt shell commands.
 
 ### Fixed
+- Fixed Paw Trader alert spam by suppressing blind low-score signals before they page the operator and cooling down repeat alerts after a recent committee veto on the same asset/strategy.
 - Fixed Paw Trader committee rationale calibration so risk/trader explanations now see the configured score floor and stop labeling valid low-end signals as "noise" without threshold context.
 - Fixed `cp-competitive-watch` false alarms by moving it onto a deterministic feed collector and only approval-gating new findings that cite evidence URLs from the current observation set.
 - Blocked dashboard `Run Now` on paws already waiting for approval and hardened paw finding dedupe so previously surfaced items stay known unless they return at higher severity.

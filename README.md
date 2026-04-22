@@ -185,6 +185,46 @@ npm run deploy:dashboard
 
 Normal deploys do not overwrite your live local SQLite files with production copies.
 
+## Common Commands
+
+```bash
+# Review local changes before committing
+git status
+git diff --stat
+
+# Commit and push normal repo work
+git add -A
+git commit -m "clear message here"
+git push origin <branch>
+
+# Full production deploy from this repo
+npm run deploy
+
+# Dashboard/bot restart without git steps
+npm run restart
+
+# Sync sanitized OSS mirror of ClaudePaw
+npm run sync:oss
+
+# Preview OSS sync without committing/pushing the mirror
+npm run sync:oss -- --dry-run
+
+# Sync sanitized Paw Trader mirror and push it
+npm run sync:paw-trader
+
+# Preview Paw Trader mirror update without git ops
+npm run sync:paw-trader -- --dry-run
+
+# Create a local Paw Trader mirror commit without pushing
+npm run sync:paw-trader -- --no-push
+```
+
+Notes:
+
+- `npm run deploy` already includes commit and push steps for the main repo.
+- `npm run sync:oss` writes to `/Volumes/T7/Projects/claudepaw-oss`.
+- `npm run sync:paw-trader` writes to `/Volumes/T7/Projects/paw-trader-mirror` unless `PAW_TRADER_MIRROR_DIR` overrides it.
+
 ## Dashboard Auth
 
 The dashboard server now expects `DASHBOARD_API_TOKEN` for every `/api/v1` request.
