@@ -36,6 +36,7 @@ This file follows a lightweight Keep a Changelog style and is intended for human
 - Example Company weekly briefing, content-plan, and festival-scan tasks now receive structured Gmail, calendar, and sheet context from the scheduler before the model runs, instead of relying on in-prompt shell commands.
 
 ### Fixed
+- Fixed Paw Trader committee rationale calibration so risk/trader explanations now see the configured score floor and stop labeling valid low-end signals as "noise" without threshold context.
 - Fixed `cp-competitive-watch` false alarms by moving it onto a deterministic feed collector and only approval-gating new findings that cite evidence URLs from the current observation set.
 - Blocked dashboard `Run Now` on paws already waiting for approval and hardened paw finding dedupe so previously surfaced items stay known unless they return at higher severity.
 - Fixed Paw reliability so approval timeouts resume on the next scheduled cron instead of re-firing immediately, empty paw phases now retain the runtime diagnostic reason in the stored error, and `paw-retry` skips non-transient failures like no-text responses and known code bugs.
