@@ -409,6 +409,30 @@ router.post(
         res.status(404).json({ ok: false, error: 'Paw not found' })
         return
       }
+      const latestCycle = db.prepare(`
+        SELECT * FROM paw_cycles
+         WHERE paw_id = ?
+         ORDER BY started_at DESC, rowid DESC
+         LIMIT 1
+      `).get(req.params.id) as any
+      const waitingApproval =
+        row.status === 'waiting_approval' ||
+        (
+          latestCycle &&
+          latestCycle.phase === 'decide' &&
+          latestCycle.completed_at == null &&
+          (() => {
+            try {
+              return JSON.parse(latestCycle.state || '{}')?.approval_requested === true
+            } catch {
+              return false
+            }
+          })()
+        )
+      if (waitingApproval) {
+        res.status(409).json({ ok: false, error: 'Paw is already waiting for approval' })
+        return
+      }
       broadcastToMac({ type: 'run-paw', pawId: req.params.id })
       res.json({ ok: true, message: 'Run triggered' })
     } catch (err) {

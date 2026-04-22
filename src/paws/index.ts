@@ -71,6 +71,10 @@ export async function triggerPaw(
   const db = getDb()
   const paw = pawsDb.getPaw(db, pawId)
   if (!paw) throw new Error(`Paw not found: ${pawId}`)
+  const pendingApproval = pawsDb.getPendingApprovalCycle(db, pawId)
+  if (pendingApproval) {
+    throw new Error(`Paw ${pawId} is already waiting for approval on cycle ${pendingApproval.id}`)
+  }
 
   const nextRun = computeNextRun(paw.cron)
 

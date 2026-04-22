@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3'
 import type { Paw, PawPhase, PawCycleState, PawFinding, PawDecision, PawCycle, ApprovalSender, PawSender } from './types.js'
 import { buildApprovalCard, type ApprovalFinding } from './approval-card.js'
 import { getProjectName } from './project-name.js'
-import { getPaw, createCycle, updateCycle, getCycle, updatePawStatus } from './db.js'
+import { getPaw, createCycle, updateCycle, getCycle, updatePawStatus, listCycles } from './db.js'
 import { runCollector } from './collectors/index.js'
 import { guardChain } from '../guard/index.js'
 import { logger } from '../logger.js'
@@ -21,6 +21,7 @@ type AgentRunResult = {
 
 type AgentRunner = (prompt: string) => Promise<AgentRunResult>
 type Sender = (chatId: string, text: string) => Promise<void>
+const FINDING_DEDUPE_HISTORY_LIMIT = 10
 
 /**
  * Run a single Paw cycle through all phases.
@@ -110,6 +111,7 @@ export async function runPawCycle(
         is_new: true,
       }]
     }
+    findings = forceSeenFindingsToKnown(db, pawId, cycleId, findings)
 
     state.analysis = analyzeResult
     updateCycle(db, cycleId, { phase: 'decide', state, findings })
@@ -259,6 +261,66 @@ export async function resumePawCycle(
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+function normalizeFindingToken(value: string | null | undefined): string {
+  if (!value) return ''
+  return value
+    .normalize('NFKD')
+    .replace(/[^\x00-\x7F]/g, ' ')
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/\b\d[\d,./:-]*\b/g, '#')
+    .replace(/[^a-z0-9#]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ')
+}
+
+function buildSeenFindingMaps(cycles: PawCycle[]): { byId: Map<string, number>; byTitle: Map<string, number> } {
+  const byId = new Map<string, number>()
+  const byTitle = new Map<string, number>()
+
+  for (const cycle of cycles) {
+    for (const finding of cycle.findings) {
+      const idKey = normalizeFindingToken(finding.id)
+      const titleKey = normalizeFindingToken(finding.title)
+      if (idKey) byId.set(idKey, Math.max(byId.get(idKey) ?? 0, finding.severity))
+      if (titleKey) byTitle.set(titleKey, Math.max(byTitle.get(titleKey) ?? 0, finding.severity))
+    }
+  }
+
+  return { byId, byTitle }
+}
+
+function forceSeenFindingsToKnown(
+  db: InstanceType<typeof Database>,
+  pawId: string,
+  cycleId: string,
+  findings: PawFinding[],
+): PawFinding[] {
+  const priorCycles = listCycles(db, pawId, FINDING_DEDUPE_HISTORY_LIMIT + 1)
+    .filter(c => c.id !== cycleId && (c.phase === 'completed' || c.phase === 'failed'))
+    .slice(0, FINDING_DEDUPE_HISTORY_LIMIT)
+
+  if (priorCycles.length === 0) return findings
+
+  const seen = buildSeenFindingMaps(priorCycles)
+  return findings.map((finding) => {
+    if (finding.is_new === false) return finding
+
+    const seenSeverity = Math.max(
+      seen.byId.get(normalizeFindingToken(finding.id)) ?? 0,
+      seen.byTitle.get(normalizeFindingToken(finding.title)) ?? 0,
+    )
+
+    // Same finding at the same or higher severity was already surfaced in a
+    // recent cycle. Keep it known so paws remain delta-based instead of
+    // re-alerting on the same issue when the model re-emits it as "new".
+    if (seenSeverity >= finding.severity) {
+      return { ...finding, is_new: false }
+    }
+    return finding
+  })
+}
 
 /**
  * True when the cycle has something worth running ACT/REPORT for:

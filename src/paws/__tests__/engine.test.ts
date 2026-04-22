@@ -154,6 +154,103 @@ describe('runPawCycle', () => {
     expect(mockSend).not.toHaveBeenCalled()
   })
 
+  it('forces repeated findings to known when a prior cycle already surfaced them', async () => {
+    createPaw(db, {
+      id: 'test-paw',
+      project_id: 'default',
+      name: 'Test Paw',
+      agent_id: 'auditor',
+      cron: '0 */4 * * *',
+      config: testConfig,
+    })
+
+    mockRunAgent
+      .mockResolvedValueOnce({ text: 'OBSERVE: first sighting' })
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        findings: [
+          { id: 'f-repeat', severity: 3, title: 'Competitor shipped SSE streaming', detail: 'First report', is_new: true },
+        ],
+      }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        decisions: [{ finding_id: 'f-repeat', action: 'act', reason: 'track it' }],
+        max_severity: 3,
+      }) })
+      .mockResolvedValueOnce({ text: 'ACT: logged it' })
+      .mockResolvedValueOnce({ text: 'REPORT: surfaced once' })
+
+    await runPawCycle(db, 'test-paw', mockRunAgent, mockSend)
+
+    vi.clearAllMocks()
+    mockRunAgent
+      .mockResolvedValueOnce({ text: 'OBSERVE: same thing again' })
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        findings: [
+          { id: 'f-repeat', severity: 3, title: 'Competitor shipped SSE streaming', detail: 'Repeated report', is_new: true },
+        ],
+      }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        decisions: [{ finding_id: 'f-repeat', action: 'skip', reason: 'already tracked' }],
+        max_severity: 3,
+      }) })
+
+    const cycleId = await runPawCycle(db, 'test-paw', mockRunAgent, mockSend)
+
+    const cycle = getCycle(db, cycleId)
+    expect(cycle!.findings[0].is_new).toBe(false)
+    expect(cycle!.phase).toBe('completed')
+    expect(cycle!.report).toBeNull()
+    expect(mockSend).not.toHaveBeenCalled()
+  })
+
+  it('allows a repeated finding to resurface when severity increases', async () => {
+    createPaw(db, {
+      id: 'test-paw',
+      project_id: 'default',
+      name: 'Test Paw',
+      agent_id: 'auditor',
+      cron: '0 */4 * * *',
+      config: { ...testConfig, approval_threshold: 5 },
+    })
+
+    mockRunAgent
+      .mockResolvedValueOnce({ text: 'OBSERVE: moderate issue' })
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        findings: [
+          { id: 'f-escalate', severity: 2, title: 'Provider changed pricing policy', detail: 'Initial note', is_new: true },
+        ],
+      }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        decisions: [{ finding_id: 'f-escalate', action: 'act', reason: 'track it' }],
+        max_severity: 2,
+      }) })
+      .mockResolvedValueOnce({ text: 'ACT: recorded it' })
+      .mockResolvedValueOnce({ text: 'REPORT: moderate issue recorded' })
+
+    await runPawCycle(db, 'test-paw', mockRunAgent, mockSend)
+
+    vi.clearAllMocks()
+    mockRunAgent
+      .mockResolvedValueOnce({ text: 'OBSERVE: same issue got worse' })
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        findings: [
+          { id: 'f-escalate', severity: 4, title: 'Provider changed pricing policy', detail: 'Now blocking subscription credits', is_new: true },
+        ],
+      }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        decisions: [{ finding_id: 'f-escalate', action: 'act', reason: 'severity increased' }],
+        max_severity: 4,
+      }) })
+      .mockResolvedValueOnce({ text: 'ACT: escalated response' })
+      .mockResolvedValueOnce({ text: 'REPORT: issue worsened' })
+
+    const cycleId = await runPawCycle(db, 'test-paw', mockRunAgent, mockSend)
+
+    const cycle = getCycle(db, cycleId)
+    expect(cycle!.findings[0].is_new).toBe(true)
+    expect(cycle!.phase).toBe('completed')
+    expect(mockSend).toHaveBeenCalledWith('12345', expect.stringContaining('Cycle complete'))
+  })
+
   it('records error if a phase fails', async () => {
     createPaw(db, {
       id: 'test-paw',

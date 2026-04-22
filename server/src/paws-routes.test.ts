@@ -18,6 +18,7 @@ import {
   grantProjectMembership,
 } from './users.js'
 import { authenticate, scopeProjects } from './auth.js'
+import { broadcastToMac } from './ws.js'
 
 // ---------------------------------------------------------------------------
 // Mock heavy/side-effectful modules
@@ -521,6 +522,30 @@ describe('Paw mutations -- cross-project isolation + role gating', () => {
   it('viewer trying to run-now a paw in their own project -> 403', async () => {
     const res = await httpReq(server, 'POST', '/api/v1/paws/paw-a1/run-now', { headers: tok(viewerToken) })
     expect(res.status).toBe(403)
+  })
+
+  it('editor cannot run-now a paw that is already waiting for approval -> 409', async () => {
+    vi.mocked(broadcastToMac).mockClear()
+    testDb.prepare("UPDATE paws SET status = 'waiting_approval' WHERE id = 'paw-a1'").run()
+    testDb.prepare(`
+      INSERT INTO paw_cycles (id, paw_id, started_at, phase, state, findings, actions_taken, completed_at, error)
+      VALUES ('cycle-waiting', 'paw-a1', ?, 'decide', ?, '[]', '[]', NULL, NULL)
+    `).run(Date.now(), JSON.stringify({
+      observe_raw: 'raw',
+      analysis: 'analysis',
+      decisions: [],
+      approval_requested: true,
+      approval_granted: null,
+      act_result: null,
+    }))
+
+    const res = await httpReq(server, 'POST', '/api/v1/paws/paw-a1/run-now', { headers: tok(editorToken) })
+    expect(res.status).toBe(409)
+    expect(res.body).toEqual({ ok: false, error: 'Paw is already waiting for approval' })
+    expect(vi.mocked(broadcastToMac)).not.toHaveBeenCalled()
+
+    testDb.prepare("DELETE FROM paw_cycles WHERE id = 'cycle-waiting'").run()
+    testDb.prepare("UPDATE paws SET status = 'active' WHERE id = 'paw-a1'").run()
   })
 
   it('editor can read (GET) a paw in their project -> 200', async () => {

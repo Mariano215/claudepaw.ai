@@ -108,6 +108,20 @@ export function getCycle(db: InstanceType<typeof Database>, id: string): PawCycl
   return parseCycleRow(row)
 }
 
+export function getPendingApprovalCycle(db: InstanceType<typeof Database>, pawId: string): PawCycle | undefined {
+  const row = db.prepare(`
+    SELECT * FROM paw_cycles
+     WHERE paw_id = ?
+       AND phase = 'decide'
+       AND completed_at IS NULL
+     ORDER BY started_at DESC, rowid DESC
+     LIMIT 1
+  `).get(pawId) as any
+  if (!row) return undefined
+  const cycle = parseCycleRow(row)
+  return cycle.state.approval_requested ? cycle : undefined
+}
+
 export function updateCycle(
   db: InstanceType<typeof Database>,
   id: string,
