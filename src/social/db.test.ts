@@ -127,10 +127,13 @@ describe('social/db', () => {
     initSocialTables(db)
     const cols = db
       .prepare("PRAGMA table_info(social_posts)")
-      .all() as Array<{ name: string; type: string }>
+      .all() as Array<{ name: string; type: string; notnull: number }>
     const scheduled = cols.find((c) => c.name === 'scheduled_at')
+    const id = cols.find((c) => c.name === 'id')
     expect(scheduled).toBeDefined()
     expect(scheduled!.type.toUpperCase()).toBe('INTEGER')
+    expect(id).toBeDefined()
+    expect(id!.notnull).toBe(1)
   })
 
   it('creates idx_social_due partial index', () => {
@@ -205,5 +208,45 @@ describe('social/db', () => {
 
     expect(hasCrossPostForVideo('default', 'abc12345678')).toBe(true)
     expect(hasCrossPostForVideo('default', 'nonexistent1')).toBe(false)
+  })
+
+  it('repairs null ids from legacy rows and preserves scheduled_at during schema rebuild', () => {
+    const db = new Database(':memory:')
+    db.pragma('journal_mode = WAL')
+    db.exec(`CREATE TABLE social_posts (
+      id               TEXT PRIMARY KEY,
+      platform         TEXT NOT NULL CHECK(platform IN ('linkedin', 'twitter')),
+      content          TEXT NOT NULL,
+      media_url        TEXT,
+      suggested_time   TEXT,
+      cta              TEXT,
+      status           TEXT NOT NULL DEFAULT 'draft'
+                       CHECK(status IN ('draft', 'approved', 'published', 'rejected', 'failed')),
+      platform_post_id TEXT,
+      platform_url     TEXT,
+      error            TEXT,
+      created_at       INTEGER NOT NULL,
+      published_at     INTEGER,
+      scheduled_at     INTEGER,
+      created_by       TEXT NOT NULL DEFAULT 'social',
+      project_id       TEXT NOT NULL DEFAULT 'default'
+    )`)
+    db.prepare(
+      `INSERT INTO social_posts
+         (id, platform, content, status, created_at, scheduled_at, created_by, project_id)
+       VALUES (?, ?, ?, 'approved', ?, ?, 'legacy', ?)`,
+    ).run(null, 'twitter', 'legacy scheduled row', 1_700_000_000_000, 1_700_000_600_000, 'default')
+
+    initSocialTables(db)
+    setSocialDb(db)
+
+    const rows = db.prepare(
+      'SELECT id, platform, scheduled_at FROM social_posts WHERE content = ?',
+    ).all('legacy scheduled row') as Array<{ id: string | null; platform: string; scheduled_at: number | null }>
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.id).toBeTruthy()
+    expect(rows[0]!.platform).toBe('twitter')
+    expect(rows[0]!.scheduled_at).toBe(1_700_000_600_000)
   })
 })

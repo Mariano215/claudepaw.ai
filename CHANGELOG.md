@@ -36,6 +36,7 @@ This file follows a lightweight Keep a Changelog style and is intended for human
 - Example Company weekly briefing, content-plan, and festival-scan tasks now receive structured Gmail, calendar, and sheet context from the scheduler before the model runs, instead of relying on in-prompt shell commands.
 
 ### Fixed
+- Fixed scheduled social post reliability for Facebook/Instagram by repairing legacy `social_posts` rows with missing IDs at startup, enforcing non-null social post IDs in schema rebuilds, and surfacing a specific corruption error instead of the generic `Unknown error`.
 - Fixed dashboard WebSocket `new_message` handler reading `msg.data` when the backend sends `msg.message` + `msg.agentId`. Real-time chat updates in the dashboard now render correctly again.
 - Fixed the dashboard "Run Now" chat path stale-placeholder bug so failed runs now return a descriptive message instead of the old `[No response from agent]` literal (the scheduler paths were already fixed earlier).
 - Removed dead `feed_item` WebSocket handler in the frontend that was never triggered (server receives `feed_item` from the bot and re-emits as `feed_update`, which the frontend already handles).

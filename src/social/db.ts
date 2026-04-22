@@ -9,6 +9,32 @@ import type { SocialPost, DraftInput, PostStatus } from './types.js'
 // Canonical set of platforms allowed in social_posts.platform. Edit here to extend.
 const ALLOWED_PLATFORMS = ['linkedin', 'twitter', 'youtube', 'facebook', 'instagram'] as const
 const PLATFORM_CHECK_LIST = ALLOWED_PLATFORMS.map((p) => `'${p}'`).join(', ')
+const SOCIAL_POSTS_SCHEMA = `CREATE TABLE social_posts_new (
+  id               TEXT NOT NULL PRIMARY KEY,
+  platform         TEXT NOT NULL CHECK(platform IN (${PLATFORM_CHECK_LIST})),
+  content          TEXT NOT NULL,
+  media_url        TEXT,
+  suggested_time   TEXT,
+  cta              TEXT,
+  status           TEXT NOT NULL DEFAULT 'draft'
+                   CHECK(status IN ('draft', 'approved', 'published', 'rejected', 'failed')),
+  platform_post_id TEXT,
+  platform_url     TEXT,
+  error            TEXT,
+  created_at       INTEGER NOT NULL,
+  published_at     INTEGER,
+  scheduled_at     INTEGER,
+  created_by       TEXT NOT NULL DEFAULT 'social',
+  project_id       TEXT NOT NULL DEFAULT 'default'
+)`
+const SOCIAL_POSTS_COPY_SQL = `INSERT INTO social_posts_new
+   (id, platform, content, media_url, suggested_time, cta, status,
+    platform_post_id, platform_url, error, created_at, published_at,
+    scheduled_at, created_by, project_id)
+   SELECT id, platform, content, media_url, suggested_time, cta, status,
+          platform_post_id, platform_url, error, created_at, published_at,
+          scheduled_at, created_by, project_id
+   FROM social_posts`
 
 function runSql(db: Database.Database, sql: string): void {
   // Single-statement wrapper so we avoid multi-statement batching.
@@ -19,7 +45,7 @@ export function initSocialTables(db: Database.Database): void {
   runSql(
     db,
     `CREATE TABLE IF NOT EXISTS social_posts (
-      id               TEXT PRIMARY KEY,
+      id               TEXT NOT NULL PRIMARY KEY,
       platform         TEXT NOT NULL CHECK(platform IN (${PLATFORM_CHECK_LIST})),
       content          TEXT NOT NULL,
       media_url        TEXT,
@@ -61,55 +87,50 @@ export function initSocialTables(db: Database.Database): void {
     )
   } catch (_e) { /* Index already exists */ }
 
-  // Migration: widen platform CHECK constraint on tables created before
-  // ALLOWED_PLATFORMS was extended. SQLite cannot ALTER a CHECK constraint in
-  // place, so we rebuild the table if the stored CREATE TABLE SQL still has
-  // the narrow two-platform list.
-  migratePlatformCheckConstraint(db)
+  // Repair historical rows inserted through out-of-band SQL that omitted `id`.
+  // SQLite permits NULL on non-INTEGER PRIMARY KEY columns unless NOT NULL is
+  // explicit, so older schemas could silently accept corrupt rows.
+  repairNullSocialPostIds(db)
+
+  // Migration: widen platform CHECK constraint and tighten `id` nullability on
+  // older tables. SQLite cannot ALTER either constraint in place, so rebuild.
+  migrateSocialPostsSchema(db)
 }
 
-function migratePlatformCheckConstraint(db: Database.Database): void {
+function repairNullSocialPostIds(db: Database.Database): void {
+  const rows = db
+    .prepare('SELECT rowid FROM social_posts WHERE id IS NULL')
+    .all() as Array<{ rowid: number }>
+  if (rows.length === 0) return
+
+  const lookup = db.prepare('SELECT 1 FROM social_posts WHERE id = ? LIMIT 1')
+  const update = db.prepare('UPDATE social_posts SET id = ? WHERE rowid = ? AND id IS NULL')
+
+  const repair = db.transaction(() => {
+    for (const row of rows) {
+      let id = ''
+      do {
+        id = randomUUID().slice(0, 8)
+      } while (lookup.get(id))
+      update.run(id, row.rowid)
+    }
+  })
+
+  repair()
+}
+
+function migrateSocialPostsSchema(db: Database.Database): void {
   const sqlRow = db
     .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='social_posts'")
     .get() as { sql: string } | undefined
   if (!sqlRow) return
-  // Detect the legacy narrow constraint. Anything that doesn't already allow
-  // youtube is considered stale and rebuilt.
-  if (sqlRow.sql.includes("'youtube'")) return
+  const allowsYoutube = sqlRow.sql.includes("'youtube'")
+  const hasNotNullId = /\bid\s+TEXT\s+NOT\s+NULL\s+PRIMARY\s+KEY\b/i.test(sqlRow.sql)
+  if (allowsYoutube && hasNotNullId) return
 
   const rebuild = db.transaction(() => {
-    runSql(
-      db,
-      `CREATE TABLE social_posts_new (
-        id               TEXT PRIMARY KEY,
-        platform         TEXT NOT NULL CHECK(platform IN (${PLATFORM_CHECK_LIST})),
-        content          TEXT NOT NULL,
-        media_url        TEXT,
-        suggested_time   TEXT,
-        cta              TEXT,
-        status           TEXT NOT NULL DEFAULT 'draft'
-                         CHECK(status IN ('draft', 'approved', 'published', 'rejected', 'failed')),
-        platform_post_id TEXT,
-        platform_url     TEXT,
-        error            TEXT,
-        created_at       INTEGER NOT NULL,
-        published_at     INTEGER,
-        scheduled_at     INTEGER,
-        created_by       TEXT NOT NULL DEFAULT 'social',
-        project_id       TEXT NOT NULL DEFAULT 'default'
-      )`,
-    )
-    runSql(
-      db,
-      `INSERT INTO social_posts_new
-       (id, platform, content, media_url, suggested_time, cta, status,
-        platform_post_id, platform_url, error, created_at, published_at,
-        created_by, project_id)
-       SELECT id, platform, content, media_url, suggested_time, cta, status,
-              platform_post_id, platform_url, error, created_at, published_at,
-              created_by, project_id
-       FROM social_posts`,
-    )
+    runSql(db, SOCIAL_POSTS_SCHEMA)
+    runSql(db, SOCIAL_POSTS_COPY_SQL)
     runSql(db, 'DROP TABLE social_posts')
     runSql(db, 'ALTER TABLE social_posts_new RENAME TO social_posts')
     runSql(db, 'CREATE INDEX IF NOT EXISTS idx_social_status ON social_posts(status)')

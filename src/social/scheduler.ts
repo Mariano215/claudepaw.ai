@@ -32,6 +32,14 @@ export async function publishDueSocialPosts(
   let failed = 0
 
   for (const post of due) {
+    if (!post.id) {
+      failed += 1
+      const error = 'Corrupt social post row: missing id'
+      logger.error({ platform: post.platform, projectId: post.project_id, scheduledAt: post.scheduled_at }, error)
+      await notifyPublishFailure(send, chatId, post, error)
+      continue
+    }
+
     // How late is this post? Warn if > 60 minutes so ops can notice.
     const lagMs = nowMs - (post.scheduled_at ?? nowMs)
     if (lagMs > 60 * 60 * 1000) {

@@ -30,7 +30,7 @@ describe('publishDueSocialPosts', () => {
   })
 
   it('returns zero counts when nothing is due', async () => {
-    const send = vi.fn(async () => {})
+    const send = vi.fn(async (_chatId: string, _text: string) => {})
     const result = await publishDueSocialPosts(send, '123456789')
     expect(result).toEqual({ attempted: 0, published: 0, failed: 0 })
     expect(publish).not.toHaveBeenCalled()
@@ -124,5 +124,45 @@ describe('publishDueSocialPosts', () => {
     const result = await publishDueSocialPosts(send, '123456789')
     expect(result).toEqual({ attempted: 0, published: 0, failed: 0 })
     expect(publish).not.toHaveBeenCalled()
+  })
+
+  it('reports a corruption error instead of Unknown error when a due row is missing its id', async () => {
+    const db = new Database(':memory:')
+    db.pragma('journal_mode = WAL')
+    db.exec(`CREATE TABLE social_posts (
+      id               TEXT PRIMARY KEY,
+      platform         TEXT NOT NULL,
+      content          TEXT NOT NULL,
+      media_url        TEXT,
+      suggested_time   TEXT,
+      cta              TEXT,
+      status           TEXT NOT NULL,
+      platform_post_id TEXT,
+      platform_url     TEXT,
+      error            TEXT,
+      created_at       INTEGER NOT NULL,
+      published_at     INTEGER,
+      scheduled_at     INTEGER,
+      created_by       TEXT NOT NULL,
+      project_id       TEXT NOT NULL
+    )`)
+    db.prepare(
+      `INSERT INTO social_posts
+         (id, platform, content, status, created_at, scheduled_at, created_by, project_id)
+       VALUES (?, ?, ?, 'approved', ?, ?, 'legacy', ?)`,
+    ).run(null, 'facebook', 'broken row', Date.now() - 5_000, Date.now() - 1_000, 'example-company')
+    setSocialDb(db)
+
+    const send = vi.fn(async () => {})
+    const result = await publishDueSocialPosts(send, '123456789')
+
+    expect(result).toEqual({ attempted: 1, published: 0, failed: 1 })
+    expect(publish).not.toHaveBeenCalled()
+    expect(send).toHaveBeenCalledTimes(1)
+    const firstCall = send.mock.calls[0] as unknown as [string, string] | undefined
+    expect(firstCall).toBeDefined()
+    const text = firstCall![1]
+    expect(text).toContain('Corrupt social post row: missing id')
+    expect(text).toContain('Post ID: null')
   })
 })
