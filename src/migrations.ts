@@ -15,6 +15,9 @@
 
 import type Database from 'better-sqlite3'
 import { logger } from './logger.js'
+import { msChannelPulsePhaseInstructions } from './paws/ms-channel-pulse.js'
+import { msSocialCadencePhaseInstructions } from './paws/ms-social-cadence.js'
+import { msTrendScannerPhaseInstructions } from './paws/ms-trend-scanner.js'
 
 interface Migration {
   version: number
@@ -81,6 +84,77 @@ const MIGRATIONS: Migration[] = [
       } finally {
         db.pragma('foreign_keys = ON')
       }
+    },
+  },
+  {
+    version: 3,
+    description: 'Correct Social Cadence Guard to evaluate scheduled and published social state',
+    up: (db) => {
+      const row = db
+        .prepare(`SELECT config FROM paws WHERE id = 'ms-social-cadence'`)
+        .get() as { config: string } | undefined
+
+      if (!row) return
+
+      let config: Record<string, unknown> = {}
+      try {
+        config = JSON.parse(row.config) as Record<string, unknown>
+      } catch {
+        config = {}
+      }
+
+      const nextConfig = {
+        ...config,
+        phase_instructions: {
+          ...(typeof config.phase_instructions === 'object' && config.phase_instructions !== null
+            ? config.phase_instructions as Record<string, unknown>
+            : {}),
+          ...msSocialCadencePhaseInstructions,
+        },
+      }
+
+      db.prepare(`UPDATE paws SET config = ? WHERE id = 'ms-social-cadence'`).run(JSON.stringify(nextConfig))
+    },
+  },
+  {
+    version: 4,
+    description: 'Tighten ClaudePaw Scout/Social paws for concise action-oriented output',
+    up: (db) => {
+      const updatePaw = (
+        pawId: string,
+        approvalThreshold: number,
+        phaseInstructions: Record<string, unknown>,
+      ) => {
+        const row = db
+          .prepare(`SELECT config FROM paws WHERE id = ?`)
+          .get(pawId) as { config: string } | undefined
+
+        if (!row) return
+
+        let config: Record<string, unknown> = {}
+        try {
+          config = JSON.parse(row.config) as Record<string, unknown>
+        } catch {
+          config = {}
+        }
+
+        const nextConfig = {
+          ...config,
+          approval_threshold: approvalThreshold,
+          phase_instructions: {
+            ...(typeof config.phase_instructions === 'object' && config.phase_instructions !== null
+              ? config.phase_instructions as Record<string, unknown>
+              : {}),
+            ...phaseInstructions,
+          },
+        }
+
+        db.prepare(`UPDATE paws SET config = ? WHERE id = ?`).run(JSON.stringify(nextConfig), pawId)
+      }
+
+      updatePaw('ms-trend-scanner', 5, msTrendScannerPhaseInstructions)
+      updatePaw('ms-channel-pulse', 5, msChannelPulsePhaseInstructions)
+      updatePaw('ms-social-cadence', 4, msSocialCadencePhaseInstructions)
     },
   },
   // Add future migrations here:

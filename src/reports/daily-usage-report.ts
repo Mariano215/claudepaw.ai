@@ -513,12 +513,9 @@ async function gatherReportData(): Promise<ReportData> {
 // -----------------------------------------------------------------------------
 
 function subjectFor(data: ReportData): string {
-  const emoji =
-    data.overall_status === 'green' ? '✅' :
-    data.overall_status === 'yellow' ? '⚠️' : '🚨'
   const periodTag = PERIOD_HOURS === 24 ? 'Daily' : PERIOD_HOURS === 168 ? 'Weekly' : `${PERIOD_HOURS}h`
   const date = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-  return `${emoji} ClaudePaw ${periodTag} Report — ${date}`
+  return `ClaudePaw ${periodTag} Report - ${date}`
 }
 
 async function main() {
