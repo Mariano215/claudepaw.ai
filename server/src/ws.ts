@@ -661,6 +661,10 @@ export function getConnectedClients(): { clientId: string; connectedAt: number }
   }))
 }
 
+export function isBotConnected(): boolean {
+  return Boolean(botSocket && botSocket.readyState === WebSocket.OPEN)
+}
+
 /** Send a message to the Mac bot only (registered as 'mac-primary'). */
 export function broadcastToMac(message: Record<string, unknown>): void {
   if (botSocket && botSocket.readyState === WebSocket.OPEN) {

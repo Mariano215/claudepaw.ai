@@ -619,6 +619,7 @@ function handleServerMessage(msg: Record<string, unknown>): void {
     return
   }
 
+
   // Handle messages from the server (e.g., inter-agent messages to execute)
   if (msg.type === 'new_message') {
     logger.info({ message: msg }, 'Received inter-agent message from dashboard')

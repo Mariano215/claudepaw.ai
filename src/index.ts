@@ -405,6 +405,7 @@ async function main(): Promise<void> {
   initScheduler(sendFn, sendApprovalFn, pawSendFn)
 
 
+
   // Register weekly skill synthesis task if not already present
   const existingSynthTask = getTask('learning-weekly-synthesis')
   if (!existingSynthTask) {

@@ -1,4 +1,5 @@
 // src/paws/index.ts
+import type Database from 'better-sqlite3'
 import { getDb } from '../db.js'
 import { logger } from '../logger.js'
 import { computeNextRun } from '../scheduler.js'
