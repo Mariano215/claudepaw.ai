@@ -195,7 +195,7 @@ interface ActionItemEventRow {
 }
 
 const AP_TRANSITIONS: Record<ActionItemStatus, ActionItemStatus[]> = {
-  proposed:    ['approved', 'rejected', 'paused', 'archived'],
+  proposed:    ['approved', 'completed', 'rejected', 'paused', 'archived'],
   approved:    ['in_progress', 'completed', 'paused', 'blocked', 'archived'],
   in_progress: ['completed', 'blocked', 'paused', 'archived'],
   blocked:     ['approved', 'in_progress', 'paused', 'rejected', 'archived'],

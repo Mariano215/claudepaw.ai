@@ -12712,7 +12712,7 @@ const apState = {
 };
 
 const AP_VALID_TRANSITIONS = {
-  proposed: ['approved', 'rejected', 'paused', 'archived'],
+  proposed: ['approved', 'completed', 'rejected', 'paused', 'archived'],
   approved: ['in_progress', 'completed', 'paused', 'blocked', 'archived'],
   in_progress: ['completed', 'blocked', 'paused', 'archived'],
   blocked: ['approved', 'in_progress', 'paused', 'rejected', 'archived'],
