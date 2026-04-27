@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { initDatabase } from '../db.js'
 import { initCredentialStore, getCredential } from '../credentials.js'
 import { CREDENTIAL_ENCRYPTION_KEY } from '../config.js'

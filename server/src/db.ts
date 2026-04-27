@@ -122,6 +122,9 @@ function ensureBotProjectLifecycleSchema(dbh: Database.Database): void {
   if (!hasColumn(dbh, 'project_settings', 'daily_cost_cap_usd')) {
     dbh.exec(`ALTER TABLE project_settings ADD COLUMN daily_cost_cap_usd REAL`)
   }
+  if (!hasColumn(dbh, 'project_settings', 'page_overrides')) {
+    dbh.exec(`ALTER TABLE project_settings ADD COLUMN page_overrides TEXT DEFAULT NULL`)
+  }
 }
 
 /** Open the bot DB in read-only mode (for GET queries). Returns null if file not found. */
@@ -2071,6 +2074,7 @@ export interface ProjectSettings {
   model_tier: string | null
   monthly_cost_cap_usd: number | null
   daily_cost_cap_usd: number | null
+  page_overrides: string | null
 }
 
 export function getAllProjects(): Project[] {
@@ -2107,7 +2111,7 @@ export function getAllProjectsWithSettings(): Array<Project & Partial<ProjectSet
     SELECT p.*, ps.theme_id, ps.primary_color, ps.accent_color, ps.sidebar_color, ps.logo_path,
            ps.execution_provider, ps.execution_provider_secondary, ps.execution_provider_fallback, ps.execution_model,
            ps.execution_model_primary, ps.execution_model_secondary, ps.execution_model_fallback,
-           ps.fallback_policy, ps.model_tier
+           ps.fallback_policy, ps.model_tier, ps.page_overrides
     FROM projects p
     LEFT JOIN project_settings ps ON ps.project_id = p.id
     ORDER BY
@@ -2242,6 +2246,7 @@ export function upsertProjectSettingsInDb(input: {
   model_tier?: string
   monthly_cost_cap_usd?: number | null
   daily_cost_cap_usd?: number | null
+  page_overrides?: string | null
 }): void {
   const bdb = getBotDbWrite()
   if (!bdb) throw new Error('Bot database not available')

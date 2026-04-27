@@ -238,6 +238,9 @@ function selectProject(project, opts) {
         primary_color: project.primary_color,
         accent_color: project.accent_color,
         sidebar_color: project.sidebar_color,
+        page_overrides: typeof project.page_overrides === 'string'
+          ? JSON.parse(project.page_overrides)
+          : (project.page_overrides || null),
       }
     };
   } else {
@@ -262,6 +265,9 @@ function selectProject(project, opts) {
 
   // Apply project theme colors
   applyProjectTheme(currentProject.settings);
+
+  // Apply per-project sidebar page visibility
+  applyPageVisibility(currentProject.slug, currentProject.settings && currentProject.settings.page_overrides);
 
   // Update header subtitle
   const subtitle = document.querySelector('.header-subtitle');
@@ -3081,6 +3087,15 @@ function navigateToPage(pageId, pushState = true) {
   // Show target page
   const target = document.getElementById(pageId);
   if (target) {
+    // Redirect to dashboard if page is hidden for current project
+    var _pgSlug = currentProject && currentProject.slug;
+    var _pgOverrides = (currentProject && currentProject.settings && currentProject.settings.page_overrides) || {};
+    var _pgVis = Object.assign({}, PAGE_DEFAULTS[_pgSlug] || {}, _pgOverrides);
+    var _pgKey = pageId.replace('page-', '');
+    if (_pgVis[_pgKey] === false) {
+      navigateToPage('page-dashboard', pushState);
+      return;
+    }
     target.hidden = false;
     target.style.opacity = '0';
     target.style.transform = 'translateY(10px)';
@@ -10866,6 +10881,7 @@ function renderSettingsProjectBar() {
       renderColorOverrides();
       renderExecutionDefaults();
       loadCostGate(proj.id);
+      renderSidebarPagesSettings(proj);
     }
   });
 
@@ -10879,6 +10895,7 @@ function renderSettingsProjectBar() {
     renderColorOverrides();
     renderExecutionDefaults();
     loadCostGate(initial.id);
+    renderSidebarPagesSettings(initial);
   }
 }
 
@@ -11237,6 +11254,7 @@ function saveProjectSettings() {
     if (currentProject.id === settingsProject.id) {
       currentProject.settings = saved;
       applyProjectTheme(saved);
+      applyPageVisibility(currentProject.slug, saved.page_overrides || null);
     }
     setSettingsStatus('', 'Saved');
   }).catch(err => {
@@ -11256,12 +11274,114 @@ function resetProjectSettings() {
       if (idx >= 0) Object.assign(allProjects[idx], saved || {});
       renderColorOverrides();
       renderExecutionDefaults();
+      renderSidebarPagesSettings(settingsProject);
       if (settingsProject.theme_id) {
         const theme = getThemeById(settingsProject.theme_id);
         if (theme) applyThemeToRoot(theme);
       }
     })
     .catch(err => console.warn('Failed to reset settings view:', err));
+}
+
+function renderSidebarPagesSettings(proj) {
+  const grid = document.getElementById('sidebar-pages-grid');
+  if (!grid) return;
+  while (grid.firstChild) grid.removeChild(grid.firstChild);
+
+  if (!proj || !proj.id) return;
+
+  const slug = proj.slug || '';
+  const defaults = PAGE_DEFAULTS[slug] || {};
+  const rawOverrides = proj.page_overrides;
+  const overrides = typeof rawOverrides === 'string'
+    ? JSON.parse(rawOverrides)
+    : (rawOverrides || {});
+  const current = Object.assign({}, defaults, overrides);
+
+  // Section header
+  const header = document.createElement('div');
+  header.className = 'pages-section-header';
+  const title = document.createElement('span');
+  title.className = 'pages-section-title';
+  title.textContent = 'Sidebar Pages';
+  const resetBtn = document.createElement('button');
+  resetBtn.className = 'btn-secondary';
+  resetBtn.style.cssText = 'font-size:0.72rem;padding:3px 8px;';
+  resetBtn.textContent = 'Reset to defaults';
+  resetBtn.onclick = function() {
+    saveSidebarPageOverrides(proj, null);
+  };
+  header.appendChild(title);
+  header.appendChild(resetBtn);
+  grid.appendChild(header);
+
+  const pageGrid = document.createElement('div');
+  pageGrid.className = 'pages-grid';
+
+  SIDEBAR_PAGES.forEach(function(page) {
+    const isOn = current[page.id] !== false;
+    const row = document.createElement('div');
+    row.className = 'pages-grid__row' + (isOn ? '' : ' pages-grid__row--off');
+
+    const label = document.createElement('span');
+    label.className = 'pages-grid__label';
+    label.textContent = page.label;
+
+    const toggle = document.createElement('label');
+    toggle.className = 'cp-toggle';
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = isOn;
+    input.dataset.pageId = page.id;
+    input.onchange = function() {
+      row.className = 'pages-grid__row' + (input.checked ? '' : ' pages-grid__row--off');
+      // Collect all current toggle states and save
+      var newOverrides = {};
+      pageGrid.querySelectorAll('input[type=checkbox]').forEach(function(cb) {
+        var pid = cb.dataset.pageId;
+        var defaultOn = defaults[pid] !== false;
+        // Only write overrides that differ from the default
+        if (cb.checked !== defaultOn) newOverrides[pid] = cb.checked;
+      });
+      saveSidebarPageOverrides(proj, Object.keys(newOverrides).length ? newOverrides : null);
+    };
+
+    const track = document.createElement('span');
+    track.className = 'cp-toggle__track';
+
+    toggle.appendChild(input);
+    toggle.appendChild(track);
+    row.appendChild(label);
+    row.appendChild(toggle);
+    pageGrid.appendChild(row);
+  });
+
+  grid.appendChild(pageGrid);
+}
+
+function saveSidebarPageOverrides(proj, overrides) {
+  if (!proj || !proj.id) return;
+  fetch(API + '/projects/' + proj.id + '/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ page_overrides: overrides }),
+  }).then(r => r.json()).then(saved => {
+    if (saved && saved.error) { console.warn('Failed to save page overrides:', saved.error); return; }
+    const newOverrides = saved.page_overrides || null;
+    proj.page_overrides = newOverrides;
+    const idx = allProjects.findIndex(p => p.id === proj.id);
+    if (idx >= 0) allProjects[idx].page_overrides = newOverrides;
+    if (currentProject.id === proj.id) {
+      if (currentProject.settings) currentProject.settings.page_overrides = newOverrides;
+      applyPageVisibility(currentProject.slug, newOverrides);
+    }
+    renderSidebarPagesSettings(proj);
+    setSettingsStatus('', 'Saved');
+  }).catch(err => {
+    console.warn('Failed to save page overrides:', err);
+    setSettingsStatus('error', 'Save failed');
+  });
 }
 
 
@@ -13497,10 +13617,41 @@ initAuthGate();
 // Admin visibility helpers
 // ---------------------------------------------------------------------------
 
+// Page visibility defaults per project slug.
+// false = hidden by default; absence = visible by default.
+// Unknown slugs (new projects) default to all pages visible.
+const PAGE_DEFAULTS = {
+  'example-company': { paws: false, knowledge: false },
+};
+
+// Pages shown in the sidebar (order matches sidebar HTML)
+const SIDEBAR_PAGES = [
+  { id: 'agents',      label: '🤖 AI Agents' },
+  { id: 'action-plan', label: '📋 Action Plan' },
+  { id: 'pipeline',    label: '⚡ Pipeline' },
+  { id: 'board',       label: '📅 Monday Board' },
+  { id: 'research',    label: '🔬 Research' },
+  { id: 'comms',       label: '💬 Comms' },
+  { id: 'chat',        label: '💬 Chat' },
+  { id: 'logging',     label: '📝 Logging' },
+  { id: 'sops',        label: '⏰ Cron Jobs' },
+  { id: 'paws',        label: '🐾 Paws Mode' },
+  { id: 'knowledge',   label: '🧠 Knowledge Graph' },
+];
+
 function applyAdminVisibility() {
   const isAdmin = CURRENT_USER && CURRENT_USER.isAdmin;
   document.querySelectorAll('.sidebar-link--admin-only').forEach(el => {
     el.style.display = isAdmin ? '' : 'none';
+  });
+}
+
+function applyPageVisibility(projectSlug, overrides) {
+  var defaults = PAGE_DEFAULTS[projectSlug] || {};
+  var visibility = Object.assign({}, defaults, overrides || {});
+  document.querySelectorAll('.sidebar-link[data-page]').forEach(function(link) {
+    var pageId = link.dataset.page.replace('page-', '');
+    link.style.display = (visibility[pageId] === false) ? 'none' : '';
   });
 }
 

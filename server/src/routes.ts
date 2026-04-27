@@ -2450,7 +2450,8 @@ router.delete('/projects/:id', requireAdmin, (req: Request, res: Response) => {
 router.get('/projects/:id/settings', requireProjectRead('id'), (req: Request, res: Response) => {
   const id = param(req, 'id')
   const settings = getProjectSettingsById(id)
-  res.json(settings ?? {})
+  if (!settings) { res.json({}); return }
+  res.json({ ...settings, page_overrides: settings.page_overrides ? JSON.parse(settings.page_overrides) : null })
 })
 
 router.put('/projects/:id/settings', requireProjectRole('editor'), (req: Request, res: Response) => {
@@ -2515,6 +2516,9 @@ router.put('/projects/:id/settings', requireProjectRole('editor'), (req: Request
     const accent_color = body.accent_color != null ? String(body.accent_color) : undefined
     const sidebar_color = body.sidebar_color != null ? String(body.sidebar_color) : undefined
     const logo_path = body.logo_path != null ? String(body.logo_path) : undefined
+    const page_overrides = 'page_overrides' in body
+      ? (body.page_overrides !== null ? JSON.stringify(body.page_overrides) : null)
+      : undefined
     upsertProjectSettingsInDb({
       project_id: id,
       theme_id,
@@ -2531,6 +2535,7 @@ router.put('/projects/:id/settings', requireProjectRole('editor'), (req: Request
       execution_model_fallback,
       fallback_policy,
       model_tier,
+      ...(page_overrides !== undefined ? { page_overrides } : {}),
     })
     broadcastToMac({
       type: 'project_settings_sync',
@@ -2552,7 +2557,8 @@ router.put('/projects/:id/settings', requireProjectRole('editor'), (req: Request
         model_tier: model_tier ?? null,
       },
     })
-    res.json(getProjectSettingsById(id))
+    const saved = getProjectSettingsById(id)
+    res.json({ ...(saved ?? {}), page_overrides: saved?.page_overrides ? JSON.parse(saved.page_overrides) : null })
   } catch (err: any) {
     res.status(400).json({ error: err.message })
   }
