@@ -11,6 +11,7 @@ import { generateAndSendNewsletter } from './newsletter/index.js'
 import { logger } from './logger.js'
 import { BOT_API_TOKEN, DASHBOARD_URL } from './config.js'
 import { startRequest, recordError } from './telemetry.js'
+import { postEventToServer } from './event-sync.js'
 import { fireTaskCompleted } from './webhooks/index.js'
 import { extractAndLogFindings } from './research.js'
 import { parseActionItemsFromAgentOutput, ingestParsedItems } from './action-items.js'
@@ -716,15 +717,7 @@ async function runSingleScheduledTask(task: ScheduledTask, send: Sender): Promis
         logger.warn({ err }, 'Scheduler telemetry finalize failed (non-fatal)')
       }
       try {
-        const row = tracker.toEventRow()
-        fetch(`${DASHBOARD_URL}/api/v1/chat/events`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(BOT_API_TOKEN ? { 'x-dashboard-token': BOT_API_TOKEN } : {}),
-          },
-          body: JSON.stringify(row),
-        }).catch((err: unknown) => {
+        postEventToServer(tracker.toEventRow()).catch((err: unknown) => {
           logger.warn({ err }, 'Scheduler telemetry sync failed (non-fatal)')
         })
       } catch (err) {
@@ -890,15 +883,7 @@ export async function runTaskNow(task: ScheduledTask, send: Sender): Promise<voi
         logger.warn({ err }, 'Scheduler telemetry finalize failed (non-fatal)')
       }
       try {
-        const row = tracker.toEventRow()
-        fetch(`${DASHBOARD_URL}/api/v1/chat/events`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(BOT_API_TOKEN ? { 'x-dashboard-token': BOT_API_TOKEN } : {}),
-          },
-          body: JSON.stringify(row),
-        }).catch((err: unknown) => {
+        postEventToServer(tracker.toEventRow()).catch((err: unknown) => {
           logger.warn({ err }, 'Scheduler telemetry sync failed (non-fatal)')
         })
       } catch (err) {

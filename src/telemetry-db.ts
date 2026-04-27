@@ -263,6 +263,19 @@ export function initTelemetryDatabase(): void {
   d.exec(`CREATE INDEX IF NOT EXISTS idx_tool_calls_event ON tool_calls(event_id)`)
   d.exec(`CREATE INDEX IF NOT EXISTS idx_tool_calls_name_started ON tool_calls(tool_name, started_at)`)
 
+  // Event sync retry queue -- tracks events that failed to POST to Hostinger.
+  // seedSyncQueue() in event-sync.ts populates this on startup; retryUnsyncedEvents()
+  // drains it every 5 min. INSERT OR IGNORE on both sides makes it idempotent.
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS event_sync_queue (
+      event_id         TEXT PRIMARY KEY,
+      queued_at        INTEGER NOT NULL,
+      retry_count      INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at  INTEGER
+    )
+  `)
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_sync_queue_queued ON event_sync_queue(queued_at)`)
+
   logger.info('Telemetry database initialized')
 }
 

@@ -109,6 +109,10 @@ export async function publish(postId: string): Promise<boolean> {
       markFailed(postId, 'Instagram posts require an image URL')
       return false
     }
+    if (post.media_url.startsWith('file://')) {
+      markFailed(postId, `Instagram media_url must be a public HTTPS URL, not a local path: ${post.media_url}`)
+      return false
+    }
     result = await postInstagram(post.content, config, post.media_url)
   } else if (post.platform === 'youtube') {
     const config = resolveYouTubeConfig(projectId)

@@ -32,6 +32,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { logger } from './logger.js'
 import { startRequest } from './telemetry.js'
+import { postEventToServer } from './event-sync.js'
 import { guardChain } from './guard/index.js'
 import { GUARD_CONFIG } from './guard/config.js'
 import { fireAgentCompleted, fireGuardBlocked } from './webhooks/index.js'
@@ -784,17 +785,9 @@ export async function processMessage(
     } catch (err) {
       logger.error({ err }, 'Telemetry finalize failed')
     }
-    // Sync event to Hostinger DB so GET /chat returns full history (fire-and-forget)
+    // Sync event to Hostinger DB so GET /chat returns full history (queued retry on failure)
     try {
-      const row = tracker.toEventRow()
-      fetch(`${DASHBOARD_BASE_URL}/api/v1/chat/events`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(BOT_API_TOKEN ? { 'x-dashboard-token': BOT_API_TOKEN } : {}),
-        },
-        body: JSON.stringify(row),
-      }).catch((err) => {
+      postEventToServer(tracker.toEventRow()).catch((err) => {
         logger.warn({ err }, 'Event sync to Hostinger failed (non-fatal)')
       })
     } catch (err) {

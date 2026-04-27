@@ -334,7 +334,15 @@ async function main(): Promise<void> {
     logger.error({ err }, '[remediations] Failed to initialize -- continuing without auto-fixes')
   }
 
-  // 4b. Retention: purge agent_events older than AGENT_EVENTS_RETENTION_DAYS
+  // 4b. Event sync retry -- backfills server DB on startup, retries failed POSTs every 5 min.
+  try {
+    const { startEventSyncRetry } = await import('./event-sync.js')
+    startEventSyncRetry()
+  } catch (err) {
+    logger.error({ err }, '[event-sync] Failed to start retry loop -- continuing without sync retry')
+  }
+
+  // 4c. Retention: purge agent_events older than AGENT_EVENTS_RETENTION_DAYS
   //     (default 180). Runs 60s after boot, then every 6h.
   try {
     const { startRetentionJob } = await import('./retention.js')
