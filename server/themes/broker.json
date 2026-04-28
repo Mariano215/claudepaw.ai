@@ -1,0 +1,47 @@
+{
+  "id": "broker",
+  "name": "Paw Broker",
+  "description": "Copper and slate -- BRRRR construction signal on a deep slate base",
+  "colors": {
+    "bgBase": "#0b1220",
+    "bgRaised": "#111a2e",
+    "bgSurface": "#1a2540",
+    "bgOverlay": "#1e293b",
+    "bgGlass": "rgba(17, 26, 46, 0.80)",
+    "accent": "#b45309",
+    "accentDim": "rgba(180, 83, 9, 0.13)",
+    "accentGlow": "rgba(180, 83, 9, 0.32)",
+    "accentSoft": "rgba(180, 83, 9, 0.07)",
+    "magenta": "#d97706",
+    "cyan": "#38bdf8",
+    "green": "#059669",
+    "amber": "#d97706",
+    "red": "#dc2626",
+    "purple": "#7c3aed",
+    "textPrimary": "#e8edf5",
+    "textSecondary": "#94a3b8",
+    "textMuted": "#64748b",
+    "textOnAccent": "#0b1220",
+    "borderColor": "rgba(180, 83, 9, 0.18)",
+    "borderSubtle": "rgba(255, 255, 255, 0.06)",
+    "sidebarBg": "rgba(17, 26, 46, 0.85)",
+    "headerBg": "#0b1220",
+    "cardBg": "#1a2540",
+    "cardBorder": "rgba(180, 83, 9, 0.18)",
+    "feedHighlight": "rgba(180, 83, 9, 0.07)"
+  },
+  "fonts": {
+    "heading": "'Outfit', sans-serif",
+    "body": "'Outfit', sans-serif",
+    "mono": "'JetBrains Mono', monospace"
+  },
+  "gradients": {
+    "card": "linear-gradient(135deg, rgba(180, 83, 9, 0.05) 0%, rgba(5, 150, 105, 0.02) 60%, transparent 100%)",
+    "cardHover": "linear-gradient(135deg, rgba(180, 83, 9, 0.09) 0%, rgba(5, 150, 105, 0.04) 60%, transparent 100%)"
+  },
+  "shadows": {
+    "card": "0 1px 3px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3)",
+    "hover": "0 0 0 1px rgba(180,83,9,0.32), 0 4px 24px rgba(0,0,0,0.4), 0 0 32px rgba(180,83,9,0.07)",
+    "glow": "0 0 8px rgba(180,83,9,0.13), 0 0 24px rgba(180,83,9,0.05)"
+  }
+}

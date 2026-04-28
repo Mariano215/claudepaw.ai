@@ -803,6 +803,326 @@ export function initDatabase(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_extraction_runs_started ON extraction_runs(started_at DESC);
   `)
 
+  // ===========================================================================
+  // Paw Broker domain schema (mirrored from server/src/db.ts).
+  //
+  // Why a mirror: paw collectors live in this process (`src/paws/collectors/*`)
+  // and call getDb() -> bot DB. Broker tables originate in the server process
+  // for the dashboard, but collectors need read+write access for INSERT (deals,
+  // father_broker_listings, tax_events, cost_seg_studies, financing_events).
+  // Easier to replicate schema than to open a second DB handle. ADR-011.
+  //
+  // Drift discipline: keep CREATE TABLE shapes byte-identical between this
+  // block and server/src/db.ts. Add migration helpers to the ALTER block below
+  // when adding columns later. The participation_log idx names and CHECK
+  // constraints must match -- the dashboard's read queries assume identical
+  // column ordering.
+  // ===========================================================================
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS properties (
+      id                 TEXT    PRIMARY KEY,
+      project_id         TEXT    NOT NULL,
+      address            TEXT    NOT NULL,
+      zip                TEXT,
+      county             TEXT,
+      lat                REAL,
+      lng                REAL,
+      beds               INTEGER,
+      baths              REAL,
+      sqft               INTEGER,
+      year_built         INTEGER,
+      property_type      TEXT,
+      use_type           TEXT    CHECK(use_type IN ('str','ltr','primary','flip','vacant') OR use_type IS NULL),
+      acquisition_date   TEXT,
+      acquisition_price  REAL,
+      cost_basis         REAL,
+      current_arv        REAL,
+      brrrr_phase        TEXT    CHECK(brrrr_phase IN ('buy','rehab','rent','refi','recycle','exit') OR brrrr_phase IS NULL),
+      str_listing_url    TEXT,
+      status             TEXT    NOT NULL DEFAULT 'active' CHECK(status IN ('active','sold','under_contract','passed','archived')),
+      created_at         INTEGER NOT NULL,
+      updated_at         INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_properties_project ON properties(project_id);
+    CREATE INDEX IF NOT EXISTS idx_properties_use_type ON properties(project_id, use_type);
+
+    CREATE TABLE IF NOT EXISTS improvements (
+      id              TEXT    PRIMARY KEY,
+      project_id      TEXT    NOT NULL,
+      property_id     TEXT    NOT NULL,
+      description     TEXT    NOT NULL,
+      cost            REAL    NOT NULL,
+      date            TEXT,
+      photos_url      TEXT,
+      receipts_url    TEXT,
+      created_at      INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_improvements_project ON improvements(project_id);
+    CREATE INDEX IF NOT EXISTS idx_improvements_property ON improvements(property_id);
+
+    CREATE TABLE IF NOT EXISTS deals (
+      id                 TEXT    PRIMARY KEY,
+      project_id         TEXT    NOT NULL,
+      source_paw_id      TEXT,
+      address            TEXT    NOT NULL,
+      zip                TEXT,
+      list_price         REAL,
+      max_offer          REAL,
+      est_arv            REAL,
+      est_rehab          REAL,
+      est_rent_monthly   REAL,
+      est_str_adr        REAL,
+      est_str_occupancy  REAL,
+      est_cap_rate       REAL,
+      est_coc            REAL,
+      deal_type          TEXT    CHECK(deal_type IN ('str','ltr-brrrr','flip','hold','wholesale') OR deal_type IS NULL),
+      status             TEXT    NOT NULL DEFAULT 'sourced' CHECK(status IN ('sourced','under-review','under-contract','closed','passed')),
+      severity           INTEGER,
+      notes              TEXT,
+      created_at         INTEGER NOT NULL,
+      updated_at         INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_deals_project_status ON deals(project_id, status);
+    CREATE INDEX IF NOT EXISTS idx_deals_severity ON deals(project_id, severity DESC);
+
+    CREATE TABLE IF NOT EXISTS comps (
+      id              TEXT    PRIMARY KEY,
+      project_id      TEXT    NOT NULL,
+      subject_address TEXT    NOT NULL,
+      comp_address    TEXT    NOT NULL,
+      sold_price      REAL,
+      sold_date       TEXT,
+      beds            INTEGER,
+      baths           REAL,
+      sqft            INTEGER,
+      distance_mi     REAL,
+      source          TEXT,
+      fetched_at      INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_comps_project_subject ON comps(project_id, subject_address);
+
+    CREATE TABLE IF NOT EXISTS str_comps (
+      id              TEXT    PRIMARY KEY,
+      project_id      TEXT    NOT NULL,
+      subject_address TEXT    NOT NULL,
+      listing_url     TEXT,
+      adr             REAL,
+      occupancy_pct   REAL,
+      revpar          REAL,
+      beds            INTEGER,
+      baths           REAL,
+      source          TEXT,
+      fetched_at      INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_str_comps_project_subject ON str_comps(project_id, subject_address);
+
+    CREATE TABLE IF NOT EXISTS rehab_estimates (
+      id              TEXT    PRIMARY KEY,
+      project_id      TEXT    NOT NULL,
+      property_id     TEXT    NOT NULL,
+      scope_json      TEXT,
+      total_est       REAL,
+      total_actual    REAL,
+      contingency_pct REAL,
+      status          TEXT    NOT NULL DEFAULT 'planned' CHECK(status IN ('planned','active','complete','cancelled')),
+      started_at      INTEGER,
+      completed_at    INTEGER,
+      created_at      INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_rehab_property ON rehab_estimates(property_id);
+
+    CREATE TABLE IF NOT EXISTS financing_events (
+      id              TEXT    PRIMARY KEY,
+      project_id      TEXT    NOT NULL,
+      property_id     TEXT,
+      event_type      TEXT    NOT NULL CHECK(event_type IN ('purchase','refi','heloc','heloc_draw','payoff','hard_money','dscr_loan','seller_finance','other')),
+      loan_amount     REAL,
+      rate            REAL,
+      term_months     INTEGER,
+      ltv             REAL,
+      lender          TEXT,
+      closing_date    TEXT,
+      points          REAL,
+      closing_costs   REAL,
+      notes           TEXT,
+      created_at      INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_financing_property ON financing_events(property_id);
+
+    CREATE TABLE IF NOT EXISTS tenants (
+      id               TEXT    PRIMARY KEY,
+      project_id       TEXT    NOT NULL,
+      name             TEXT    NOT NULL,
+      email            TEXT,
+      phone            TEXT,
+      screening_score  INTEGER,
+      notes            TEXT,
+      created_at       INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tenants_project ON tenants(project_id);
+
+    CREATE TABLE IF NOT EXISTS leases (
+      id              TEXT    PRIMARY KEY,
+      project_id      TEXT    NOT NULL,
+      property_id     TEXT    NOT NULL,
+      tenant_id       TEXT    NOT NULL,
+      start_date      TEXT,
+      end_date        TEXT,
+      monthly_rent    REAL,
+      deposit         REAL,
+      status          TEXT    NOT NULL DEFAULT 'active' CHECK(status IN ('active','expired','terminated','holdover')),
+      created_at      INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_leases_property ON leases(property_id);
+    CREATE INDEX IF NOT EXISTS idx_leases_tenant ON leases(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS str_bookings (
+      id              TEXT    PRIMARY KEY,
+      project_id      TEXT    NOT NULL,
+      property_id     TEXT    NOT NULL,
+      platform        TEXT    NOT NULL CHECK(platform IN ('airbnb','vrbo','direct','booking_com','other')),
+      guest_name      TEXT,
+      check_in        TEXT,
+      check_out       TEXT,
+      nights          INTEGER,
+      gross_rev       REAL,
+      fees            REAL,
+      net_payout      REAL,
+      status          TEXT    NOT NULL DEFAULT 'confirmed' CHECK(status IN ('inquiry','confirmed','in_stay','completed','cancelled')),
+      created_at      INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_str_bookings_property ON str_bookings(property_id);
+    CREATE INDEX IF NOT EXISTS idx_str_bookings_check_in ON str_bookings(project_id, check_in);
+
+    CREATE TABLE IF NOT EXISTS expenses (
+      id              TEXT    PRIMARY KEY,
+      project_id      TEXT    NOT NULL,
+      property_id     TEXT,
+      category        TEXT    NOT NULL CHECK(category IN ('mortgage','tax','insurance','repair','capex','utility','mgmt','cleaning','supplies','marketing','legal','other')),
+      amount          REAL    NOT NULL,
+      occurred_on     TEXT    NOT NULL,
+      vendor          TEXT,
+      deductible      INTEGER NOT NULL DEFAULT 1,
+      notes           TEXT,
+      created_at      INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_expenses_property ON expenses(property_id);
+    CREATE INDEX IF NOT EXISTS idx_expenses_occurred ON expenses(project_id, occurred_on);
+
+    CREATE TABLE IF NOT EXISTS tax_events (
+      id              TEXT    PRIMARY KEY,
+      project_id      TEXT    NOT NULL,
+      event_type      TEXT    NOT NULL CHECK(event_type IN ('1031_id_clock','1031_close_clock','q_estimate','reps_milestone','str_milestone','cost_seg_engagement','obbb_election','ltta_recert','property_tax_due','other')),
+      property_id     TEXT,
+      due_date        TEXT,
+      amount          REAL,
+      hours           REAL,
+      status          TEXT    NOT NULL DEFAULT 'open' CHECK(status IN ('open','done','missed','waived')),
+      notes           TEXT,
+      created_at      INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tax_events_due ON tax_events(project_id, due_date);
+
+    CREATE TABLE IF NOT EXISTS participation_log (
+      id              TEXT    PRIMARY KEY,
+      project_id      TEXT    NOT NULL,
+      property_id     TEXT,
+      date            TEXT    NOT NULL,
+      activity        TEXT    NOT NULL,
+      hours           REAL    NOT NULL,
+      evidence_url    TEXT,
+      participant     TEXT    NOT NULL CHECK(participant IN ('mariano','father','spouse','contractor','manager','other')),
+      counted_for     TEXT    NOT NULL CHECK(counted_for IN ('str','reps','both','none')),
+      notes           TEXT,
+      created_at      INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_participation_property ON participation_log(property_id);
+    CREATE INDEX IF NOT EXISTS idx_participation_project_date ON participation_log(project_id, date);
+    CREATE INDEX IF NOT EXISTS idx_participation_counted ON participation_log(project_id, counted_for);
+
+    CREATE TABLE IF NOT EXISTS tax_abatements (
+      id                  TEXT    PRIMARY KEY,
+      project_id          TEXT    NOT NULL,
+      property_id         TEXT    NOT NULL,
+      abatement_program   TEXT    NOT NULL,
+      start_date          TEXT,
+      end_date            TEXT,
+      frozen_assessment   REAL,
+      current_assessment  REAL,
+      annual_savings      REAL,
+      recert_due          TEXT,
+      notes               TEXT,
+      created_at          INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tax_abatements_property ON tax_abatements(property_id);
+    CREATE INDEX IF NOT EXISTS idx_tax_abatements_recert ON tax_abatements(project_id, recert_due);
+
+    CREATE TABLE IF NOT EXISTS cost_seg_studies (
+      id                  TEXT    PRIMARY KEY,
+      project_id          TEXT    NOT NULL,
+      property_id         TEXT    NOT NULL,
+      engagement_date     TEXT,
+      firm                TEXT,
+      study_cost          REAL,
+      total_basis         REAL,
+      accelerated_5yr     REAL,
+      accelerated_15yr    REAL,
+      sl_27_5yr           REAL,
+      year1_deduction     REAL,
+      status              TEXT    NOT NULL DEFAULT 'planned' CHECK(status IN ('planned','engaged','complete','cancelled')),
+      notes               TEXT,
+      created_at          INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_cost_seg_property ON cost_seg_studies(property_id);
+
+    CREATE TABLE IF NOT EXISTS contractors (
+      id                   TEXT    PRIMARY KEY,
+      project_id           TEXT    NOT NULL,
+      name                 TEXT    NOT NULL,
+      trade                TEXT,
+      phone                TEXT,
+      license              TEXT,
+      on_time_pct          REAL,
+      budget_variance_pct  REAL,
+      callback_rate        REAL,
+      last_used_at         TEXT,
+      notes                TEXT,
+      created_at           INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_contractors_project_trade ON contractors(project_id, trade);
+
+    CREATE TABLE IF NOT EXISTS father_broker_listings (
+      id            TEXT    PRIMARY KEY,
+      project_id    TEXT    NOT NULL,
+      address       TEXT    NOT NULL,
+      zip           TEXT,
+      list_price    REAL,
+      off_market    INTEGER NOT NULL DEFAULT 1,
+      source        TEXT    CHECK(source IN ('mls','pocket','whisper','other') OR source IS NULL),
+      notes         TEXT,
+      received_at   INTEGER NOT NULL,
+      status        TEXT    NOT NULL DEFAULT 'new' CHECK(status IN ('new','reviewed','passed','pursued')),
+      created_at    INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_father_broker_status ON father_broker_listings(project_id, status, received_at DESC);
+
+    CREATE TABLE IF NOT EXISTS investments (
+      id            TEXT    PRIMARY KEY,
+      project_id    TEXT    NOT NULL,
+      asset_type    TEXT    NOT NULL CHECK(asset_type IN ('stock','etf','bond','crypto','retirement_401k','retirement_ira','retirement_solo_401k','retirement_sdira','cash','hysa','treasury','other')),
+      account_label TEXT,
+      symbol        TEXT,
+      quantity      REAL,
+      value_usd     REAL,
+      as_of         TEXT,
+      notes         TEXT,
+      created_at    INTEGER NOT NULL,
+      updated_at    INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_investments_project ON investments(project_id);
+    CREATE INDEX IF NOT EXISTS idx_investments_asof ON investments(project_id, as_of DESC);
+  `)
+
   addColumnIfMissing(db, 'entities', 'last_seen_at', 'INTEGER')
   addColumnIfMissing(db, 'observations', 'source_id', 'INTEGER')
   addColumnIfMissing(db, 'observations', 'occurred_at', 'INTEGER')
@@ -928,8 +1248,119 @@ export function initDatabase(): Database.Database {
   // Versioned migrations (post-v0 schema changes)
   runMigrations(db)
 
+  // Mirror of server-side seedBrokerProperties(). Bot-side collectors call
+  // getDb() so they need the anchor properties locally for participation /
+  // cost-seg / refi candidate scans to find a target. Idempotent on count.
+  // Drift discipline: keep this function in lockstep with the server-side
+  // copy in server/src/db.ts. ADR-013.
+  try {
+    seedBrokerPropertiesBot(db)
+  } catch (err) {
+    logger.warn({ err }, 'Failed to seed broker anchor properties -- continuing')
+  }
+
   logger.info({ dbPath }, 'Database initialized')
   return db
+}
+
+/**
+ * Seed Paw Broker anchor properties on the bot DB.
+ * Mirrors server/src/db.ts seedBrokerProperties() byte-for-byte except for
+ * the explicit db argument (the server module captures `db` from outer
+ * scope; the bot side uses the helper signature). Idempotent on row count.
+ */
+function seedBrokerPropertiesBot(dbh: Database.Database): void {
+  const count = (dbh.prepare("SELECT COUNT(*) AS c FROM properties WHERE project_id = 'broker'").get() as { c: number }).c
+  if (count > 0) return
+
+  const now = Date.now()
+  const insertProp = dbh.prepare(`
+    INSERT INTO properties (
+      id, project_id, address, zip, county, lat, lng, beds, baths, sqft, year_built,
+      property_type, use_type, acquisition_date, acquisition_price, cost_basis, current_arv,
+      brrrr_phase, str_listing_url, status, created_at, updated_at
+    ) VALUES (
+      @id, 'broker', @address, @zip, @county, @lat, @lng, @beds, @baths, @sqft, @year_built,
+      @property_type, @use_type, @acquisition_date, @acquisition_price, @cost_basis, @current_arv,
+      @brrrr_phase, @str_listing_url, 'active', @now, @now
+    )
+  `)
+  const insertImp = dbh.prepare(`
+    INSERT INTO improvements (id, project_id, property_id, description, cost, date, photos_url, receipts_url, created_at)
+    VALUES (@id, 'broker', @property_id, @description, @cost, @date, NULL, NULL, @now)
+  `)
+
+  const tx = dbh.transaction(() => {
+    insertProp.run({
+      id: 'broker--1932-w-shunk',
+      address: '1932 W Shunk Street',
+      zip: '19145',
+      county: 'Philadelphia',
+      lat: 39.9215,
+      lng: -75.1810,
+      beds: null,
+      baths: null,
+      sqft: null,
+      year_built: null,
+      property_type: 'rowhome',
+      use_type: 'ltr',
+      acquisition_date: null,
+      acquisition_price: null,
+      cost_basis: null,
+      current_arv: null,
+      brrrr_phase: 'rent',
+      str_listing_url: null,
+      now,
+    })
+    insertProp.run({
+      id: 'broker--114-michigan',
+      address: '114 Michigan Ave',
+      zip: null,
+      county: null,
+      lat: null,
+      lng: null,
+      beds: null,
+      baths: null,
+      sqft: null,
+      year_built: null,
+      property_type: null,
+      use_type: 'primary',
+      acquisition_date: null,
+      acquisition_price: null,
+      cost_basis: null,
+      current_arv: null,
+      brrrr_phase: null,
+      str_listing_url: null,
+      now,
+    })
+    // Improvements that raised 114 Michigan basis. Costs 0 until the operator fills.
+    insertImp.run({
+      id: 'broker--114-michigan--imp-major-repairs',
+      property_id: 'broker--114-michigan',
+      description: 'Major repairs (basis raise)',
+      cost: 0,
+      date: null,
+      now,
+    })
+    insertImp.run({
+      id: 'broker--114-michigan--imp-3car-garage',
+      property_id: 'broker--114-michigan',
+      description: '3-car garage build (basis raise)',
+      cost: 0,
+      date: null,
+      now,
+    })
+    insertImp.run({
+      id: 'broker--114-michigan--imp-attic',
+      property_id: 'broker--114-michigan',
+      description: '2nd-floor attic build-out (basis raise)',
+      cost: 0,
+      date: null,
+      now,
+    })
+  })
+  tx()
+  logger.info({ properties: 2, improvements: 3 }, 'Seeded Paw Broker anchor properties (bot DB)')
 }
 
 export function checkpointAndCloseDatabase(): void {

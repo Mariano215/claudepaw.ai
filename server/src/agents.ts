@@ -54,6 +54,27 @@ export const GENERIC_PROJECT_AGENTS: AgentDef[] = [
 ]
 
 /**
+ * Paw Broker roster \u2014 BRRRR + STR real estate operating system.
+ * Every member here has a matching prompt file in projects/broker/agents/.
+ * Orchestrator routes inbound queries to the right specialist; the 9
+ * specialists own their respective domains (sourcing, underwriting, rehab,
+ * financing, STR ops, LTR ops, tax, portfolio CFO, legal). agents.test.ts
+ * enforces 1:1 between roster entries and prompt files.
+ */
+export const BROKER_AGENTS: AgentDef[] = [
+  { id: 'orchestrator', name: 'Orchestrator', role: 'Routes RE queries to specialists', emoji: '\uD83C\uDFAF', mode: 'active', heartbeat_interval: '6h' },
+  { id: 'scout', name: 'Scout', role: 'Lead Sourcing & Tier Rotation', emoji: '\uD83C\uDFDA\uFE0F', mode: 'active', heartbeat_interval: '4h' },
+  { id: 'analyzer', name: 'Deal Analyzer', role: 'Conservative BRRRR/STR/Flip Underwriting', emoji: '\uD83C\uDFE0', mode: 'on-demand', heartbeat_interval: 'none' },
+  { id: 'rehab-estimator', name: 'Rehab Estimator', role: 'Scope-of-Work & Bid Normalization', emoji: '\uD83D\uDEE0\uFE0F', mode: 'on-demand', heartbeat_interval: 'none' },
+  { id: 'finance-officer', name: 'Finance Officer', role: 'HELOC, DSCR, Hard Money, Cost-Seg ROI', emoji: '\uD83D\uDCB0', mode: 'active', heartbeat_interval: '6h' },
+  { id: 'str-ops', name: 'STR Ops', role: 'Pricing, Occupancy, OTA, Material Participation', emoji: '\uD83C\uDFD6\uFE0F', mode: 'active', heartbeat_interval: '4h' },
+  { id: 'pm-ops', name: 'PM Ops', role: 'LTR Tenant Lifecycle', emoji: '\uD83D\uDD11', mode: 'active', heartbeat_interval: '4h' },
+  { id: 'tax-strategist', name: 'Tax Strategist', role: 'OBBB, STR Loophole, REPS, Cost-Seg, 1031', emoji: '\uD83E\uDDFE', mode: 'on-demand', heartbeat_interval: 'none' },
+  { id: 'portfolio-cfo', name: 'Portfolio CFO', role: 'RE Roll-Up, Cash-Flow Waterfall, Quit-W2 Scoreboard', emoji: '\uD83D\uDCC8', mode: 'active', heartbeat_interval: '6h' },
+  { id: 'legal-shield', name: 'Legal Shield', role: 'LLC, Insurance, Lease, Father-Broker 5% Rule', emoji: '\uD83D\uDEE1\uFE0F', mode: 'on-demand', heartbeat_interval: 'none' },
+]
+
+/**
  * Get the agent roster for a given project. Unknown projects get the generic
  * roster (5 boilerplate agents), but this is a sign of a misconfiguration --
  * the `projects/<slug>/agents/` directory and this switch must stay in sync.
@@ -64,6 +85,7 @@ export function getAgentsForProject(projectId: string): AgentDef[] {
     case 'default': return PERSONAL_AGENTS
     case 'claudepaw': return CLAUDEPAW_AGENTS
     case 'default': return MATTEI_SYSTEMS_AGENTS
+    case 'broker': return BROKER_AGENTS
     default: return GENERIC_PROJECT_AGENTS
   }
 }

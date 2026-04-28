@@ -12,6 +12,7 @@ import { authenticate, scopeProjects, mountAuthRoutes, ensureAuthBootstrap } fro
 import routes from './routes.js'
 import pawsRoutes from './paws-routes.js'
 import memoryRoutes from './memory-routes.js'
+import brokerRoutes from './broker-routes/index.js'
 import { mountUsersRoutes } from './users-routes.js'
 import { setupWebSocket } from './ws.js'
 import { logger } from './logger.js'
@@ -132,6 +133,7 @@ app.use(express.static(path.join(__dirname, '..', 'public'), {
 // API routes
 app.use('/api/v1', routes)
 app.use(pawsRoutes)
+app.use(brokerRoutes)
 app.use('/api/v1/memory', memoryRoutes)
 mountUsersRoutes(app)
 

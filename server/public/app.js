@@ -3149,6 +3149,12 @@ function navigateToPage(pageId, pushState = true) {
   if (pageId === 'page-logging') initLoggingPage();
   if (pageId === 'page-sops') fetchSOPs();
   if (pageId === 'page-paws') fetchPaws();
+  if (pageId === 'page-deals') initDealsPage();
+  if (pageId === 'page-portfolio') initPortfolioPage();
+  if (pageId === 'page-rehab') initRehabPage();
+  if (pageId === 'page-tax') initTaxPage();
+  if (pageId === 'page-participation') initParticipationPage();
+  if (pageId === 'page-investments') initInvestmentsPage();
   if (pageId === 'page-performance') { renderPerfCards(); fetchYouTubeData(); fetchAnalyticsMetrics(); fetchSocialMetrics(); }
   if (pageId === 'page-costs') initCostsPage();
   if (pageId === 'page-usage') initUsagePage();
@@ -13654,23 +13660,38 @@ initAuthGate();
 // Page visibility defaults per project slug.
 // false = hidden by default; absence = visible by default.
 // Unknown slugs (new projects) default to all pages visible.
+//
+// Broker-only pages (deals, portfolio, rehab, tax, participation, investments)
+// stay hidden everywhere except the broker project. Conversely, the broker
+// pipeline + map + analytics surfaces.
 const PAGE_DEFAULTS = {
-  'example-company': { paws: false, knowledge: false },
+  'default':         { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
+  'default':  { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
+  'example-company':     { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
+  'example-company': { paws: false, knowledge: false, deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
+  'claudepaw':       { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
+  'broker':          { board: false, research: false, knowledge: false },
 };
 
 // Pages shown in the sidebar (order matches sidebar HTML)
 const SIDEBAR_PAGES = [
-  { id: 'agents',      label: '🤖 AI Agents' },
-  { id: 'action-plan', label: '📋 Action Plan' },
-  { id: 'pipeline',    label: '⚡ Pipeline' },
-  { id: 'board',       label: '📅 Monday Board' },
-  { id: 'research',    label: '🔬 Research' },
-  { id: 'comms',       label: '💬 Comms' },
-  { id: 'chat',        label: '💬 Chat' },
-  { id: 'logging',     label: '📝 Logging' },
-  { id: 'sops',        label: '⏰ Cron Jobs' },
-  { id: 'paws',        label: '🐾 Paws Mode' },
-  { id: 'knowledge',   label: '🧠 Knowledge Graph' },
+  { id: 'agents',        label: '🤖 AI Agents' },
+  { id: 'action-plan',   label: '📋 Action Plan' },
+  { id: 'pipeline',      label: '⚡ Pipeline' },
+  { id: 'board',         label: '📅 Monday Board' },
+  { id: 'research',      label: '🔬 Research' },
+  { id: 'comms',         label: '💬 Comms' },
+  { id: 'chat',          label: '💬 Chat' },
+  { id: 'logging',       label: '📝 Logging' },
+  { id: 'sops',          label: '⏰ Cron Jobs' },
+  { id: 'paws',          label: '🐾 Paws Mode' },
+  { id: 'deals',         label: '🏠 Deals' },
+  { id: 'portfolio',     label: '🗺️ Portfolio' },
+  { id: 'rehab',         label: '🔨 Rehab' },
+  { id: 'tax',           label: '🧾 Tax' },
+  { id: 'participation', label: '⏱️ Participation' },
+  { id: 'investments',   label: '💼 Investments' },
+  { id: 'knowledge',     label: '🧠 Knowledge Graph' },
 ];
 
 function applyAdminVisibility() {
@@ -15073,4 +15094,4554 @@ function openSopResultModal(task) {
     }
   };
   document.addEventListener('keydown', escHandler);
+}
+
+
+// ===========================================================================
+// PAW BROKER DASHBOARD PAGES (Step 6)
+// 6 page modules: deals, portfolio, rehab, tax, participation, investments.
+// Each ships its own ensure*PageDOM() + init*Page() + refresh* helpers, plus a
+// guarded ProjectBus.on() listener that re-fetches when the page is active.
+// API endpoints under /api/v1/broker/* (server/src/broker-routes/).
+// Source files: scripts/broker-pagebuilds/*.js -- DO NOT edit there; edit here.
+// ===========================================================================
+
+// --------------------- broker page: deals ----------------------------------
+// ============================================================================
+// Paw Broker - Deals page
+//
+// Self-contained dashboard blob. Appended to server/public/app.js by the
+// broker wireup phase. Single entry point initDealsPage() runs the first
+// time the user navigates to #deals; subsequent visits hit the polling
+// loop and project-switch handler instead.
+//
+// Page layout (top to bottom):
+//   1. Severity-ranked scout output card (top-5 sourced deals from past 7d)
+//   2. Segmented control: Kanban | Father-Broker Inbox
+//   3. Kanban column board OR father-broker inbox panel
+//   4. Modal underwriting card (BRRRR vs STR vs flip math + reminder banner)
+//
+// API endpoints consumed:
+//   GET  /api/v1/broker/deals?project_id=<slug>[&status=<s>]
+//   POST /api/v1/broker/deals/:id/move          body { status }
+//   GET  /api/v1/broker/father-broker-listings?project_id=<slug>&status=new
+//   POST /api/v1/broker/father-broker-listings/:id/status   body { status }
+//
+// Drag-and-drop uses native HTML5 events (no library). On drop we
+// optimistically move the card, fire POST /move, and revert if the
+// server says no.
+// ============================================================================
+
+var _dealsPollStarted = false;
+var DEAL_STATUSES = ['sourced', 'under-review', 'under-contract', 'closed', 'passed'];
+var DEAL_STATUS_LABELS = {
+  'sourced': 'Sourced',
+  'under-review': 'Under Review',
+  'under-contract': 'Under Contract',
+  'closed': 'Closed',
+  'passed': 'Passed',
+};
+var DEALS_STATE = {
+  view: 'kanban',          // 'kanban' | 'inbox'
+  deals: [],               // last fetched array
+  inbox: [],               // last fetched father-broker rows
+  modalOpen: false,
+};
+
+function _dealsBrokerProjectSlug() {
+  // Broker page is always project_id=broker per plan; fall back to
+  // currentProject only if the operator has explicitly switched contexts.
+  if (typeof currentProject !== 'undefined' && currentProject && currentProject.slug) {
+    return currentProject.slug;
+  }
+  return 'broker';
+}
+
+function _dealsPageActive() {
+  var page = document.getElementById('page-deals');
+  return !!(page && !page.hidden);
+}
+
+function _dealsFmtMoney(n) {
+  if (n == null || isNaN(n)) return '-';
+  var v = Number(n);
+  if (Math.abs(v) >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+  if (Math.abs(v) >= 1e3) return '$' + Math.round(v).toLocaleString();
+  return '$' + v.toFixed(0);
+}
+
+function _dealsFmtPct(n) {
+  if (n == null || isNaN(n)) return '-';
+  return (Number(n) * 100).toFixed(1) + '%';
+}
+
+function _dealsFmtDate(ms) {
+  if (!ms) return '-';
+  try {
+    var d = new Date(Number(ms));
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return '-'; }
+}
+
+function _dealsSeverityColor(sev) {
+  var s = Number(sev) || 0;
+  if (s >= 7) return '#f44336';   // red
+  if (s >= 5) return '#ff9800';   // amber
+  if (s >= 3) return '#ffc107';   // yellow
+  return 'rgba(255,255,255,0.45)'; // dim
+}
+
+function _dealsSeverityBadge(sev) {
+  var badge = document.createElement('span');
+  badge.textContent = 'S' + (Number(sev) || 0);
+  badge.style.cssText = 'display:inline-block;padding:2px 6px;border-radius:4px;' +
+    'font-size:0.72rem;font-weight:600;background:' + _dealsSeverityColor(sev) +
+    ';color:#000;letter-spacing:0.3px;';
+  return badge;
+}
+
+// ---------------------------------------------------------------------------
+// DOM scaffolding
+// ---------------------------------------------------------------------------
+function ensureDealsPageDOM() {
+  if (document.getElementById('page-deals')) return;
+  var main = document.querySelector('.main-content');
+  if (!main) return;
+
+  var page = document.createElement('section');
+  page.id = 'page-deals';
+  page.className = 'page';
+  page.setAttribute('data-page-title', 'Deals');
+  page.setAttribute('aria-label', 'Paw Broker Deals');
+  page.hidden = true;
+
+  // Heading row with badge
+  var heading = document.createElement('div');
+  heading.className = 'page-heading-row';
+  var h2 = document.createElement('h2');
+  h2.className = 'page-heading';
+  h2.textContent = 'Deals';
+  heading.appendChild(h2);
+  var badge = document.createElement('span');
+  badge.className = 'sop-task-count';
+  badge.id = 'deals-pipeline-count';
+  badge.textContent = '0 active';
+  heading.appendChild(badge);
+  page.appendChild(heading);
+
+  // Top severity-ranked scout output card
+  var scoutCard = document.createElement('div');
+  scoutCard.id = 'deals-scout-feed';
+  scoutCard.className = 'stat-card';
+  scoutCard.style.cssText = 'padding:18px;';
+  scoutCard.textContent = 'Loading top scout finds...';
+  page.appendChild(scoutCard);
+
+  // Segmented control: Kanban | Father-Broker Inbox
+  var segCard = document.createElement('div');
+  segCard.className = 'stat-card';
+  segCard.style.cssText = 'padding:12px 18px;margin-top:12px;';
+  var segRow = document.createElement('div');
+  segRow.style.cssText = 'display:flex;gap:6px;align-items:center;';
+  var segLabel = document.createElement('div');
+  segLabel.textContent = 'View:';
+  segLabel.style.cssText = 'opacity:0.7;font-size:0.85rem;margin-right:6px;';
+  segRow.appendChild(segLabel);
+
+  ['kanban', 'inbox'].forEach(function(viewKey) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.dataset.dealsView = viewKey;
+    btn.textContent = viewKey === 'kanban' ? 'Kanban' : 'Father-Broker Inbox';
+    btn.style.cssText = 'background:rgba(255,255,255,0.05);color:inherit;' +
+      'border:1px solid rgba(255,255,255,0.15);padding:5px 12px;border-radius:4px;' +
+      'cursor:pointer;font-size:0.85rem;';
+    btn.addEventListener('click', function() {
+      DEALS_STATE.view = viewKey;
+      _dealsRenderViewToggle();
+      _dealsRenderActiveView();
+    });
+    segRow.appendChild(btn);
+  });
+  segCard.appendChild(segRow);
+  page.appendChild(segCard);
+
+  // Kanban container (visible by default)
+  var kanban = document.createElement('div');
+  kanban.id = 'deals-kanban';
+  kanban.style.cssText = 'margin-top:12px;display:flex;gap:10px;overflow-x:auto;padding-bottom:8px;';
+  page.appendChild(kanban);
+
+  // Inbox container (hidden by default)
+  var inbox = document.createElement('div');
+  inbox.id = 'deals-inbox';
+  inbox.className = 'stat-card';
+  inbox.style.cssText = 'padding:18px;margin-top:12px;display:none;';
+  inbox.textContent = 'Loading father-broker inbox...';
+  page.appendChild(inbox);
+
+  // Modal backdrop (hidden until openDealUnderwritingModal)
+  var modal = document.createElement('div');
+  modal.id = 'deal-underwriting-modal';
+  modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.72);' +
+    'z-index:9000;align-items:flex-start;justify-content:center;padding:48px 24px;overflow-y:auto;';
+  modal.addEventListener('click', function(e) {
+    if (e.target === modal) closeDealUnderwritingModal();
+  });
+  var modalInner = document.createElement('div');
+  modalInner.id = 'deal-underwriting-modal-inner';
+  modalInner.style.cssText = 'background:var(--card-bg, #1a1a1a);color:var(--text-primary, #eee);' +
+    'border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:24px;max-width:760px;' +
+    'width:100%;box-shadow:0 12px 36px rgba(0,0,0,0.5);';
+  modal.appendChild(modalInner);
+  page.appendChild(modal);
+
+  main.appendChild(page);
+}
+
+// ---------------------------------------------------------------------------
+// View toggle (segmented control highlight)
+// ---------------------------------------------------------------------------
+function _dealsRenderViewToggle() {
+  var page = document.getElementById('page-deals');
+  if (!page) return;
+  var btns = page.querySelectorAll('button[data-deals-view]');
+  for (var i = 0; i < btns.length; i++) {
+    var b = btns[i];
+    var on = b.dataset.dealsView === DEALS_STATE.view;
+    b.style.background = on ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.05)';
+    b.style.fontWeight = on ? '600' : '400';
+  }
+  var kanban = document.getElementById('deals-kanban');
+  var inbox = document.getElementById('deals-inbox');
+  if (kanban) kanban.style.display = DEALS_STATE.view === 'kanban' ? 'flex' : 'none';
+  if (inbox) inbox.style.display = DEALS_STATE.view === 'inbox' ? 'block' : 'none';
+}
+
+function _dealsRenderActiveView() {
+  if (DEALS_STATE.view === 'inbox') {
+    refreshFatherBrokerInbox();
+  } else {
+    refreshDealsKanban();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Scout feed: top 5 highest-severity sourced deals from past 7 days
+// ---------------------------------------------------------------------------
+function _renderScoutFeed(deals) {
+  var card = document.getElementById('deals-scout-feed');
+  if (!card) return;
+  while (card.firstChild) card.removeChild(card.firstChild);
+
+  var heading = document.createElement('div');
+  heading.style.cssText = 'font-weight:600;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;';
+  var title = document.createElement('span');
+  title.textContent = 'Top scout finds (past 7 days)';
+  heading.appendChild(title);
+  var hint = document.createElement('span');
+  hint.style.cssText = 'opacity:0.55;font-size:0.78rem;';
+  hint.textContent = 'click row to underwrite';
+  heading.appendChild(hint);
+  card.appendChild(heading);
+
+  var weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  var top = (deals || []).filter(function(d) {
+    return d.status === 'sourced' && Number(d.created_at || 0) >= weekAgo;
+  }).sort(function(a, b) {
+    return (Number(b.severity) || 0) - (Number(a.severity) || 0);
+  }).slice(0, 5);
+
+  if (top.length === 0) {
+    var empty = document.createElement('div');
+    empty.style.cssText = 'opacity:0.6;font-size:0.9rem;';
+    empty.textContent = 'No new finds in the last 7 days. Scout sweeps Mondays at 8am.';
+    card.appendChild(empty);
+    return;
+  }
+
+  var list = document.createElement('div');
+  list.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+  top.forEach(function(d) {
+    var row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 10px;' +
+      'background:rgba(255,255,255,0.04);border-radius:6px;cursor:pointer;' +
+      'border-left:3px solid ' + _dealsSeverityColor(d.severity) + ';';
+    row.addEventListener('click', function() { openDealUnderwritingModal(d); });
+    row.addEventListener('mouseover', function() { row.style.background = 'rgba(255,255,255,0.08)'; });
+    row.addEventListener('mouseout',  function() { row.style.background = 'rgba(255,255,255,0.04)'; });
+
+    row.appendChild(_dealsSeverityBadge(d.severity));
+
+    var addr = document.createElement('div');
+    addr.style.cssText = 'flex:1;min-width:0;';
+    var addrLine = document.createElement('div');
+    addrLine.style.cssText = 'font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    addrLine.textContent = (d.address || 'unknown address') + (d.zip ? '  ' + d.zip : '');
+    addr.appendChild(addrLine);
+    var meta = document.createElement('div');
+    meta.style.cssText = 'opacity:0.65;font-size:0.78rem;';
+    meta.textContent = (d.deal_type || 'unspecified') + ' · list ' + _dealsFmtMoney(d.list_price) +
+      (d.max_offer != null ? ' · max ' + _dealsFmtMoney(d.max_offer) : '');
+    addr.appendChild(meta);
+    row.appendChild(addr);
+
+    var capWrap = document.createElement('div');
+    capWrap.style.cssText = 'text-align:right;font-size:0.8rem;opacity:0.85;min-width:90px;';
+    var capLine = document.createElement('div');
+    capLine.textContent = 'cap ' + _dealsFmtPct(d.est_cap_rate);
+    var cocLine = document.createElement('div');
+    cocLine.style.cssText = 'opacity:0.7;';
+    cocLine.textContent = 'CoC ' + _dealsFmtPct(d.est_coc);
+    capWrap.appendChild(capLine);
+    capWrap.appendChild(cocLine);
+    row.appendChild(capWrap);
+
+    list.appendChild(row);
+  });
+  card.appendChild(list);
+}
+
+// ---------------------------------------------------------------------------
+// Kanban board
+// ---------------------------------------------------------------------------
+function refreshDealsKanban() {
+  var board = document.getElementById('deals-kanban');
+  if (!board) return;
+  var slug = _dealsBrokerProjectSlug();
+  fetchFromAPI('/api/v1/broker/deals?project_id=' + encodeURIComponent(slug)).then(function(data) {
+    if (data === null) return;
+    var deals = Array.isArray(data) ? data : (data.deals || []);
+    DEALS_STATE.deals = deals;
+    _renderScoutFeed(deals);
+    _renderKanbanBoard(deals);
+    var badge = document.getElementById('deals-pipeline-count');
+    if (badge) {
+      var active = deals.filter(function(d) { return d.status !== 'closed' && d.status !== 'passed'; });
+      badge.textContent = active.length + ' active';
+    }
+  }).catch(function(e) {
+    while (board.firstChild) board.removeChild(board.firstChild);
+    var err = document.createElement('div');
+    err.style.cssText = 'padding:18px;opacity:0.7;';
+    err.textContent = 'Pipeline unavailable: ' + String(e);
+    board.appendChild(err);
+  });
+}
+
+function _renderKanbanBoard(deals) {
+  var board = document.getElementById('deals-kanban');
+  if (!board) return;
+  while (board.firstChild) board.removeChild(board.firstChild);
+
+  if (!deals || deals.length === 0) {
+    board.style.justifyContent = 'center';
+    var empty = document.createElement('div');
+    empty.className = 'stat-card';
+    empty.style.cssText = 'padding:32px;text-align:center;opacity:0.7;max-width:520px;';
+    empty.textContent = 'No deals yet. Scout will populate the pipeline on the next Monday 8am sweep.';
+    board.appendChild(empty);
+    return;
+  }
+  board.style.justifyContent = 'flex-start';
+
+  // Bucket deals by status; preserve column order from DEAL_STATUSES
+  var buckets = {};
+  DEAL_STATUSES.forEach(function(s) { buckets[s] = []; });
+  deals.forEach(function(d) {
+    var s = d.status || 'sourced';
+    if (!buckets[s]) buckets[s] = [];
+    buckets[s].push(d);
+  });
+  // Sort each column by severity desc, then created_at desc
+  Object.keys(buckets).forEach(function(s) {
+    buckets[s].sort(function(a, b) {
+      var sa = Number(a.severity) || 0, sb = Number(b.severity) || 0;
+      if (sb !== sa) return sb - sa;
+      return (Number(b.created_at) || 0) - (Number(a.created_at) || 0);
+    });
+  });
+
+  DEAL_STATUSES.forEach(function(status) {
+    board.appendChild(_renderKanbanColumn(status, buckets[status] || []));
+  });
+}
+
+function _renderKanbanColumn(status, deals) {
+  var col = document.createElement('div');
+  col.className = 'stat-card';
+  col.dataset.dealsStatus = status;
+  col.style.cssText = 'padding:12px;min-width:260px;width:260px;flex:0 0 auto;' +
+    'display:flex;flex-direction:column;gap:8px;max-height:78vh;';
+
+  var header = document.createElement('div');
+  header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;' +
+    'padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.08);';
+  var title = document.createElement('div');
+  title.textContent = DEAL_STATUS_LABELS[status] || status;
+  title.style.cssText = 'font-weight:600;letter-spacing:0.3px;';
+  header.appendChild(title);
+  var count = document.createElement('span');
+  count.className = 'sop-task-count';
+  count.textContent = String(deals.length);
+  header.appendChild(count);
+  col.appendChild(header);
+
+  var dropZone = document.createElement('div');
+  dropZone.style.cssText = 'flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:6px;' +
+    'padding:4px;min-height:60px;border-radius:6px;transition:background 0.12s;';
+  dropZone.dataset.dealsDropTarget = status;
+
+  dropZone.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    dropZone.style.background = 'rgba(76,175,80,0.08)';
+  });
+  dropZone.addEventListener('dragleave', function() {
+    dropZone.style.background = 'transparent';
+  });
+  dropZone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    dropZone.style.background = 'transparent';
+    var dealId = e.dataTransfer.getData('text/deal-id');
+    var fromStatus = e.dataTransfer.getData('text/deal-from');
+    if (!dealId) return;
+    if (fromStatus === status) return;
+    _dealsHandleDrop(dealId, fromStatus, status);
+  });
+
+  if (deals.length === 0) {
+    var emptyCol = document.createElement('div');
+    emptyCol.style.cssText = 'opacity:0.4;font-size:0.78rem;text-align:center;padding:18px 6px;';
+    emptyCol.textContent = '(empty)';
+    dropZone.appendChild(emptyCol);
+  } else {
+    deals.forEach(function(d) { dropZone.appendChild(_renderDealCard(d)); });
+  }
+
+  col.appendChild(dropZone);
+  return col;
+}
+
+function _renderDealCard(d) {
+  var card = document.createElement('div');
+  card.draggable = true;
+  card.dataset.dealId = d.id;
+  card.dataset.dealStatus = d.status || 'sourced';
+  card.style.cssText = 'background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);' +
+    'border-left:3px solid ' + _dealsSeverityColor(d.severity) + ';' +
+    'border-radius:6px;padding:8px 10px;cursor:grab;font-size:0.85rem;';
+
+  card.addEventListener('dragstart', function(e) {
+    card.style.opacity = '0.5';
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/deal-id', String(d.id));
+    e.dataTransfer.setData('text/deal-from', String(d.status || 'sourced'));
+  });
+  card.addEventListener('dragend', function() {
+    card.style.opacity = '1';
+  });
+  card.addEventListener('click', function() { openDealUnderwritingModal(d); });
+
+  var topRow = document.createElement('div');
+  topRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+  var addr = document.createElement('div');
+  addr.style.cssText = 'font-weight:500;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+  addr.textContent = d.address || 'unknown';
+  topRow.appendChild(addr);
+  topRow.appendChild(_dealsSeverityBadge(d.severity));
+  card.appendChild(topRow);
+
+  var metaRow = document.createElement('div');
+  metaRow.style.cssText = 'opacity:0.65;font-size:0.74rem;margin-top:3px;';
+  metaRow.textContent = (d.zip || '') + (d.deal_type ? '  ·  ' + d.deal_type : '');
+  card.appendChild(metaRow);
+
+  var priceRow = document.createElement('div');
+  priceRow.style.cssText = 'display:flex;justify-content:space-between;font-size:0.78rem;margin-top:4px;';
+  var priceL = document.createElement('span');
+  priceL.textContent = 'list ' + _dealsFmtMoney(d.list_price);
+  var priceR = document.createElement('span');
+  priceR.style.opacity = '0.75';
+  priceR.textContent = (d.est_cap_rate != null ? 'cap ' + _dealsFmtPct(d.est_cap_rate) : '') +
+    (d.est_coc != null ? '  ·  CoC ' + _dealsFmtPct(d.est_coc) : '');
+  priceRow.appendChild(priceL);
+  priceRow.appendChild(priceR);
+  card.appendChild(priceRow);
+
+  return card;
+}
+
+function _dealsHandleDrop(dealId, fromStatus, toStatus) {
+  // Optimistic UI update: mutate cached deal, re-render. Revert on error.
+  var deal = null;
+  for (var i = 0; i < DEALS_STATE.deals.length; i++) {
+    if (String(DEALS_STATE.deals[i].id) === String(dealId)) {
+      deal = DEALS_STATE.deals[i];
+      break;
+    }
+  }
+  if (!deal) return;
+  deal.status = toStatus;
+  _renderKanbanBoard(DEALS_STATE.deals);
+
+  apiFetch('/api/v1/broker/deals/' + encodeURIComponent(dealId) + '/move', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: toStatus }),
+  }).then(function(resp) {
+    if (!resp || !resp.ok) {
+      deal.status = fromStatus;
+      _renderKanbanBoard(DEALS_STATE.deals);
+      console.warn('Deal move failed', resp && resp.status, resp && resp.data);
+      var msg = (resp && resp.data && resp.data.error) || 'Move failed (status ' + (resp ? resp.status : '?') + ')';
+      _dealsToast(msg, true);
+    } else {
+      // Refresh from server in the background to pick up updated_at
+      setTimeout(refreshDealsKanban, 250);
+    }
+  }).catch(function(e) {
+    deal.status = fromStatus;
+    _renderKanbanBoard(DEALS_STATE.deals);
+    _dealsToast('Network error: ' + String(e), true);
+  });
+}
+
+function _dealsToast(msg, isError) {
+  var t = document.createElement('div');
+  t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);' +
+    'background:' + (isError ? '#7a1f1f' : '#1f5c2c') + ';color:#fff;padding:10px 18px;' +
+    'border-radius:6px;font-size:0.88rem;z-index:9999;box-shadow:0 6px 18px rgba(0,0,0,0.4);';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(function() {
+    if (t.parentNode) t.parentNode.removeChild(t);
+  }, 3500);
+}
+
+// ---------------------------------------------------------------------------
+// Underwriting modal (BRRRR vs STR vs flip math)
+// ---------------------------------------------------------------------------
+function openDealUnderwritingModal(deal) {
+  ensureDealsPageDOM();
+  var modal = document.getElementById('deal-underwriting-modal');
+  var inner = document.getElementById('deal-underwriting-modal-inner');
+  if (!modal || !inner) return;
+  while (inner.firstChild) inner.removeChild(inner.firstChild);
+
+  // Header
+  var header = document.createElement('div');
+  header.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px;';
+  var titleWrap = document.createElement('div');
+  titleWrap.style.flex = '1';
+  var title = document.createElement('h3');
+  title.style.cssText = 'margin:0 0 4px 0;font-size:1.2rem;font-weight:600;';
+  title.textContent = deal.address || 'Deal underwriting';
+  titleWrap.appendChild(title);
+  var sub = document.createElement('div');
+  sub.style.cssText = 'opacity:0.65;font-size:0.85rem;';
+  sub.textContent = (deal.zip || '') + '  ·  ' + (deal.deal_type || 'unspecified') +
+    '  ·  status: ' + (DEAL_STATUS_LABELS[deal.status] || deal.status || 'unknown');
+  titleWrap.appendChild(sub);
+  header.appendChild(titleWrap);
+
+  var sevWrap = document.createElement('div');
+  sevWrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:4px;';
+  sevWrap.appendChild(_dealsSeverityBadge(deal.severity));
+  var closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.textContent = 'Close';
+  closeBtn.style.cssText = 'background:transparent;color:inherit;border:1px solid rgba(255,255,255,0.2);' +
+    'padding:4px 10px;border-radius:4px;cursor:pointer;font-size:0.82rem;';
+  closeBtn.addEventListener('click', closeDealUnderwritingModal);
+  sevWrap.appendChild(closeBtn);
+  header.appendChild(sevWrap);
+  inner.appendChild(header);
+
+  // Conservative-formula reminder banner
+  var reminder = document.createElement('div');
+  reminder.style.cssText = 'background:rgba(255,193,7,0.10);border:1px solid rgba(255,193,7,0.35);' +
+    'border-radius:6px;padding:10px 12px;font-size:0.82rem;line-height:1.45;margin-bottom:14px;';
+  reminder.textContent = 'Analyzer defaults: BRRRR all-in <= 70% ARV, DSCR >= 1.30 at quoted +1.5% stress. ' +
+    'STR Y1 occupancy 0.65 with LTR-backstop DSCR >= 1.30.';
+  inner.appendChild(reminder);
+
+  // Math grid: three columns when a STR adr is present, else two
+  var grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));' +
+    'gap:12px;margin-bottom:14px;';
+
+  // Acquisition column (always shown)
+  grid.appendChild(_dealsModalSection('Acquisition', [
+    ['List price', _dealsFmtMoney(deal.list_price)],
+    ['Max offer', _dealsFmtMoney(deal.max_offer)],
+    ['Est ARV', _dealsFmtMoney(deal.est_arv)],
+    ['Est rehab', _dealsFmtMoney(deal.est_rehab)],
+    ['All-in vs ARV', _dealsAllInPct(deal)],
+  ]));
+
+  // BRRRR / LTR column (shown when est_rent_monthly is present)
+  if (deal.est_rent_monthly != null) {
+    grid.appendChild(_dealsModalSection('BRRRR / LTR', [
+      ['Est rent (mo)', _dealsFmtMoney(deal.est_rent_monthly)],
+      ['Annual gross', _dealsFmtMoney((Number(deal.est_rent_monthly) || 0) * 12)],
+      ['Est cap rate', _dealsFmtPct(deal.est_cap_rate)],
+      ['Est CoC', _dealsFmtPct(deal.est_coc)],
+    ]));
+  }
+
+  // STR column (shown when est_str_adr is present)
+  if (deal.est_str_adr != null) {
+    var occ = Number(deal.est_str_occupancy) || 0.65;
+    var grossStr = (Number(deal.est_str_adr) || 0) * 365 * occ;
+    grid.appendChild(_dealsModalSection('STR (Y1 0.65 occ)', [
+      ['Est ADR', _dealsFmtMoney(deal.est_str_adr)],
+      ['Occupancy', _dealsFmtPct(occ)],
+      ['Annual gross', _dealsFmtMoney(grossStr)],
+      ['Est cap rate', _dealsFmtPct(deal.est_cap_rate)],
+    ]));
+  }
+
+  // Flip column (only when no rent and no STR signal)
+  if (deal.est_rent_monthly == null && deal.est_str_adr == null && deal.est_arv != null) {
+    var flipNet = (Number(deal.est_arv) || 0) - (Number(deal.max_offer) || 0) - (Number(deal.est_rehab) || 0);
+    grid.appendChild(_dealsModalSection('Flip estimate', [
+      ['ARV', _dealsFmtMoney(deal.est_arv)],
+      ['Max offer', _dealsFmtMoney(deal.max_offer)],
+      ['Est rehab', _dealsFmtMoney(deal.est_rehab)],
+      ['Approx net', _dealsFmtMoney(flipNet)],
+    ]));
+  }
+
+  inner.appendChild(grid);
+
+  // Notes block
+  if (deal.notes) {
+    var notesWrap = document.createElement('div');
+    notesWrap.style.cssText = 'background:rgba(255,255,255,0.04);border-radius:6px;padding:10px 12px;' +
+      'font-size:0.85rem;line-height:1.5;margin-bottom:12px;white-space:pre-wrap;';
+    var notesLabel = document.createElement('div');
+    notesLabel.style.cssText = 'opacity:0.55;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;';
+    notesLabel.textContent = 'Notes';
+    notesWrap.appendChild(notesLabel);
+    var notesBody = document.createElement('div');
+    notesBody.textContent = deal.notes;
+    notesWrap.appendChild(notesBody);
+    inner.appendChild(notesWrap);
+  }
+
+  // Footer timestamps
+  var footer = document.createElement('div');
+  footer.style.cssText = 'opacity:0.5;font-size:0.72rem;display:flex;justify-content:space-between;gap:8px;';
+  var created = document.createElement('span');
+  created.textContent = 'created ' + _dealsFmtDate(deal.created_at);
+  var updated = document.createElement('span');
+  updated.textContent = 'updated ' + _dealsFmtDate(deal.updated_at);
+  footer.appendChild(created);
+  footer.appendChild(updated);
+  inner.appendChild(footer);
+
+  modal.style.display = 'flex';
+  DEALS_STATE.modalOpen = true;
+
+  // Esc closes
+  if (!modal.dataset.escBound) {
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && DEALS_STATE.modalOpen) closeDealUnderwritingModal();
+    });
+    modal.dataset.escBound = '1';
+  }
+}
+
+function closeDealUnderwritingModal() {
+  var modal = document.getElementById('deal-underwriting-modal');
+  if (!modal) return;
+  modal.style.display = 'none';
+  DEALS_STATE.modalOpen = false;
+}
+
+function _dealsModalSection(title, rows) {
+  var box = document.createElement('div');
+  box.style.cssText = 'background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);' +
+    'border-radius:6px;padding:10px 12px;';
+  var head = document.createElement('div');
+  head.style.cssText = 'font-size:0.75rem;text-transform:uppercase;letter-spacing:0.5px;' +
+    'opacity:0.65;margin-bottom:6px;font-weight:600;';
+  head.textContent = title;
+  box.appendChild(head);
+  rows.forEach(function(pair) {
+    var row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:space-between;font-size:0.85rem;padding:2px 0;';
+    var l = document.createElement('span');
+    l.style.opacity = '0.7';
+    l.textContent = pair[0];
+    var r = document.createElement('span');
+    r.style.fontWeight = '500';
+    r.textContent = pair[1];
+    row.appendChild(l);
+    row.appendChild(r);
+    box.appendChild(row);
+  });
+  return box;
+}
+
+function _dealsAllInPct(d) {
+  var arv = Number(d.est_arv) || 0;
+  var offer = Number(d.max_offer) || 0;
+  var rehab = Number(d.est_rehab) || 0;
+  if (arv <= 0 || (offer + rehab) <= 0) return '-';
+  var pct = (offer + rehab) / arv;
+  return _dealsFmtPct(pct);
+}
+
+// ---------------------------------------------------------------------------
+// Father-broker pocket-listing inbox
+// ---------------------------------------------------------------------------
+function refreshFatherBrokerInbox() {
+  var card = document.getElementById('deals-inbox');
+  if (!card) return;
+  var slug = _dealsBrokerProjectSlug();
+  fetchFromAPI('/api/v1/broker/father-broker-listings?project_id=' +
+               encodeURIComponent(slug) + '&status=new').then(function(data) {
+    if (data === null) return;
+    var rows = Array.isArray(data) ? data : (data.listings || []);
+    DEALS_STATE.inbox = rows;
+    _renderFatherBrokerInbox(rows);
+  }).catch(function(e) {
+    while (card.firstChild) card.removeChild(card.firstChild);
+    var err = document.createElement('div');
+    err.style.cssText = 'opacity:0.7;';
+    err.textContent = 'Inbox unavailable: ' + String(e);
+    card.appendChild(err);
+  });
+}
+
+function _renderFatherBrokerInbox(rows) {
+  var card = document.getElementById('deals-inbox');
+  if (!card) return;
+  while (card.firstChild) card.removeChild(card.firstChild);
+
+  var heading = document.createElement('div');
+  heading.style.cssText = 'font-weight:600;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;';
+  var title = document.createElement('span');
+  title.textContent = 'Father-broker pocket listings';
+  heading.appendChild(title);
+  var hint = document.createElement('span');
+  hint.style.cssText = 'opacity:0.55;font-size:0.78rem;';
+  hint.textContent = (rows && rows.length ? rows.length + ' new' : '');
+  heading.appendChild(hint);
+  card.appendChild(heading);
+
+  if (!rows || rows.length === 0) {
+    var empty = document.createElement('div');
+    empty.style.cssText = 'opacity:0.6;font-size:0.9rem;text-align:center;padding:18px 6px;';
+    empty.textContent = 'Inbox empty. Father-broker collector runs at 8am and 2pm Mon-Fri.';
+    card.appendChild(empty);
+    return;
+  }
+
+  // Newest first by received_at
+  var sorted = rows.slice().sort(function(a, b) {
+    return (Number(b.received_at) || 0) - (Number(a.received_at) || 0);
+  });
+
+  var list = document.createElement('div');
+  list.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
+  sorted.forEach(function(r) {
+    list.appendChild(_renderFatherBrokerRow(r));
+  });
+  card.appendChild(list);
+}
+
+function _renderFatherBrokerRow(r) {
+  var row = document.createElement('div');
+  row.style.cssText = 'background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);' +
+    'border-radius:6px;padding:10px 12px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;';
+
+  var info = document.createElement('div');
+  info.style.cssText = 'flex:1;min-width:240px;';
+  var addrLine = document.createElement('div');
+  addrLine.style.cssText = 'font-weight:500;';
+  var pieces = [];
+  if (r.address) pieces.push(r.address);
+  if (r.zip) pieces.push(r.zip);
+  addrLine.textContent = pieces.length ? pieces.join('  ') : '(no address)';
+  info.appendChild(addrLine);
+
+  var metaLine = document.createElement('div');
+  metaLine.style.cssText = 'opacity:0.7;font-size:0.78rem;margin-top:3px;';
+  var metaPieces = [];
+  if (r.list_price != null) metaPieces.push('list ' + _dealsFmtMoney(r.list_price));
+  if (r.off_market) metaPieces.push('off-market');
+  if (r.source) metaPieces.push(r.source);
+  metaPieces.push('rcvd ' + _dealsFmtDate(r.received_at));
+  metaLine.textContent = metaPieces.join('  ·  ');
+  info.appendChild(metaLine);
+
+  if (r.notes) {
+    var notes = document.createElement('div');
+    notes.style.cssText = 'opacity:0.85;font-size:0.82rem;margin-top:5px;line-height:1.45;';
+    notes.textContent = r.notes;
+    info.appendChild(notes);
+  }
+  row.appendChild(info);
+
+  var actions = document.createElement('div');
+  actions.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;';
+  [
+    { key: 'reviewed', label: 'Mark Reviewed', tone: 'neutral' },
+    { key: 'passed',   label: 'Pass',          tone: 'warn'    },
+    { key: 'pursued',  label: 'Pursue',        tone: 'go'      },
+  ].forEach(function(action) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = action.label;
+    var bg = 'rgba(255,255,255,0.06)';
+    if (action.tone === 'warn') bg = 'rgba(244,67,54,0.18)';
+    if (action.tone === 'go')   bg = 'rgba(76,175,80,0.22)';
+    btn.style.cssText = 'background:' + bg + ';color:inherit;' +
+      'border:1px solid rgba(255,255,255,0.15);padding:5px 10px;border-radius:4px;' +
+      'cursor:pointer;font-size:0.78rem;';
+    btn.addEventListener('click', function() {
+      btn.disabled = true;
+      btn.style.opacity = '0.6';
+      _dealsSetFatherBrokerStatus(r.id, action.key).then(function(ok) {
+        if (ok) {
+          row.style.transition = 'opacity 0.25s';
+          row.style.opacity = '0';
+          setTimeout(refreshFatherBrokerInbox, 280);
+        } else {
+          btn.disabled = false;
+          btn.style.opacity = '1';
+        }
+      });
+    });
+    actions.appendChild(btn);
+  });
+  row.appendChild(actions);
+
+  return row;
+}
+
+function _dealsSetFatherBrokerStatus(id, status) {
+  return apiFetch('/api/v1/broker/father-broker-listings/' + encodeURIComponent(id) + '/status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: status }),
+  }).then(function(resp) {
+    if (!resp || !resp.ok) {
+      _dealsToast((resp && resp.data && resp.data.error) ||
+                  'Status update failed (' + (resp ? resp.status : '?') + ')', true);
+      return false;
+    }
+    return true;
+  }).catch(function(e) {
+    _dealsToast('Network error: ' + String(e), true);
+    return false;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+function initDealsPage() {
+  ensureDealsPageDOM();
+  _dealsRenderViewToggle();
+  refreshDealsKanban();
+  refreshFatherBrokerInbox();
+  if (!_dealsPollStarted) {
+    _dealsPollStarted = true;
+    addPollingInterval(function() {
+      if (!_dealsPageActive()) return;
+      refreshDealsKanban();
+    }, 30000);
+    addPollingInterval(function() {
+      if (!_dealsPageActive()) return;
+      if (DEALS_STATE.view === 'inbox') refreshFatherBrokerInbox();
+    }, 60000);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Project switch handler: re-fetch when the active project changes and
+// the deals page is currently visible.
+// ---------------------------------------------------------------------------
+if (typeof ProjectBus !== 'undefined' && ProjectBus.on) {
+  ProjectBus.on(function() {
+    if (!_dealsPageActive()) return;
+    refreshDealsKanban();
+    refreshFatherBrokerInbox();
+  });
+}
+
+
+// --------------------- broker page: portfolio -------------------------------
+// ============================================================================
+// Paw Broker -- Portfolio page
+// ============================================================================
+// Self-contained JS blob appended to server/public/app.js. Single entry
+// point initPortfolioPage() called by navigateToPage when the user lands
+// on #portfolio.
+//
+// Sections (per Step 5 of the broker plan):
+//   1. Leaflet property map with pins (skipped when L is undefined)
+//   2. Equity vs debt stacked bar chart per property (inline SVG)
+//   3. Monthly cash-flow waterfall per property + portfolio total
+//   4. BRRRR phase pill badges per property
+//   5. DSCR meter per door with target line at 1.30
+//   6. STR sub-section (only if any property has use_type=str):
+//      ADR / occupancy / RevPAR / 30d revenue / 30d nights, plus
+//      a 100h material-participation gauge.
+//
+// Style:
+//   var declarations, vanilla JS, no frameworks.
+//   DOM-build via createElement + appendChild. No innerHTML with user data.
+//   ProjectBus listener at file bottom guarded by typeof check.
+// ============================================================================
+
+var BROKER_PORTFOLIO_STATE = {
+  mapInstance: null,
+  pollStarted: false,
+  data: {
+    properties: [],
+    rollup: null,
+    str: null,
+    participation: null,
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function _bpProjectSlug() {
+  return (typeof currentProject !== 'undefined' && currentProject && currentProject.slug)
+    ? currentProject.slug
+    : 'broker';
+}
+
+function _bpFmtUsd(n) {
+  if (n == null || isNaN(n)) return '$0';
+  var v = Number(n);
+  var sign = v < 0 ? '-' : '';
+  var abs = Math.abs(v);
+  if (abs >= 1000000) return sign + '$' + (abs / 1000000).toFixed(2) + 'M';
+  if (abs >= 1000) return sign + '$' + (abs / 1000).toFixed(1) + 'k';
+  return sign + '$' + abs.toFixed(0);
+}
+
+function _bpFmtUsdExact(n) {
+  if (n == null || isNaN(n)) return '$0';
+  var v = Number(n);
+  var sign = v < 0 ? '-' : '';
+  var abs = Math.abs(v);
+  return sign + '$' + abs.toLocaleString('en-US', { maximumFractionDigits: 0 });
+}
+
+function _bpFmtPct(n) {
+  if (n == null || isNaN(n)) return '0%';
+  return (Number(n) * 100).toFixed(1) + '%';
+}
+
+function _bpFmtPctRaw(n) {
+  if (n == null || isNaN(n)) return '0%';
+  return Number(n).toFixed(1) + '%';
+}
+
+function _bpClassify(rollupProp) {
+  // DSCR colour bucket: >=1.30 green, 1.0-1.30 amber, <1.0 red.
+  var dscr = Number(rollupProp.dscr || 0);
+  if (dscr >= 1.30) return { color: '#4caf50', label: 'Healthy' };
+  if (dscr >= 1.00) return { color: '#ffb300', label: 'Watch' };
+  return { color: '#e53935', label: 'Stressed' };
+}
+
+function _bpPhaseStyle(phase) {
+  // Buy=blue, Rehab=amber, Rent=green, Refi=purple, Recycle=gold.
+  switch (String(phase || '').toLowerCase()) {
+    case 'buy':     return { bg: 'rgba(33,150,243,0.18)',  fg: '#64b5f6', label: 'Buy' };
+    case 'rehab':   return { bg: 'rgba(255,179,0,0.18)',   fg: '#ffb300', label: 'Rehab' };
+    case 'rent':    return { bg: 'rgba(76,175,80,0.18)',   fg: '#81c784', label: 'Rent' };
+    case 'refi':    return { bg: 'rgba(156,39,176,0.18)',  fg: '#ba68c8', label: 'Refi' };
+    case 'recycle': return { bg: 'rgba(255,193,7,0.18)',   fg: '#ffd54f', label: 'Recycle' };
+    default:        return { bg: 'rgba(255,255,255,0.08)', fg: '#bdbdbd', label: phase || 'Unknown' };
+  }
+}
+
+function _bpCardWrap(title) {
+  var card = document.createElement('div');
+  card.className = 'stat-card';
+  card.style.cssText = 'padding:18px;margin-top:12px;';
+  if (title) {
+    var h = document.createElement('div');
+    h.style.cssText = 'font-weight:600;margin-bottom:12px;font-size:1rem;';
+    h.textContent = title;
+    card.appendChild(h);
+  }
+  return card;
+}
+
+function _bpEmptyMsg(parent, msg) {
+  var p = document.createElement('div');
+  p.style.cssText = 'opacity:0.6;font-size:0.9rem;padding:8px 0;';
+  p.textContent = msg;
+  parent.appendChild(p);
+}
+
+// ---------------------------------------------------------------------------
+// DOM scaffold
+// ---------------------------------------------------------------------------
+
+function ensurePortfolioPageDOM() {
+  if (document.getElementById('page-portfolio')) return;
+  var main = document.querySelector('.main-content');
+  if (!main) return;
+
+  var page = document.createElement('section');
+  page.id = 'page-portfolio';
+  page.className = 'page';
+  page.setAttribute('data-page-title', 'Portfolio');
+  page.setAttribute('aria-label', 'Paw Broker Portfolio');
+  page.hidden = true;
+
+  var heading = document.createElement('div');
+  heading.className = 'page-heading-row';
+  var h2 = document.createElement('h2');
+  h2.className = 'page-heading';
+  h2.textContent = 'Portfolio';
+  heading.appendChild(h2);
+  var badge = document.createElement('span');
+  badge.className = 'sop-task-count';
+  badge.textContent = 'Paw Broker';
+  heading.appendChild(badge);
+  page.appendChild(heading);
+
+  // Summary strip across the top with door / equity / debt / cash flow.
+  var summary = document.createElement('div');
+  summary.id = 'portfolio-summary';
+  summary.className = 'stat-card';
+  summary.style.cssText = 'padding:18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;';
+  page.appendChild(summary);
+
+  // Map card.
+  var mapCard = _bpCardWrap('Property Map');
+  mapCard.id = 'portfolio-map-card';
+  var mapHost = document.createElement('div');
+  mapHost.id = 'portfolio-map';
+  mapHost.style.cssText = 'height:400px;width:100%;border-radius:6px;background:rgba(255,255,255,0.03);';
+  mapCard.appendChild(mapHost);
+  var mapNote = document.createElement('div');
+  mapNote.id = 'portfolio-map-note';
+  mapNote.style.cssText = 'opacity:0.6;font-size:0.85rem;margin-top:8px;';
+  mapCard.appendChild(mapNote);
+  page.appendChild(mapCard);
+
+  // Equity vs debt stack chart.
+  var equityCard = _bpCardWrap('Equity vs Debt by Property');
+  equityCard.id = 'portfolio-equity-card';
+  var equityHost = document.createElement('div');
+  equityHost.id = 'portfolio-equity-chart';
+  equityCard.appendChild(equityHost);
+  page.appendChild(equityCard);
+
+  // Cash flow waterfall.
+  var cashCard = _bpCardWrap('Monthly Cash Flow');
+  cashCard.id = 'portfolio-cashflow-card';
+  var cashHost = document.createElement('div');
+  cashHost.id = 'portfolio-cashflow-list';
+  cashCard.appendChild(cashHost);
+  page.appendChild(cashCard);
+
+  // BRRRR phase pills.
+  var phaseCard = _bpCardWrap('BRRRR Phase by Property');
+  phaseCard.id = 'portfolio-phase-card';
+  var phaseHost = document.createElement('div');
+  phaseHost.id = 'portfolio-phase-list';
+  phaseHost.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;';
+  phaseCard.appendChild(phaseHost);
+  page.appendChild(phaseCard);
+
+  // DSCR meter list.
+  var dscrCard = _bpCardWrap('DSCR by Door');
+  dscrCard.id = 'portfolio-dscr-card';
+  var dscrHost = document.createElement('div');
+  dscrHost.id = 'portfolio-dscr-list';
+  dscrCard.appendChild(dscrHost);
+  page.appendChild(dscrCard);
+
+  // STR sub-section (toggled visibility based on data).
+  var strCard = _bpCardWrap('Short-Term Rentals');
+  strCard.id = 'portfolio-str-card';
+  strCard.hidden = true;
+  var strHost = document.createElement('div');
+  strHost.id = 'portfolio-str-body';
+  strCard.appendChild(strHost);
+  page.appendChild(strCard);
+
+  main.appendChild(page);
+}
+
+// ---------------------------------------------------------------------------
+// Init + polling
+// ---------------------------------------------------------------------------
+
+function initPortfolioPage() {
+  ensurePortfolioPageDOM();
+
+  // Kick off a refresh of every section. Each refresh function fetches its
+  // own slice of data, so the page renders progressively.
+  refreshPortfolioMap();
+  refreshPortfolioCharts();
+  refreshSTRSection();
+
+  if (!BROKER_PORTFOLIO_STATE.pollStarted && typeof addPollingInterval === 'function') {
+    BROKER_PORTFOLIO_STATE.pollStarted = true;
+    addPollingInterval(refreshPortfolioMap, 60000);
+    addPollingInterval(refreshPortfolioCharts, 60000);
+    addPollingInterval(refreshSTRSection, 60000);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Section 1: Leaflet map
+// ---------------------------------------------------------------------------
+
+async function refreshPortfolioMap() {
+  ensurePortfolioPageDOM();
+  var card = document.getElementById('portfolio-map-card');
+  var host = document.getElementById('portfolio-map');
+  var note = document.getElementById('portfolio-map-note');
+  if (!card || !host || !note) return;
+
+  if (typeof L === 'undefined') {
+    console.warn('Leaflet not loaded -- map will not render');
+    note.textContent = 'Map library unavailable. Reload the dashboard once Leaflet is wired in.';
+    return;
+  }
+
+  var slug = _bpProjectSlug();
+  var data = await fetchFromAPI('/api/v1/broker/properties?project_id=' + encodeURIComponent(slug));
+  if (data === null) return;
+  var props = Array.isArray(data) ? data : ((data && data.properties) || []);
+  BROKER_PORTFOLIO_STATE.data.properties = props;
+
+  // Refresh summary tiles every time the property list comes in.
+  _bpRenderSummary();
+
+  // Init the L.map exactly once. Reuse the instance on subsequent refreshes.
+  if (!BROKER_PORTFOLIO_STATE.mapInstance) {
+    BROKER_PORTFOLIO_STATE.mapInstance = L.map(host, {
+      center: [39.95, -75.16],
+      zoom: 9,
+      scrollWheelZoom: false,
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap',
+    }).addTo(BROKER_PORTFOLIO_STATE.mapInstance);
+  }
+  var map = BROKER_PORTFOLIO_STATE.mapInstance;
+
+  // Drop existing markers, then add fresh ones for every geocoded property.
+  map.eachLayer(function(layer) {
+    if (layer instanceof L.Marker) map.removeLayer(layer);
+  });
+
+  var pinned = [];
+  var pendingGeocode = 0;
+  for (var i = 0; i < props.length; i++) {
+    var p = props[i];
+    var lat = (p && typeof p.lat === 'number') ? p.lat : null;
+    var lng = (p && typeof p.lng === 'number') ? p.lng : null;
+    if (lat == null || lng == null) {
+      pendingGeocode++;
+      continue;
+    }
+    var addr = String(p.address || 'Unnamed property');
+    var phase = _bpPhaseStyle(p.brrrr_phase);
+    // Build the popup body via DOM so any address with HTML chars cannot
+    // inject markup. bindPopup accepts HTMLElement directly.
+    var popup = document.createElement('div');
+    var title = document.createElement('div');
+    title.style.cssText = 'font-weight:600;margin-bottom:4px;';
+    title.textContent = addr;
+    popup.appendChild(title);
+    var line2 = document.createElement('div');
+    line2.style.cssText = 'font-size:0.85rem;opacity:0.85;';
+    line2.textContent = (p.beds != null ? p.beds + ' bd / ' : '') +
+      (p.baths != null ? p.baths + ' ba' : '') +
+      (p.sqft != null ? ' (' + p.sqft + ' sqft)' : '');
+    popup.appendChild(line2);
+    var line3 = document.createElement('div');
+    line3.style.cssText = 'font-size:0.8rem;margin-top:4px;color:' + phase.fg + ';';
+    line3.textContent = 'Phase: ' + phase.label + (p.use_type ? ' · ' + p.use_type : '');
+    popup.appendChild(line3);
+    if (p.acquisition_price) {
+      var line4 = document.createElement('div');
+      line4.style.cssText = 'font-size:0.8rem;opacity:0.7;margin-top:2px;';
+      line4.textContent = 'Acquired ' + _bpFmtUsdExact(p.acquisition_price);
+      popup.appendChild(line4);
+    }
+
+    var marker = L.marker([lat, lng]).addTo(map).bindPopup(popup);
+    pinned.push([lat, lng]);
+    void marker; // marker is captured by Leaflet; reference unused locally
+  }
+
+  // Auto-fit to pin bounds when we have at least one geocoded property.
+  if (pinned.length > 1) {
+    map.fitBounds(pinned, { padding: [30, 30] });
+  } else if (pinned.length === 1) {
+    map.setView(pinned[0], 13);
+  }
+
+  // Empty / pending notes.
+  if (props.length === 0) {
+    note.textContent = 'No properties seeded yet.';
+  } else if (pendingGeocode === 1) {
+    note.textContent = '1 property awaiting geocoding.';
+  } else if (pendingGeocode > 1) {
+    note.textContent = pendingGeocode + ' properties awaiting geocoding.';
+  } else {
+    note.textContent = '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Summary tile strip (rendered after properties + rollup come in)
+// ---------------------------------------------------------------------------
+
+function _bpRenderSummary() {
+  var host = document.getElementById('portfolio-summary');
+  if (!host) return;
+  while (host.firstChild) host.removeChild(host.firstChild);
+
+  var props = BROKER_PORTFOLIO_STATE.data.properties || [];
+  var rollup = BROKER_PORTFOLIO_STATE.data.rollup || {};
+
+  var tiles = [
+    { label: 'Properties', value: String(props.length), accent: '#64b5f6' },
+    { label: 'Doors', value: String(rollup.doors || props.length || 0), accent: '#81c784' },
+    { label: 'Total Equity', value: _bpFmtUsd(rollup.total_equity), accent: '#4caf50' },
+    { label: 'Total Debt', value: _bpFmtUsd(rollup.total_debt), accent: '#e57373' },
+    { label: 'Monthly CF', value: _bpFmtUsd(rollup.monthly_cash_flow), accent: (rollup.monthly_cash_flow >= 0 ? '#4caf50' : '#e53935') },
+    { label: 'Avg DSCR', value: rollup.dscr_avg != null ? Number(rollup.dscr_avg).toFixed(2) : '—', accent: '#ffb300' },
+    { label: 'Vacancy', value: rollup.vacancy_pct != null ? _bpFmtPctRaw(rollup.vacancy_pct) : '—', accent: '#ba68c8' },
+  ];
+  for (var i = 0; i < tiles.length; i++) {
+    var t = tiles[i];
+    var tile = document.createElement('div');
+    tile.style.cssText = 'border-left:3px solid ' + t.accent + ';padding-left:10px;';
+    var lab = document.createElement('div');
+    lab.style.cssText = 'font-size:0.75rem;opacity:0.7;text-transform:uppercase;letter-spacing:0.05em;';
+    lab.textContent = t.label;
+    tile.appendChild(lab);
+    var val = document.createElement('div');
+    val.style.cssText = 'font-size:1.4rem;font-weight:600;margin-top:2px;';
+    val.textContent = t.value;
+    tile.appendChild(val);
+    host.appendChild(tile);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Section 2-5: equity stack, cash-flow waterfall, phase pills, DSCR meters
+// ---------------------------------------------------------------------------
+
+async function refreshPortfolioCharts() {
+  ensurePortfolioPageDOM();
+  var slug = _bpProjectSlug();
+  var data = await fetchFromAPI('/api/v1/broker/portfolio-rollup?project_id=' + encodeURIComponent(slug));
+  if (data === null) return;
+  BROKER_PORTFOLIO_STATE.data.rollup = data || {};
+  _bpRenderSummary();
+  _bpRenderEquityStack();
+  _bpRenderCashFlow();
+  _bpRenderPhasePills();
+  _bpRenderDscrList();
+}
+
+// --- 2. Equity vs debt stack -------------------------------------------------
+
+function _bpRenderEquityStack() {
+  var host = document.getElementById('portfolio-equity-chart');
+  if (!host) return;
+  while (host.firstChild) host.removeChild(host.firstChild);
+
+  var rollup = BROKER_PORTFOLIO_STATE.data.rollup || {};
+  var rows = (rollup.properties || []).slice();
+
+  if (rows.length === 0) {
+    _bpEmptyMsg(host, 'No properties seeded yet.');
+    return;
+  }
+
+  // Compute the maximum total to scale the bars proportionally.
+  var maxTotal = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var t = (Number(rows[i].equity) || 0) + (Number(rows[i].debt) || 0);
+    if (t > maxTotal) maxTotal = t;
+  }
+  if (maxTotal <= 0) maxTotal = 1;
+
+  var W = 720;
+  var rowH = 26;
+  var rowGap = 10;
+  var labelW = 220;
+  var valueW = 120;
+  var barAreaW = W - labelW - valueW - 24;
+  var H = rows.length * (rowH + rowGap) + 30;
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+
+  var svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('height', String(H));
+  svg.style.cssText = 'background:rgba(255,255,255,0.03);border-radius:6px;';
+
+  // Legend across the top.
+  var legend = document.createElementNS(SVG_NS, 'g');
+  var legendItems = [
+    { color: '#4caf50', label: 'Equity' },
+    { color: '#e53935', label: 'Debt' },
+  ];
+  for (var li = 0; li < legendItems.length; li++) {
+    var lx = labelW + 6 + li * 110;
+    var sw = document.createElementNS(SVG_NS, 'rect');
+    sw.setAttribute('x', String(lx));
+    sw.setAttribute('y', '6');
+    sw.setAttribute('width', '12');
+    sw.setAttribute('height', '12');
+    sw.setAttribute('fill', legendItems[li].color);
+    legend.appendChild(sw);
+    var lt = document.createElementNS(SVG_NS, 'text');
+    lt.setAttribute('x', String(lx + 18));
+    lt.setAttribute('y', '17');
+    lt.setAttribute('fill', 'rgba(255,255,255,0.85)');
+    lt.setAttribute('font-size', '11');
+    lt.textContent = legendItems[li].label;
+    legend.appendChild(lt);
+  }
+  svg.appendChild(legend);
+
+  var props = BROKER_PORTFOLIO_STATE.data.properties || [];
+  var addrById = {};
+  for (var ai = 0; ai < props.length; ai++) {
+    if (props[ai] && props[ai].id != null) addrById[props[ai].id] = props[ai].address;
+  }
+
+  for (var r = 0; r < rows.length; r++) {
+    var row = rows[r];
+    var equity = Math.max(0, Number(row.equity) || 0);
+    var debt = Math.max(0, Number(row.debt) || 0);
+    var total = equity + debt;
+    var y = 30 + r * (rowH + rowGap);
+
+    // Address label.
+    var lbl = document.createElementNS(SVG_NS, 'text');
+    lbl.setAttribute('x', '8');
+    lbl.setAttribute('y', String(y + rowH * 0.65));
+    lbl.setAttribute('fill', 'rgba(255,255,255,0.85)');
+    lbl.setAttribute('font-size', '12');
+    var addrText = String(addrById[row.property_id] || row.address || row.property_id || 'Unnamed');
+    if (addrText.length > 32) addrText = addrText.substring(0, 30) + '…';
+    lbl.textContent = addrText;
+    svg.appendChild(lbl);
+
+    // Equity rect.
+    var eqW = total > 0 ? (equity / maxTotal) * barAreaW : 0;
+    var eqRect = document.createElementNS(SVG_NS, 'rect');
+    eqRect.setAttribute('x', String(labelW));
+    eqRect.setAttribute('y', String(y));
+    eqRect.setAttribute('width', String(Math.max(0, eqW)));
+    eqRect.setAttribute('height', String(rowH));
+    eqRect.setAttribute('fill', '#4caf50');
+    eqRect.setAttribute('rx', '3');
+    svg.appendChild(eqRect);
+
+    // Debt rect (stacked right).
+    var dbW = total > 0 ? (debt / maxTotal) * barAreaW : 0;
+    var dbRect = document.createElementNS(SVG_NS, 'rect');
+    dbRect.setAttribute('x', String(labelW + eqW));
+    dbRect.setAttribute('y', String(y));
+    dbRect.setAttribute('width', String(Math.max(0, dbW)));
+    dbRect.setAttribute('height', String(rowH));
+    dbRect.setAttribute('fill', '#e53935');
+    dbRect.setAttribute('rx', '3');
+    svg.appendChild(dbRect);
+
+    // Numeric label on the right.
+    var totalLbl = document.createElementNS(SVG_NS, 'text');
+    totalLbl.setAttribute('x', String(W - 8));
+    totalLbl.setAttribute('y', String(y + rowH * 0.65));
+    totalLbl.setAttribute('fill', 'rgba(255,255,255,0.85)');
+    totalLbl.setAttribute('font-size', '11');
+    totalLbl.setAttribute('text-anchor', 'end');
+    totalLbl.textContent = _bpFmtUsd(equity) + ' / ' + _bpFmtUsd(debt);
+    svg.appendChild(totalLbl);
+  }
+
+  host.appendChild(svg);
+}
+
+// --- 3. Cash-flow waterfall --------------------------------------------------
+
+function _bpRenderCashFlow() {
+  var host = document.getElementById('portfolio-cashflow-list');
+  if (!host) return;
+  while (host.firstChild) host.removeChild(host.firstChild);
+
+  var rollup = BROKER_PORTFOLIO_STATE.data.rollup || {};
+  var rows = (rollup.properties || []).slice();
+  if (rows.length === 0) {
+    _bpEmptyMsg(host, 'No properties seeded yet.');
+    return;
+  }
+
+  var props = BROKER_PORTFOLIO_STATE.data.properties || [];
+  var addrById = {};
+  for (var ai = 0; ai < props.length; ai++) {
+    if (props[ai] && props[ai].id != null) addrById[props[ai].id] = props[ai].address;
+  }
+
+  // Per-property block: a one-line header plus a horizontal stripe with
+  // four segments (gross_rent, -expenses, -debt_service, net) coloured
+  // by sign. Builds via DOM so user content is text-only.
+  var totalNet = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var revenue = Number(row.monthly_revenue) || 0;
+    var expenses = Number(row.monthly_expenses) || 0;
+    var debtService = Number(row.monthly_debt_service);
+    if (isNaN(debtService)) {
+      // Fall back to LTV * debt / 12 / 0.06 only if the back-end omitted
+      // the explicit debt service number. The back-end will normally
+      // supply it; this keeps the UI from going blank.
+      debtService = 0;
+    }
+    var net = revenue - expenses - debtService;
+    totalNet += net;
+
+    var block = document.createElement('div');
+    block.style.cssText = 'padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06);';
+
+    var head = document.createElement('div');
+    head.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;';
+    var addr = document.createElement('span');
+    addr.style.cssText = 'font-weight:500;';
+    addr.textContent = String(addrById[row.property_id] || row.address || row.property_id || 'Unnamed');
+    head.appendChild(addr);
+    var netVal = document.createElement('span');
+    netVal.style.cssText = 'font-weight:600;color:' + (net >= 0 ? '#4caf50' : '#e53935') + ';';
+    netVal.textContent = (net >= 0 ? '+' : '') + _bpFmtUsdExact(net);
+    head.appendChild(netVal);
+    block.appendChild(head);
+
+    var segWrap = document.createElement('div');
+    segWrap.style.cssText = 'display:flex;gap:6px;font-size:0.82rem;flex-wrap:wrap;';
+    [
+      { lab: 'Gross', amt: revenue, color: '#81c784', sign: '+' },
+      { lab: 'Expenses', amt: -expenses, color: '#ffb74d', sign: '−' },
+      { lab: 'Debt Svc', amt: -debtService, color: '#e57373', sign: '−' },
+      { lab: 'Net', amt: net, color: (net >= 0 ? '#4caf50' : '#e53935'), sign: (net >= 0 ? '+' : '−') },
+    ].forEach(function(seg) {
+      var pill = document.createElement('span');
+      pill.style.cssText = 'background:rgba(255,255,255,0.04);border-left:3px solid ' + seg.color + ';padding:2px 8px;border-radius:3px;color:' + seg.color + ';';
+      var absAmt = Math.abs(seg.amt);
+      pill.textContent = seg.lab + ' ' + seg.sign + _bpFmtUsdExact(absAmt);
+      segWrap.appendChild(pill);
+    });
+    block.appendChild(segWrap);
+
+    host.appendChild(block);
+  }
+
+  // Portfolio total row at the bottom.
+  var totalRow = document.createElement('div');
+  totalRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding-top:12px;font-weight:600;font-size:1rem;';
+  var lab = document.createElement('span');
+  lab.textContent = 'Portfolio Net Cash Flow';
+  totalRow.appendChild(lab);
+  var v = document.createElement('span');
+  v.style.cssText = 'color:' + (totalNet >= 0 ? '#4caf50' : '#e53935') + ';';
+  v.textContent = (totalNet >= 0 ? '+' : '') + _bpFmtUsdExact(totalNet);
+  totalRow.appendChild(v);
+  host.appendChild(totalRow);
+}
+
+// --- 4. BRRRR phase pill list -----------------------------------------------
+
+function _bpRenderPhasePills() {
+  var host = document.getElementById('portfolio-phase-list');
+  if (!host) return;
+  while (host.firstChild) host.removeChild(host.firstChild);
+
+  var rollup = BROKER_PORTFOLIO_STATE.data.rollup || {};
+  var rows = (rollup.properties || []).slice();
+  var props = BROKER_PORTFOLIO_STATE.data.properties || [];
+
+  // Pivot the property list onto rollup rows. If no rollup, fall back to
+  // the property list directly so phase badges still show during early
+  // seeding before the rollup back-end has data.
+  var source = rows.length > 0 ? rows : props;
+  if (source.length === 0) {
+    _bpEmptyMsg(host, 'No properties seeded yet.');
+    return;
+  }
+  var addrById = {};
+  for (var ai = 0; ai < props.length; ai++) {
+    if (props[ai] && props[ai].id != null) addrById[props[ai].id] = props[ai].address;
+  }
+  var phaseById = {};
+  for (var pi = 0; pi < props.length; pi++) {
+    if (props[pi] && props[pi].id != null) phaseById[props[pi].id] = props[pi].brrrr_phase;
+  }
+
+  for (var i = 0; i < source.length; i++) {
+    var entry = source[i];
+    var pid = entry.property_id != null ? entry.property_id : entry.id;
+    var addr = String(addrById[pid] || entry.address || pid || 'Unnamed');
+    var phase = entry.brrrr_phase || phaseById[pid];
+    var ps = _bpPhaseStyle(phase);
+
+    var pill = document.createElement('div');
+    pill.style.cssText = 'background:' + ps.bg + ';border:1px solid rgba(255,255,255,0.08);border-radius:18px;padding:6px 12px;display:flex;flex-direction:column;gap:2px;min-width:180px;';
+
+    var phaseLab = document.createElement('span');
+    phaseLab.style.cssText = 'font-size:0.7rem;text-transform:uppercase;letter-spacing:0.06em;color:' + ps.fg + ';font-weight:600;';
+    phaseLab.textContent = ps.label;
+    pill.appendChild(phaseLab);
+
+    var addrLab = document.createElement('span');
+    addrLab.style.cssText = 'font-size:0.85rem;opacity:0.9;';
+    addrLab.textContent = addr.length > 40 ? addr.substring(0, 38) + '…' : addr;
+    pill.appendChild(addrLab);
+
+    host.appendChild(pill);
+  }
+}
+
+// --- 5. DSCR meter list ------------------------------------------------------
+
+function _bpRenderDscrList() {
+  var host = document.getElementById('portfolio-dscr-list');
+  if (!host) return;
+  while (host.firstChild) host.removeChild(host.firstChild);
+
+  var rollup = BROKER_PORTFOLIO_STATE.data.rollup || {};
+  var rows = (rollup.properties || []).slice();
+  if (rows.length === 0) {
+    _bpEmptyMsg(host, 'No properties seeded yet.');
+    return;
+  }
+
+  var props = BROKER_PORTFOLIO_STATE.data.properties || [];
+  var addrById = {};
+  for (var ai = 0; ai < props.length; ai++) {
+    if (props[ai] && props[ai].id != null) addrById[props[ai].id] = props[ai].address;
+  }
+
+  // The DSCR meter visualises 0 -> 2.0+. Anything above 2.0 caps at the
+  // right edge so the bar still reads cleanly.
+  var maxScale = 2.0;
+
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var dscr = Number(row.dscr) || 0;
+    var bucket = _bpClassify(row);
+
+    var block = document.createElement('div');
+    block.style.cssText = 'padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06);';
+
+    var head = document.createElement('div');
+    head.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;';
+    var addr = document.createElement('span');
+    addr.style.cssText = 'font-weight:500;';
+    addr.textContent = String(addrById[row.property_id] || row.address || row.property_id || 'Unnamed');
+    head.appendChild(addr);
+    var rt = document.createElement('span');
+    rt.style.cssText = 'font-weight:600;color:' + bucket.color + ';';
+    rt.textContent = dscr.toFixed(2) + 'x · ' + bucket.label;
+    head.appendChild(rt);
+    block.appendChild(head);
+
+    // Track + fill + 1.30 target line.
+    var trackOuter = document.createElement('div');
+    trackOuter.style.cssText = 'position:relative;height:16px;background:rgba(255,255,255,0.05);border-radius:8px;overflow:hidden;';
+
+    var fillPct = Math.min(100, (dscr / maxScale) * 100);
+    var fill = document.createElement('div');
+    fill.style.cssText = 'position:absolute;left:0;top:0;bottom:0;width:' + fillPct.toFixed(2) + '%;background:' + bucket.color + ';transition:width 0.3s ease;';
+    trackOuter.appendChild(fill);
+
+    var targetLeft = ((1.30 / maxScale) * 100).toFixed(2);
+    var target = document.createElement('div');
+    target.style.cssText = 'position:absolute;top:-2px;bottom:-2px;left:' + targetLeft + '%;width:2px;background:rgba(255,255,255,0.55);';
+    trackOuter.appendChild(target);
+
+    block.appendChild(trackOuter);
+
+    var scale = document.createElement('div');
+    scale.style.cssText = 'display:flex;justify-content:space-between;font-size:0.7rem;opacity:0.55;margin-top:4px;';
+    var s0 = document.createElement('span'); s0.textContent = '0.0'; scale.appendChild(s0);
+    var s1 = document.createElement('span'); s1.textContent = '1.0'; scale.appendChild(s1);
+    var s2 = document.createElement('span'); s2.textContent = '1.30 target'; scale.appendChild(s2);
+    var s3 = document.createElement('span'); s3.textContent = '2.0+'; scale.appendChild(s3);
+    block.appendChild(scale);
+
+    host.appendChild(block);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Section 6: STR sub-section
+// ---------------------------------------------------------------------------
+
+async function refreshSTRSection() {
+  ensurePortfolioPageDOM();
+  var card = document.getElementById('portfolio-str-card');
+  var body = document.getElementById('portfolio-str-body');
+  if (!card || !body) return;
+
+  // Pull both STR bookings + participation log in parallel. Both endpoints
+  // tolerate empty data sets.
+  var slug = _bpProjectSlug();
+  var bookings = await fetchFromAPI('/api/v1/broker/str-bookings?project_id=' + encodeURIComponent(slug));
+  var participation = await fetchFromAPI('/api/v1/broker/participation-log?project_id=' + encodeURIComponent(slug));
+  if (bookings === null && participation === null) return;
+  BROKER_PORTFOLIO_STATE.data.str = bookings || {};
+  BROKER_PORTFOLIO_STATE.data.participation = participation || {};
+
+  // Filter to STR-tagged properties only.
+  var props = BROKER_PORTFOLIO_STATE.data.properties || [];
+  var strProps = [];
+  for (var i = 0; i < props.length; i++) {
+    if (props[i] && String(props[i].use_type || '').toLowerCase() === 'str') strProps.push(props[i]);
+  }
+
+  if (strProps.length === 0) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+
+  while (body.firstChild) body.removeChild(body.firstChild);
+
+  // Material-participation gauge sits at the top of the section.
+  var partTotal = 0;
+  if (participation && participation.totals && typeof participation.totals.reps_total === 'number') {
+    partTotal = participation.totals.reps_total;
+  } else if (participation && participation.totals && participation.totals.str_per_property) {
+    var perProp = participation.totals.str_per_property || {};
+    var keys = Object.keys(perProp);
+    for (var pk = 0; pk < keys.length; pk++) partTotal += Number(perProp[keys[pk]]) || 0;
+  }
+  body.appendChild(_bpRenderParticipationGauge(partTotal));
+
+  // Per-property STR cards.
+  var grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:14px;';
+
+  var perProp = (bookings && bookings.metrics_per_property) || {};
+  var partPerProp = (participation && participation.totals && participation.totals.str_per_property) || {};
+
+  for (var sp = 0; sp < strProps.length; sp++) {
+    var p = strProps[sp];
+    var m = perProp[p.id] || {};
+    var hours = Number(partPerProp[p.id] || 0);
+    grid.appendChild(_bpStrPropertyCard(p, m, hours));
+  }
+  body.appendChild(grid);
+}
+
+function _bpRenderParticipationGauge(totalHours) {
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06);';
+
+  var head = document.createElement('div');
+  head.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;';
+  var t = document.createElement('span');
+  t.style.cssText = 'font-weight:600;';
+  t.textContent = 'STR Material Participation (100h target)';
+  head.appendChild(t);
+  var hoursLab = document.createElement('span');
+  var eligible = totalHours >= 100;
+  hoursLab.style.cssText = 'font-weight:600;color:' + (eligible ? '#4caf50' : '#ffb300') + ';';
+  hoursLab.textContent = totalHours.toFixed(1) + 'h / 100h';
+  head.appendChild(hoursLab);
+  wrap.appendChild(head);
+
+  var trackOuter = document.createElement('div');
+  trackOuter.style.cssText = 'position:relative;height:18px;background:rgba(255,255,255,0.05);border-radius:9px;overflow:hidden;';
+  var pct = Math.min(100, (totalHours / 100) * 100);
+  var fill = document.createElement('div');
+  fill.style.cssText = 'position:absolute;left:0;top:0;bottom:0;width:' + pct.toFixed(2) + '%;background:' + (eligible ? '#4caf50' : '#ffb300') + ';';
+  trackOuter.appendChild(fill);
+  wrap.appendChild(trackOuter);
+
+  var msg = document.createElement('div');
+  msg.style.cssText = 'margin-top:6px;font-size:0.85rem;color:' + (eligible ? '#4caf50' : '#ffb300') + ';';
+  if (eligible) {
+    msg.textContent = '✓ STR loophole eligible YTD';
+  } else {
+    var short = (100 - totalHours).toFixed(1);
+    msg.textContent = '⚠ ' + short + ' hours short of the 100h target';
+  }
+  wrap.appendChild(msg);
+  return wrap;
+}
+
+function _bpStrPropertyCard(p, metrics, hours) {
+  var card = document.createElement('div');
+  card.style.cssText = 'padding:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;display:flex;flex-direction:column;gap:8px;';
+
+  var addr = document.createElement('div');
+  addr.style.cssText = 'font-weight:600;font-size:0.95rem;';
+  addr.textContent = String(p.address || 'Unnamed STR');
+  card.appendChild(addr);
+
+  if (p.str_listing_url) {
+    var link = document.createElement('a');
+    link.href = String(p.str_listing_url);
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.style.cssText = 'font-size:0.78rem;opacity:0.7;text-decoration:none;color:#64b5f6;';
+    link.textContent = 'View listing';
+    card.appendChild(link);
+  }
+
+  // Three-column stat row for ADR / Occupancy / RevPAR.
+  var row1 = document.createElement('div');
+  row1.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:4px;';
+  [
+    { lab: 'ADR', val: metrics.adr != null ? _bpFmtUsdExact(metrics.adr) : '—' },
+    { lab: 'Occupancy', val: metrics.occupancy_pct != null ? _bpFmtPctRaw(metrics.occupancy_pct) : '—' },
+    { lab: 'RevPAR', val: metrics.revpar != null ? _bpFmtUsdExact(metrics.revpar) : '—' },
+  ].forEach(function(s) {
+    var box = document.createElement('div');
+    box.style.cssText = 'background:rgba(0,0,0,0.18);border-radius:4px;padding:6px 8px;';
+    var l = document.createElement('div');
+    l.style.cssText = 'font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;opacity:0.6;';
+    l.textContent = s.lab;
+    box.appendChild(l);
+    var v = document.createElement('div');
+    v.style.cssText = 'font-size:1rem;font-weight:600;margin-top:2px;';
+    v.textContent = s.val;
+    box.appendChild(v);
+    row1.appendChild(box);
+  });
+  card.appendChild(row1);
+
+  // 30-day rollup line.
+  var line = document.createElement('div');
+  line.style.cssText = 'font-size:0.82rem;opacity:0.85;';
+  var rev30 = metrics.total_revenue != null ? _bpFmtUsdExact(metrics.total_revenue) : '—';
+  var nights30 = metrics.total_nights != null ? String(metrics.total_nights) : '—';
+  line.textContent = '30d: ' + rev30 + ' on ' + nights30 + ' nights';
+  card.appendChild(line);
+
+  // Per-property hours bar (mini, 0-100h scale).
+  var hoursWrap = document.createElement('div');
+  hoursWrap.style.cssText = 'margin-top:4px;';
+  var hLab = document.createElement('div');
+  hLab.style.cssText = 'font-size:0.78rem;display:flex;justify-content:space-between;opacity:0.85;';
+  var hL = document.createElement('span'); hL.textContent = 'Hours';
+  hLab.appendChild(hL);
+  var hV = document.createElement('span');
+  var hEligible = hours >= 100;
+  hV.style.cssText = 'color:' + (hEligible ? '#4caf50' : '#ffb300') + ';';
+  hV.textContent = hours.toFixed(1) + 'h';
+  hLab.appendChild(hV);
+  hoursWrap.appendChild(hLab);
+
+  var miniTrack = document.createElement('div');
+  miniTrack.style.cssText = 'height:6px;background:rgba(255,255,255,0.05);border-radius:3px;margin-top:3px;overflow:hidden;';
+  var miniFill = document.createElement('div');
+  var miniPct = Math.min(100, (hours / 100) * 100);
+  miniFill.style.cssText = 'height:100%;width:' + miniPct.toFixed(2) + '%;background:' + (hEligible ? '#4caf50' : '#ffb300') + ';';
+  miniTrack.appendChild(miniFill);
+  hoursWrap.appendChild(miniTrack);
+
+  card.appendChild(hoursWrap);
+  return card;
+}
+
+// ---------------------------------------------------------------------------
+// ProjectBus listener -- refresh every section when the user switches
+// projects, but only if the portfolio page is currently visible.
+// ---------------------------------------------------------------------------
+
+if (typeof ProjectBus !== 'undefined' && ProjectBus && typeof ProjectBus.on === 'function') {
+  ProjectBus.on(function() {
+    var page = document.querySelector('section.page.active');
+    if (page && page.id === 'page-portfolio') {
+      refreshPortfolioMap();
+      refreshPortfolioCharts();
+      refreshSTRSection();
+    }
+  });
+}
+
+
+// --------------------- broker page: rehab -----------------------------------
+// =============================================================================
+// Paw Broker -- Rehab Page (self-contained JS blob)
+// Step 6.4. Renders 4 cards: active rehab list, scope modal, contractor
+// scoreboard, improvements ledger. Vanilla JS, var only, no innerHTML with
+// user content. Reuses .stat-card, .page, .page-heading-row.
+// =============================================================================
+
+var _rehabPollStarted = false;
+var _contractorSort = { col: 'name', dir: 'asc' };
+var _rehabRows = [];
+var _propertyRows = [];
+var _contractorRows = [];
+var _improvementRows = [];
+
+// ---- helpers ----
+
+function _rehabProjectId() {
+  return (typeof currentProject !== 'undefined' && currentProject && currentProject.slug)
+    ? currentProject.slug
+    : 'broker';
+}
+
+function _rehabFmtMoney(n) {
+  if (n === null || n === undefined || isNaN(Number(n))) return '--';
+  var v = Number(n);
+  return '$' + v.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
+function _rehabFmtPct(n, decimals) {
+  if (n === null || n === undefined || isNaN(Number(n))) return '--';
+  var d = decimals == null ? 1 : decimals;
+  return Number(n).toFixed(d) + '%';
+}
+
+function _rehabFmtDate(s) {
+  if (!s) return '--';
+  if (typeof s === 'number') {
+    try { return new Date(s).toLocaleDateString(); } catch (e) { return '--'; }
+  }
+  return String(s);
+}
+
+function _rehabPctColor(pct) {
+  if (pct == null || isNaN(pct)) return 'rgba(255,255,255,0.6)';
+  if (pct > 100) return '#e74c3c';   // red -- over budget
+  if (pct >= 96) return '#f1c40f';   // gold -- nearly done
+  if (pct >= 51) return '#2ecc71';   // green -- on track
+  return '#3498db';                  // blue -- early
+}
+
+function _rehabClearChildren(el) {
+  while (el && el.firstChild) el.removeChild(el.firstChild);
+}
+
+function _rehabCell(text, opts) {
+  var td = document.createElement('td');
+  td.style.cssText = 'padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.08);font-size:13px;';
+  if (opts && opts.color) td.style.color = opts.color;
+  if (opts && opts.bold) td.style.fontWeight = '600';
+  if (opts && opts.align) td.style.textAlign = opts.align;
+  td.textContent = text == null ? '--' : String(text);
+  return td;
+}
+
+function _rehabUrlCell(url, label) {
+  var td = document.createElement('td');
+  td.style.cssText = 'padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.08);font-size:13px;';
+  if (url) {
+    var a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = label;
+    a.style.color = '#3498db';
+    td.appendChild(a);
+  } else {
+    td.textContent = '--';
+  }
+  return td;
+}
+
+function _rehabHeaderCell(text, opts) {
+  var th = document.createElement('th');
+  th.style.cssText = 'padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.18);text-align:left;font-size:12px;font-weight:600;color:rgba(255,255,255,0.7);';
+  if (opts && opts.align) th.style.textAlign = opts.align;
+  if (opts && opts.clickable) {
+    th.style.cursor = 'pointer';
+    th.style.userSelect = 'none';
+  }
+  th.textContent = text;
+  return th;
+}
+
+function _rehabFindProperty(propertyId) {
+  for (var i = 0; i < _propertyRows.length; i++) {
+    if (_propertyRows[i].id === propertyId) return _propertyRows[i];
+  }
+  return null;
+}
+
+function _rehabPropertyAddress(propertyId) {
+  var p = _rehabFindProperty(propertyId);
+  if (!p) return '(unknown property)';
+  return p.address || p.name || ('property ' + propertyId);
+}
+
+// Build modal backdrop + dialog with a header bar. Returns the dialog content
+// element to which the caller appends body content.
+function _rehabOpenModal(titleText, closeLabel, maxWidth) {
+  var backdrop = document.createElement('div');
+  backdrop.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px;';
+  backdrop.addEventListener('click', function(ev) {
+    if (ev.target === backdrop) document.body.removeChild(backdrop);
+  });
+  var dialog = document.createElement('div');
+  dialog.style.cssText = 'background:#1c1f24;border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:20px;max-width:' + (maxWidth || 520) + 'px;width:100%;max-height:85vh;overflow-y:auto;color:#fff;';
+  var header = document.createElement('div');
+  header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:12px;';
+  var title = document.createElement('div');
+  title.style.cssText = 'font-weight:600;font-size:14px;';
+  title.textContent = titleText;
+  header.appendChild(title);
+  var closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.textContent = closeLabel || 'Close';
+  closeBtn.style.cssText = 'background:rgba(255,255,255,0.08);color:#fff;border:1px solid rgba(255,255,255,0.16);padding:6px 12px;border-radius:4px;cursor:pointer;font-size:12px;';
+  closeBtn.addEventListener('click', function() { document.body.removeChild(backdrop); });
+  header.appendChild(closeBtn);
+  dialog.appendChild(header);
+  backdrop.appendChild(dialog);
+  document.body.appendChild(backdrop);
+  return { backdrop: backdrop, dialog: dialog };
+}
+
+// ---- DOM scaffold ----
+
+function ensureRehabPageDOM() {
+  if (document.getElementById('page-rehab')) return;
+  var main = document.querySelector('.main-content');
+  if (!main) return;
+
+  var page = document.createElement('section');
+  page.id = 'page-rehab';
+  page.className = 'page';
+  page.setAttribute('data-page-title', 'Rehab');
+  page.setAttribute('aria-label', 'Paw Broker Rehab');
+  page.hidden = true;
+
+  var heading = document.createElement('div');
+  heading.className = 'page-heading-row';
+  var h2 = document.createElement('h2');
+  h2.className = 'page-heading';
+  h2.textContent = 'Rehab and Improvements';
+  heading.appendChild(h2);
+  page.appendChild(heading);
+
+  var activeCard = document.createElement('div');
+  activeCard.id = 'rehab-active-list';
+  activeCard.className = 'stat-card';
+  activeCard.style.cssText = 'padding:18px;';
+  activeCard.textContent = 'Loading active rehabs...';
+  page.appendChild(activeCard);
+
+  var contractorCard = document.createElement('div');
+  contractorCard.id = 'rehab-contractor-scoreboard';
+  contractorCard.className = 'stat-card';
+  contractorCard.style.cssText = 'padding:18px;margin-top:12px;';
+  contractorCard.textContent = 'Loading contractor scoreboard...';
+  page.appendChild(contractorCard);
+
+  var ledgerCard = document.createElement('div');
+  ledgerCard.id = 'rehab-improvements-ledger';
+  ledgerCard.className = 'stat-card';
+  ledgerCard.style.cssText = 'padding:18px;margin-top:12px;';
+  ledgerCard.textContent = 'Loading improvements ledger...';
+  page.appendChild(ledgerCard);
+
+  main.appendChild(page);
+}
+
+// ---- 1. Active rehab list ----
+
+async function refreshRehabActiveList() {
+  var container = document.getElementById('rehab-active-list');
+  if (!container) return;
+  try {
+    var pid = _rehabProjectId();
+    var data = await fetchFromAPI('/api/v1/broker/rehab-estimates?project_id=' + encodeURIComponent(pid));
+    if (data === null) return;
+    _rehabRows = (data && data.rows) || (Array.isArray(data) ? data : []);
+    renderRehabActiveList(container);
+  } catch (e) {
+    container.textContent = 'Active rehab list unavailable: ' + String(e);
+  }
+}
+
+function renderRehabActiveList(container) {
+  _rehabClearChildren(container);
+
+  var title = document.createElement('div');
+  title.style.cssText = 'font-weight:600;margin-bottom:10px;font-size:14px;';
+  title.textContent = 'Active Rehabs';
+  container.appendChild(title);
+
+  if (!_rehabRows.length) {
+    var empty = document.createElement('div');
+    empty.style.cssText = 'color:rgba(255,255,255,0.6);font-size:13px;';
+    empty.textContent = 'No active rehabs.';
+    container.appendChild(empty);
+    return;
+  }
+
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'overflow-x:auto;';
+  var table = document.createElement('table');
+  table.style.cssText = 'width:100%;border-collapse:collapse;min-width:880px;';
+
+  var thead = document.createElement('thead');
+  var hr = document.createElement('tr');
+  ['Property', '% Complete', 'Total Est', 'Total Actual', 'Contingency', 'Status', 'Started', 'Completed'].forEach(function(h, i) {
+    var rightAligned = (i >= 1 && i <= 4);
+    hr.appendChild(_rehabHeaderCell(h, { align: rightAligned ? 'right' : 'left' }));
+  });
+  thead.appendChild(hr);
+  table.appendChild(thead);
+
+  var tbody = document.createElement('tbody');
+  _rehabRows.forEach(function(r) {
+    var est = Number(r.total_est) || 0;
+    var actual = Number(r.total_actual) || 0;
+    var pct = est > 0 ? (actual / est) * 100 : 0;
+    if (pct > 999) pct = 999;
+    var color = _rehabPctColor(pct);
+
+    var tr = document.createElement('tr');
+    tr.style.cssText = 'cursor:pointer;';
+    tr.addEventListener('mouseenter', function() { tr.style.background = 'rgba(255,255,255,0.04)'; });
+    tr.addEventListener('mouseleave', function() { tr.style.background = ''; });
+    tr.addEventListener('click', function() { openRehabScopeModal(r); });
+
+    tr.appendChild(_rehabCell(_rehabPropertyAddress(r.property_id), { bold: true }));
+    tr.appendChild(_rehabCell(_rehabFmtPct(pct, 0), { color: color, bold: true, align: 'right' }));
+    tr.appendChild(_rehabCell(_rehabFmtMoney(est), { align: 'right' }));
+    tr.appendChild(_rehabCell(_rehabFmtMoney(actual), { align: 'right' }));
+    tr.appendChild(_rehabCell(_rehabFmtPct(Number(r.contingency_pct) || 0, 0), { align: 'right' }));
+    tr.appendChild(_rehabCell(r.status || 'planning'));
+    tr.appendChild(_rehabCell(_rehabFmtDate(r.started_at)));
+    tr.appendChild(_rehabCell(_rehabFmtDate(r.completed_at)));
+
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  container.appendChild(wrap);
+
+  var hint = document.createElement('div');
+  hint.style.cssText = 'margin-top:8px;color:rgba(255,255,255,0.5);font-size:11px;';
+  hint.textContent = 'Click a row to view the line-item scope and est vs actual.';
+  container.appendChild(hint);
+}
+
+// ---- 2. Line-item est vs actual modal ----
+
+function openRehabScopeModal(rehab) {
+  var m = _rehabOpenModal('Scope -- ' + _rehabPropertyAddress(rehab.property_id), 'Close', 900);
+  var dialog = m.dialog;
+
+  var items = null;
+  try {
+    var raw = rehab.scope_json;
+    if (raw && typeof raw === 'string') items = JSON.parse(raw);
+    else if (Array.isArray(raw)) items = raw;
+  } catch (e) {
+    items = null;
+  }
+
+  if (!items || !Array.isArray(items) || !items.length) {
+    var no = document.createElement('div');
+    no.style.cssText = 'color:rgba(255,255,255,0.6);font-size:13px;padding:14px 0;';
+    no.textContent = 'scope not set';
+    dialog.appendChild(no);
+    return;
+  }
+
+  var table = document.createElement('table');
+  table.style.cssText = 'width:100%;border-collapse:collapse;';
+  var thead = document.createElement('thead');
+  var hr = document.createElement('tr');
+  ['Trade', 'Scope', 'Est', 'Actual', 'Variance', 'Status'].forEach(function(h, i) {
+    hr.appendChild(_rehabHeaderCell(h, { align: i >= 2 && i <= 4 ? 'right' : 'left' }));
+  });
+  thead.appendChild(hr);
+  table.appendChild(thead);
+
+  var tbody = document.createElement('tbody');
+  var totalEst = 0;
+  var totalActual = 0;
+  items.forEach(function(it) {
+    var est = Number(it.est) || 0;
+    var actual = Number(it.actual) || 0;
+    var variance = actual - est;
+    totalEst += est;
+    totalActual += actual;
+    var vColor = variance > 0 ? '#e74c3c' : (variance < 0 ? '#2ecc71' : 'rgba(255,255,255,0.6)');
+    var vText = (variance >= 0 ? '+' : '') + _rehabFmtMoney(variance);
+
+    var tr = document.createElement('tr');
+    tr.appendChild(_rehabCell(it.trade || '--'));
+    tr.appendChild(_rehabCell(it.scope || '--'));
+    tr.appendChild(_rehabCell(_rehabFmtMoney(est), { align: 'right' }));
+    tr.appendChild(_rehabCell(_rehabFmtMoney(actual), { align: 'right' }));
+    tr.appendChild(_rehabCell(vText, { align: 'right', color: vColor, bold: true }));
+    tr.appendChild(_rehabCell(it.status || '--'));
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+
+  var tfoot = document.createElement('tfoot');
+  var fr = document.createElement('tr');
+  fr.style.fontWeight = '600';
+  fr.appendChild(_rehabCell('TOTAL', { bold: true }));
+  fr.appendChild(_rehabCell(''));
+  fr.appendChild(_rehabCell(_rehabFmtMoney(totalEst), { align: 'right', bold: true }));
+  fr.appendChild(_rehabCell(_rehabFmtMoney(totalActual), { align: 'right', bold: true }));
+  var totalVar = totalActual - totalEst;
+  var totalVarColor = totalVar > 0 ? '#e74c3c' : (totalVar < 0 ? '#2ecc71' : 'rgba(255,255,255,0.6)');
+  fr.appendChild(_rehabCell((totalVar >= 0 ? '+' : '') + _rehabFmtMoney(totalVar), { align: 'right', bold: true, color: totalVarColor }));
+  fr.appendChild(_rehabCell(''));
+  tfoot.appendChild(fr);
+  table.appendChild(tfoot);
+
+  dialog.appendChild(table);
+}
+
+// ---- 3. Contractor scoreboard ----
+
+async function refreshContractorScoreboard() {
+  var container = document.getElementById('rehab-contractor-scoreboard');
+  if (!container) return;
+  try {
+    var pid = _rehabProjectId();
+    var data = await fetchFromAPI('/api/v1/broker/contractors?project_id=' + encodeURIComponent(pid));
+    if (data === null) return;
+    _contractorRows = (data && data.rows) || (Array.isArray(data) ? data : []);
+    renderContractorScoreboard(container);
+  } catch (e) {
+    container.textContent = 'Contractor scoreboard unavailable: ' + String(e);
+  }
+}
+
+function _contractorIsProblem(c) {
+  var onTime = Number(c.on_time_pct);
+  var bv = Number(c.budget_variance_pct);
+  var cb = Number(c.callback_rate);
+  if (!isNaN(onTime) && onTime < 70) return true;
+  if (!isNaN(bv) && bv > 20) return true;
+  if (!isNaN(cb) && cb > 15) return true;
+  return false;
+}
+
+function _contractorSortRows(rows) {
+  var col = _contractorSort.col;
+  var dir = _contractorSort.dir === 'desc' ? -1 : 1;
+  var sorted = rows.slice();
+  sorted.sort(function(a, b) {
+    var av = a[col];
+    var bv = b[col];
+    if (av == null && bv == null) return 0;
+    if (av == null) return -1 * dir;
+    if (bv == null) return 1 * dir;
+    var an = Number(av);
+    var bn = Number(bv);
+    if (!isNaN(an) && !isNaN(bn) && typeof av !== 'string' && typeof bv !== 'string') {
+      return (an - bn) * dir;
+    }
+    var as = String(av).toLowerCase();
+    var bs = String(bv).toLowerCase();
+    if (as < bs) return -1 * dir;
+    if (as > bs) return 1 * dir;
+    return 0;
+  });
+  return sorted;
+}
+
+function renderContractorScoreboard(container) {
+  _rehabClearChildren(container);
+
+  var title = document.createElement('div');
+  title.style.cssText = 'font-weight:600;margin-bottom:10px;font-size:14px;';
+  title.textContent = 'Contractor Scoreboard';
+  container.appendChild(title);
+
+  if (!_contractorRows.length) {
+    var empty = document.createElement('div');
+    empty.style.cssText = 'color:rgba(255,255,255,0.6);font-size:13px;';
+    empty.textContent = 'No contractors yet.';
+    container.appendChild(empty);
+    return;
+  }
+
+  var legend = document.createElement('div');
+  legend.style.cssText = 'margin-bottom:8px;color:rgba(255,255,255,0.5);font-size:11px;';
+  legend.textContent = 'Highlighted rows are problem contractors (on time < 70, budget variance > 20, or callback > 15). Click a column to sort.';
+  container.appendChild(legend);
+
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'overflow-x:auto;';
+  var table = document.createElement('table');
+  table.id = 'contractor-scoreboard-table';
+  table.style.cssText = 'width:100%;border-collapse:collapse;min-width:760px;';
+
+  var cols = [
+    { key: 'name', label: 'Name', align: 'left' },
+    { key: 'trade', label: 'Trade', align: 'left' },
+    { key: 'license', label: 'License', align: 'left' },
+    { key: 'on_time_pct', label: 'On Time %', align: 'right', isPct: true },
+    { key: 'budget_variance_pct', label: 'Budget Var %', align: 'right', isPct: true },
+    { key: 'callback_rate', label: 'Callback %', align: 'right', isPct: true },
+    { key: 'last_used_at', label: 'Last Used', align: 'left', isDate: true }
+  ];
+
+  var thead = document.createElement('thead');
+  var hr = document.createElement('tr');
+  cols.forEach(function(col) {
+    var th = _rehabHeaderCell(col.label + (_contractorSort.col === col.key ? (_contractorSort.dir === 'asc' ? ' ↑' : ' ↓') : ''),
+      { align: col.align, clickable: true });
+    th.addEventListener('click', function() {
+      if (_contractorSort.col === col.key) {
+        _contractorSort.dir = _contractorSort.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        _contractorSort.col = col.key;
+        _contractorSort.dir = 'asc';
+      }
+      renderContractorScoreboard(container);
+    });
+    hr.appendChild(th);
+  });
+  thead.appendChild(hr);
+  table.appendChild(thead);
+
+  var tbody = document.createElement('tbody');
+  tbody.id = 'contractor-scoreboard-tbody';
+  var sorted = _contractorSortRows(_contractorRows);
+  sorted.forEach(function(c) {
+    var tr = document.createElement('tr');
+    if (_contractorIsProblem(c)) {
+      tr.style.background = 'rgba(231, 76, 60, 0.10)';
+    }
+    cols.forEach(function(col) {
+      var raw = c[col.key];
+      var text;
+      if (col.isPct) text = _rehabFmtPct(raw, 1);
+      else if (col.isDate) text = _rehabFmtDate(raw);
+      else text = raw == null ? '--' : String(raw);
+      tr.appendChild(_rehabCell(text, { align: col.align }));
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  container.appendChild(wrap);
+}
+
+// ---- 4. Improvements ledger per property ----
+
+async function refreshImprovementsLedger() {
+  var container = document.getElementById('rehab-improvements-ledger');
+  if (!container) return;
+  try {
+    var pid = _rehabProjectId();
+    var props = await fetchFromAPI('/api/v1/broker/properties?project_id=' + encodeURIComponent(pid));
+    var imps = await fetchFromAPI('/api/v1/broker/improvements?project_id=' + encodeURIComponent(pid));
+    if (props === null && imps === null) return;
+    _propertyRows = (props && props.rows) || (Array.isArray(props) ? props : []);
+    _improvementRows = (imps && imps.rows) || (Array.isArray(imps) ? imps : []);
+    renderImprovementsLedger(container);
+  } catch (e) {
+    container.textContent = 'Improvements ledger unavailable: ' + String(e);
+  }
+}
+
+function renderImprovementsLedger(container) {
+  _rehabClearChildren(container);
+
+  var title = document.createElement('div');
+  title.style.cssText = 'font-weight:600;margin-bottom:10px;font-size:14px;';
+  title.textContent = 'Improvements Ledger';
+  container.appendChild(title);
+
+  if (!_propertyRows.length) {
+    var empty = document.createElement('div');
+    empty.style.cssText = 'color:rgba(255,255,255,0.6);font-size:13px;';
+    empty.textContent = 'No properties yet.';
+    container.appendChild(empty);
+    return;
+  }
+
+  var byProp = {};
+  _improvementRows.forEach(function(imp) {
+    var pid = imp.property_id;
+    if (!byProp[pid]) byProp[pid] = [];
+    byProp[pid].push(imp);
+  });
+
+  _propertyRows.forEach(function(prop) {
+    var section = document.createElement('div');
+    section.style.cssText = 'margin-bottom:18px;padding:12px;background:rgba(255,255,255,0.03);border-radius:6px;';
+
+    var imps = byProp[prop.id] || [];
+    var sumImps = imps.reduce(function(acc, i) { return acc + (Number(i.cost) || 0); }, 0);
+    var basis = (Number(prop.acquisition_price) || 0) + sumImps;
+
+    var head = document.createElement('div');
+    head.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap;';
+    var addr = document.createElement('div');
+    addr.style.cssText = 'font-weight:600;font-size:13px;';
+    addr.textContent = prop.address || prop.name || ('Property ' + prop.id);
+    head.appendChild(addr);
+
+    var basisInfo = document.createElement('div');
+    basisInfo.style.cssText = 'font-size:12px;color:rgba(255,255,255,0.7);';
+    basisInfo.textContent = 'Acquisition ' + _rehabFmtMoney(prop.acquisition_price)
+      + ' + Improvements ' + _rehabFmtMoney(sumImps)
+      + ' = Total Basis ' + _rehabFmtMoney(basis);
+    head.appendChild(basisInfo);
+
+    var addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.textContent = '+ Add improvement';
+    addBtn.style.cssText = 'background:rgba(46,204,113,0.18);color:#2ecc71;border:1px solid rgba(46,204,113,0.35);padding:6px 10px;border-radius:4px;cursor:pointer;font-size:12px;';
+    addBtn.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      openAddImprovementModal(prop.id);
+    });
+    head.appendChild(addBtn);
+
+    section.appendChild(head);
+
+    if (!imps.length) {
+      var none = document.createElement('div');
+      none.style.cssText = 'color:rgba(255,255,255,0.5);font-size:12px;';
+      none.textContent = 'No improvements logged for this property yet.';
+      section.appendChild(none);
+    } else {
+      var wrap = document.createElement('div');
+      wrap.style.cssText = 'overflow-x:auto;';
+      var table = document.createElement('table');
+      table.style.cssText = 'width:100%;border-collapse:collapse;min-width:680px;';
+      var thead = document.createElement('thead');
+      var hr = document.createElement('tr');
+      ['Description', 'Cost', 'Date', 'Photos', 'Receipts'].forEach(function(h, i) {
+        hr.appendChild(_rehabHeaderCell(h, { align: i === 1 ? 'right' : 'left' }));
+      });
+      thead.appendChild(hr);
+      table.appendChild(thead);
+
+      var tbody = document.createElement('tbody');
+      imps.forEach(function(imp) {
+        var tr = document.createElement('tr');
+        tr.appendChild(_rehabCell(imp.description || '--'));
+        tr.appendChild(_rehabCell(_rehabFmtMoney(imp.cost), { align: 'right' }));
+        tr.appendChild(_rehabCell(_rehabFmtDate(imp.date)));
+
+        tr.appendChild(_rehabUrlCell(imp.photos_url, 'photos'));
+        tr.appendChild(_rehabUrlCell(imp.receipts_url, 'receipts'));
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      section.appendChild(wrap);
+    }
+
+    container.appendChild(section);
+  });
+}
+
+// ---- Add improvement modal (POST /api/v1/broker/improvements) ----
+
+function openAddImprovementModal(propertyId) {
+  var m = _rehabOpenModal('Add improvement -- ' + _rehabPropertyAddress(propertyId), 'Cancel', 520);
+  var dialog = m.dialog;
+  var backdrop = m.backdrop;
+
+  function _formField(labelText, inputEl) {
+    var row = document.createElement('div');
+    row.style.cssText = 'margin-bottom:10px;';
+    var lab = document.createElement('label');
+    lab.textContent = labelText;
+    lab.style.cssText = 'display:block;font-size:12px;color:rgba(255,255,255,0.7);margin-bottom:4px;';
+    row.appendChild(lab);
+    inputEl.style.cssText = 'width:100%;background:rgba(255,255,255,0.06);color:#fff;border:1px solid rgba(255,255,255,0.16);border-radius:4px;padding:8px 10px;font-size:13px;box-sizing:border-box;';
+    row.appendChild(inputEl);
+    return row;
+  }
+
+  var descInput = document.createElement('input');
+  descInput.type = 'text';
+  descInput.placeholder = 'e.g. New roof, HVAC, kitchen remodel';
+  dialog.appendChild(_formField('Description', descInput));
+
+  var costInput = document.createElement('input');
+  costInput.type = 'number';
+  costInput.step = '0.01';
+  costInput.placeholder = '0.00';
+  dialog.appendChild(_formField('Cost (USD)', costInput));
+
+  var dateInput = document.createElement('input');
+  dateInput.type = 'date';
+  var today = new Date();
+  var iso = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+  dateInput.value = iso;
+  dialog.appendChild(_formField('Date', dateInput));
+
+  var photosInput = document.createElement('input');
+  photosInput.type = 'url';
+  photosInput.placeholder = 'https://...  (optional)';
+  dialog.appendChild(_formField('Photos URL', photosInput));
+
+  var receiptsInput = document.createElement('input');
+  receiptsInput.type = 'url';
+  receiptsInput.placeholder = 'https://...  (optional)';
+  dialog.appendChild(_formField('Receipts URL', receiptsInput));
+
+  var msg = document.createElement('div');
+  msg.style.cssText = 'min-height:18px;font-size:12px;margin-bottom:10px;color:rgba(255,255,255,0.7);';
+  dialog.appendChild(msg);
+
+  var actions = document.createElement('div');
+  actions.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;';
+  var saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.textContent = 'Save';
+  saveBtn.style.cssText = 'background:#2ecc71;color:#0f1115;border:none;padding:8px 14px;border-radius:4px;cursor:pointer;font-weight:600;font-size:13px;';
+  saveBtn.addEventListener('click', async function() {
+    var desc = descInput.value.trim();
+    var cost = Number(costInput.value);
+    var date = dateInput.value.trim();
+    if (!desc) { msg.textContent = 'Description is required.'; msg.style.color = '#e74c3c'; return; }
+    if (!isFinite(cost) || cost < 0) { msg.textContent = 'Cost must be a non-negative number.'; msg.style.color = '#e74c3c'; return; }
+    if (!date) { msg.textContent = 'Date is required.'; msg.style.color = '#e74c3c'; return; }
+
+    saveBtn.disabled = true;
+    msg.textContent = 'Saving...';
+    msg.style.color = 'rgba(255,255,255,0.7)';
+
+    var body = {
+      project_id: _rehabProjectId(),
+      property_id: propertyId,
+      description: desc,
+      cost: cost,
+      date: date
+    };
+    if (photosInput.value.trim()) body.photos_url = photosInput.value.trim();
+    if (receiptsInput.value.trim()) body.receipts_url = receiptsInput.value.trim();
+
+    try {
+      var resp = await apiFetch('/api/v1/broker/improvements', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (resp && resp.ok) {
+        document.body.removeChild(backdrop);
+        refreshImprovementsLedger();
+      } else {
+        saveBtn.disabled = false;
+        msg.textContent = 'Save failed' + (resp && resp.status ? ' (HTTP ' + resp.status + ')' : '') + '.';
+        msg.style.color = '#e74c3c';
+      }
+    } catch (e) {
+      saveBtn.disabled = false;
+      msg.textContent = 'Save failed: ' + String(e);
+      msg.style.color = '#e74c3c';
+    }
+  });
+  actions.appendChild(saveBtn);
+  dialog.appendChild(actions);
+  setTimeout(function() { try { descInput.focus(); } catch (e) {} }, 30);
+}
+
+// ---- Page init ----
+
+function initRehabPage() {
+  ensureRehabPageDOM();
+  // Improvements ledger fetches properties first so the active-list address
+  // lookup has data. Active list re-renders after.
+  refreshImprovementsLedger().then(function() {
+    refreshRehabActiveList();
+  });
+  refreshContractorScoreboard();
+
+  if (!_rehabPollStarted) {
+    _rehabPollStarted = true;
+    if (typeof addPollingInterval === 'function') {
+      addPollingInterval(refreshRehabActiveList, 30000);
+      addPollingInterval(refreshContractorScoreboard, 60000);
+      addPollingInterval(refreshImprovementsLedger, 60000);
+    }
+  }
+}
+
+// ---- ProjectBus listener (guarded for early-load) ----
+
+if (typeof ProjectBus !== 'undefined' && ProjectBus && typeof ProjectBus.on === 'function') {
+  ProjectBus.on(function() {
+    if (!document.getElementById('page-rehab')) return;
+    refreshImprovementsLedger().then(function() {
+      refreshRehabActiveList();
+    });
+    refreshContractorScoreboard();
+  });
+}
+
+
+// --------------------- broker page: tax -------------------------------------
+// =============================================================================
+// Paw Broker Tax page (Step 6.5 of the broker plan).
+// Self-contained vanilla-JS blob.  Single entry: initTaxPage().  CPA banner is
+// the first child of the page, sticky, always visible.  Every numeric cell
+// involving tax math has a "(verify with CPA)" tooltip.  Calculator only, no
+// advisory voice.  createElement + appendChild only.
+// =============================================================================
+
+var _taxPageInitialized = false;
+
+// --- DOM scaffolding -------------------------------------------------------
+
+function ensureTaxPageDOM() {
+  if (document.getElementById('page-tax')) return;
+  var main = document.querySelector('.main-content');
+  if (!main) return;
+
+  var page = document.createElement('section');
+  page.id = 'page-tax';
+  page.className = 'page';
+  page.setAttribute('data-page-title', 'Tax');
+  page.setAttribute('aria-label', 'Paw Broker Tax');
+  page.hidden = true;
+
+  // CPA-disclaimer banner.  MUST render first.  Sticky-top, yellow / amber,
+  // bold first sentence.  Plan section 5 + verification #7 require this.
+  var banner = document.createElement('div');
+  banner.id = 'tax-cpa-banner';
+  banner.setAttribute('role', 'alert');
+  banner.style.cssText = [
+    'position:sticky',
+    'top:0',
+    'z-index:50',
+    'background:#fef3c7',
+    'color:#78350f',
+    'padding:16px',
+    'margin-bottom:16px',
+    'border-left:4px solid #d97706',
+    'border-radius:4px',
+    'font-size:0.9rem',
+    'line-height:1.5',
+  ].join(';') + ';';
+  var bannerStrong = document.createElement('strong');
+  bannerStrong.textContent = 'Not tax advice. ';
+  banner.appendChild(bannerStrong);
+  banner.appendChild(document.createTextNode(
+    'Coordinate with your CPA before any action. Numbers shown are ' +
+    'illustrative projections from automated paws and may be incomplete or ' +
+    'wrong. Verify every figure against your actual returns and a licensed ' +
+    "professional's review before filing or making decisions."
+  ));
+  page.appendChild(banner);
+
+  // Page heading
+  var heading = document.createElement('div');
+  heading.className = 'page-heading-row';
+  var h2 = document.createElement('h2');
+  h2.className = 'page-heading';
+  h2.textContent = 'Paw Broker Tax';
+  heading.appendChild(h2);
+  page.appendChild(heading);
+
+  // Card slots, in render order
+  var slots = [
+    { id: 'tax-depreciation', text: 'Loading depreciation summary...' },
+    { id: 'tax-reps', text: 'Loading REPS hours...' },
+    { id: 'tax-str', text: 'Loading STR hours per property...' },
+    { id: 'tax-1031', text: 'Loading 1031 exchange clocks...' },
+    { id: 'tax-q-est', text: 'Loading quarterly estimated taxes...' },
+    { id: 'tax-cost-seg', text: 'Loading cost-seg studies...' },
+    { id: 'tax-cost-seg-candidates', text: 'Loading cost-seg candidates...' },
+    { id: 'tax-ltta', text: 'Loading LTTA status grid...' },
+  ];
+
+  slots.forEach(function (s) {
+    var card = document.createElement('div');
+    card.id = s.id;
+    card.className = 'stat-card';
+    card.style.cssText = 'padding:18px;margin-top:12px;';
+    card.textContent = s.text;
+    page.appendChild(card);
+  });
+
+  main.appendChild(page);
+}
+
+// --- Helpers ---------------------------------------------------------------
+
+function _taxProjectSlug() {
+  return (typeof currentProject !== 'undefined' && currentProject && currentProject.slug)
+    ? currentProject.slug
+    : 'broker';
+}
+
+function _taxFmtUSD(n) {
+  if (n == null || isNaN(n)) return '$0';
+  var v = Number(n);
+  return '$' + v.toLocaleString('en-US', { maximumFractionDigits: 0 });
+}
+
+function _taxFmtNum(n, digits) {
+  if (n == null || isNaN(n)) return '0';
+  var d = digits == null ? 0 : digits;
+  return Number(n).toLocaleString('en-US', { maximumFractionDigits: d });
+}
+
+function _taxParseDate(s) {
+  if (!s) return null;
+  var d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function _taxDaysBetween(later, earlier) {
+  var ms = later.getTime() - earlier.getTime();
+  return Math.round(ms / 86400000);
+}
+
+function _taxDayOfYear(d) {
+  var start = new Date(d.getFullYear(), 0, 0);
+  var diff = d.getTime() - start.getTime();
+  return Math.floor(diff / 86400000);
+}
+
+function _taxClearCard(card, headingText) {
+  while (card.firstChild) card.removeChild(card.firstChild);
+  if (headingText) {
+    var h = document.createElement('div');
+    h.style.cssText = 'font-weight:600;margin-bottom:10px;font-size:1rem;';
+    h.textContent = headingText;
+    card.appendChild(h);
+  }
+}
+
+function _taxEmpty(text) {
+  var p = document.createElement('div');
+  p.style.cssText = 'color:rgba(255,255,255,0.55);font-style:italic;';
+  p.textContent = text;
+  return p;
+}
+
+function _taxColorForRatio(actual, target, slack) {
+  // slack is the "amber" tolerance below target (in same units as target).
+  if (actual >= target) return '#10b981'; // green
+  if (actual >= target - slack) return '#f59e0b'; // amber
+  return '#ef4444'; // red
+}
+
+function _taxRenderGauge(opts) {
+  // Pure-CSS gauge bar.  opts = { current, target, max, color, label,
+  // valueText, ariaLabel, tooltip }.
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'margin-bottom:14px;';
+
+  if (opts.label) {
+    var lab = document.createElement('div');
+    lab.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-size:0.88rem;';
+    var lbl = document.createElement('span');
+    lbl.textContent = opts.label;
+    lab.appendChild(lbl);
+    if (opts.valueText) {
+      var val = document.createElement('span');
+      val.style.cssText = 'font-weight:600;color:' + opts.color + ';';
+      val.textContent = opts.valueText;
+      if (opts.tooltip) val.title = opts.tooltip;
+      lab.appendChild(val);
+    }
+    wrap.appendChild(lab);
+  }
+
+  var bar = document.createElement('div');
+  bar.style.cssText = 'position:relative;height:10px;background:rgba(255,255,255,0.08);border-radius:5px;overflow:hidden;';
+  bar.setAttribute('role', 'progressbar');
+  bar.setAttribute('aria-valuenow', String(opts.current));
+  bar.setAttribute('aria-valuemin', '0');
+  bar.setAttribute('aria-valuemax', String(opts.max));
+  if (opts.ariaLabel) bar.setAttribute('aria-label', opts.ariaLabel);
+
+  var pct = Math.max(0, Math.min(100, (opts.current / opts.max) * 100));
+  var fill = document.createElement('div');
+  fill.style.cssText = 'position:absolute;top:0;left:0;bottom:0;width:' + pct.toFixed(2) +
+    '%;background:' + opts.color + ';transition:width 0.3s ease;';
+  bar.appendChild(fill);
+
+  // Threshold marker (if provided)
+  if (opts.target != null && opts.max > 0) {
+    var tpct = Math.max(0, Math.min(100, (opts.target / opts.max) * 100));
+    var marker = document.createElement('div');
+    marker.style.cssText = 'position:absolute;top:-2px;bottom:-2px;left:' + tpct.toFixed(2) +
+      '%;width:2px;background:rgba(255,255,255,0.6);';
+    marker.title = 'Target: ' + _taxFmtNum(opts.target) + 'h';
+    bar.appendChild(marker);
+  }
+
+  wrap.appendChild(bar);
+  return wrap;
+}
+
+// --- Section 1: depreciation summary + OBBB banner ------------------------
+
+function _taxRenderDepreciation(card, taxClock, costSegStudies) {
+  _taxClearCard(card, 'YTD depreciation schedule');
+
+  // OBBB banner
+  var obbb = document.createElement('div');
+  obbb.style.cssText = [
+    'background:rgba(16,185,129,0.10)',
+    'color:#a7f3d0',
+    'padding:10px 12px',
+    'border-left:3px solid #10b981',
+    'border-radius:4px',
+    'margin-bottom:12px',
+    'font-size:0.85rem',
+  ].join(';') + ';';
+  var obbbStrong = document.createElement('strong');
+  obbbStrong.textContent = 'OBBB Act: ';
+  obbb.appendChild(obbbStrong);
+  obbb.appendChild(document.createTextNode(
+    '100% bonus depreciation permanently restored for properties acquired after Jan 19, 2025.'
+  ));
+  card.appendChild(obbb);
+
+  // Sum accelerated year-1 deductions across studies
+  var acceleratedYtd = 0;
+  (costSegStudies || []).forEach(function (s) {
+    var v = Number(s.year1_deduction || 0);
+    if (!isNaN(v)) acceleratedYtd += v;
+  });
+
+  // Standard line YTD straight-line estimate, from tax_clock if present
+  var slYtd = (taxClock && taxClock.ytd_depreciation && taxClock.ytd_depreciation.straight_line) || 0;
+  var totalYtd = acceleratedYtd + Number(slYtd || 0);
+
+  var grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;';
+
+  var cells = [
+    { label: 'Total YTD depreciation', value: _taxFmtUSD(totalYtd) },
+    { label: 'Accelerated (cost-seg)', value: _taxFmtUSD(acceleratedYtd) },
+    { label: 'Straight-line YTD', value: _taxFmtUSD(slYtd) },
+  ];
+  cells.forEach(function (c) {
+    var cell = document.createElement('div');
+    cell.style.cssText = 'padding:10px;background:rgba(255,255,255,0.03);border-radius:6px;';
+    var lbl = document.createElement('div');
+    lbl.style.cssText = 'font-size:0.78rem;color:rgba(255,255,255,0.6);margin-bottom:4px;';
+    lbl.textContent = c.label;
+    cell.appendChild(lbl);
+    var val = document.createElement('div');
+    val.style.cssText = 'font-size:1.25rem;font-weight:600;';
+    val.textContent = c.value;
+    val.title = 'Illustrative projection (verify with CPA)';
+    cell.appendChild(val);
+    grid.appendChild(cell);
+  });
+  card.appendChild(grid);
+}
+
+// --- Section 2: REPS hours gauge ------------------------------------------
+
+function _taxRenderRepsGauge(card, taxClock) {
+  _taxClearCard(card, 'REPS hours, year to date');
+
+  var current = Number((taxClock && taxClock.reps_hours_ytd) || 0);
+  var target = Number((taxClock && taxClock.reps_target) || 750);
+
+  var now = new Date();
+  var pct = _taxDayOfYear(now) / 365;
+  var pacing = pct * target;
+  var delta = current - pacing;
+
+  var color = _taxColorForRatio(current, pacing, 50);
+  var deltaTxt;
+  if (Math.abs(delta) < 1) {
+    deltaTxt = 'on pace';
+  } else if (delta > 0) {
+    deltaTxt = 'ahead by ' + _taxFmtNum(delta, 1) + 'h';
+  } else {
+    deltaTxt = 'behind by ' + _taxFmtNum(Math.abs(delta), 1) + 'h';
+  }
+
+  var gauge = _taxRenderGauge({
+    current: current,
+    target: pacing,
+    max: target,
+    color: color,
+    label: 'REPS hours: ' + _taxFmtNum(current, 1) + ' / ' + _taxFmtNum(target) + 'h',
+    valueText: deltaTxt,
+    ariaLabel: 'REPS hours progress',
+    tooltip: 'Pacing target: ' + _taxFmtNum(pacing, 1) + 'h (verify with CPA)',
+  });
+  card.appendChild(gauge);
+
+  var note = document.createElement('div');
+  note.style.cssText = 'font-size:0.78rem;color:rgba(255,255,255,0.55);margin-top:4px;';
+  note.textContent = 'Pacing target ' + _taxFmtNum(pacing, 1) + 'h based on day ' +
+    _taxDayOfYear(now) + ' of 365. Threshold marker on bar.';
+  note.title = 'Illustrative pacing only (verify with CPA)';
+  card.appendChild(note);
+}
+
+// --- Section 3: STR per-property gauges -----------------------------------
+
+function _taxRenderStrGauges(card, taxClock) {
+  var props = (taxClock && taxClock.str_per_property) || [];
+
+  if (!props.length) {
+    // Hide the STR card entirely when there are no STR properties
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+
+  _taxClearCard(card, 'STR loophole hours by property');
+
+  var note = document.createElement('div');
+  note.style.cssText = 'font-size:0.78rem;color:rgba(255,255,255,0.55);margin-bottom:8px;';
+  note.textContent = '100h material participation threshold per property. ' +
+    'Green at or above threshold, amber 50 to 99h, red below 50h.';
+  note.title = 'Illustrative status (verify with CPA)';
+  card.appendChild(note);
+
+  props.forEach(function (p) {
+    var current = Number(p.str_hours_ytd || 0);
+    var target = Number(p.target || 100);
+    var color;
+    var statusTxt;
+    if (current >= target) {
+      color = '#10b981';
+      statusTxt = 'STR loophole eligible YTD';
+    } else if (current >= 50) {
+      color = '#f59e0b';
+      statusTxt = 'On pace, watch close';
+    } else {
+      color = '#ef4444';
+      statusTxt = 'Below pace';
+    }
+
+    var gauge = _taxRenderGauge({
+      current: current,
+      target: target,
+      max: target,
+      color: color,
+      label: (p.address || p.property_id || 'Unknown property') +
+        ': ' + _taxFmtNum(current, 1) + ' / ' + _taxFmtNum(target) + 'h',
+      valueText: statusTxt,
+      ariaLabel: 'STR hours for ' + (p.address || p.property_id || ''),
+      tooltip: 'STR participation hours (verify with CPA)',
+    });
+    card.appendChild(gauge);
+  });
+}
+
+// --- Section 4: 1031 exchange clocks --------------------------------------
+
+function _taxRenderExchangeClocks(card, taxClock) {
+  _taxClearCard(card, '1031 exchange clocks');
+
+  var clocks = (taxClock && taxClock['1031_clocks']) || [];
+
+  if (!clocks.length) {
+    card.appendChild(_taxEmpty('No active 1031 exchanges.'));
+    return;
+  }
+
+  var table = document.createElement('table');
+  table.style.cssText = 'width:100%;border-collapse:collapse;font-size:0.88rem;';
+
+  var head = document.createElement('thead');
+  var hr = document.createElement('tr');
+  ['Property', '45-day identification', '180-day completion'].forEach(function (h) {
+    var th = document.createElement('th');
+    th.textContent = h;
+    th.style.cssText = 'text-align:left;padding:6px 8px;color:rgba(255,255,255,0.6);font-weight:500;border-bottom:1px solid rgba(255,255,255,0.08);';
+    hr.appendChild(th);
+  });
+  head.appendChild(hr);
+  table.appendChild(head);
+
+  var body = document.createElement('tbody');
+  clocks.forEach(function (c) {
+    var tr = document.createElement('tr');
+
+    var addrCell = document.createElement('td');
+    addrCell.textContent = c.address || c.property_id || 'Unknown';
+    addrCell.style.cssText = 'padding:8px;';
+    tr.appendChild(addrCell);
+
+    [c.days_remaining_45, c.days_remaining_180].forEach(function (days) {
+      var td = document.createElement('td');
+      td.style.cssText = 'padding:8px;font-weight:600;';
+      var color;
+      if (days == null || isNaN(days)) {
+        td.textContent = '-';
+        color = 'rgba(255,255,255,0.55)';
+      } else if (days <= 7) {
+        color = '#ef4444';
+        td.textContent = days + 'd';
+      } else if (days <= 30) {
+        color = '#f59e0b';
+        td.textContent = days + 'd';
+      } else {
+        color = '#10b981';
+        td.textContent = days + 'd';
+      }
+      td.style.color = color;
+      td.title = 'Statutory deadline (verify with CPA)';
+      tr.appendChild(td);
+    });
+
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  card.appendChild(table);
+}
+
+// --- Section 5: quarterly estimated taxes ---------------------------------
+
+function _taxRenderQEstimate(card, taxClock) {
+  _taxClearCard(card, 'Quarterly estimated tax due dates');
+
+  var rows = (taxClock && taxClock.q_estimate) || [];
+  if (!rows.length) {
+    card.appendChild(_taxEmpty('No quarterly estimated tax windows configured.'));
+    return;
+  }
+
+  var now = new Date();
+
+  var table = document.createElement('table');
+  table.style.cssText = 'width:100%;border-collapse:collapse;font-size:0.88rem;';
+  var head = document.createElement('thead');
+  var hr = document.createElement('tr');
+  ['Due date', 'Days out', 'Status'].forEach(function (h) {
+    var th = document.createElement('th');
+    th.textContent = h;
+    th.style.cssText = 'text-align:left;padding:6px 8px;color:rgba(255,255,255,0.6);font-weight:500;border-bottom:1px solid rgba(255,255,255,0.08);';
+    hr.appendChild(th);
+  });
+  head.appendChild(hr);
+  table.appendChild(head);
+
+  var body = document.createElement('tbody');
+  rows.forEach(function (q) {
+    var dueDate = _taxParseDate(q.due_date);
+    var days = dueDate ? _taxDaysBetween(dueDate, now) : null;
+    var status = (q.status || '').toLowerCase();
+
+    var tr = document.createElement('tr');
+    var dueCell = document.createElement('td');
+    dueCell.textContent = q.due_date || '-';
+    dueCell.style.cssText = 'padding:8px;';
+    tr.appendChild(dueCell);
+
+    var daysCell = document.createElement('td');
+    daysCell.style.cssText = 'padding:8px;';
+    daysCell.textContent = days == null ? '-' : (days < 0 ? Math.abs(days) + 'd ago' : days + 'd');
+    tr.appendChild(daysCell);
+
+    var statusCell = document.createElement('td');
+    statusCell.style.cssText = 'padding:8px;font-weight:600;';
+    var color = 'rgba(255,255,255,0.7)';
+    if (status === 'overdue' || (status !== 'paid' && days != null && days < 0)) {
+      color = '#ef4444';
+      statusCell.textContent = 'Overdue';
+    } else if (status === 'paid') {
+      color = '#10b981';
+      statusCell.textContent = 'Paid';
+    } else if (days != null && days <= 30) {
+      color = '#f59e0b';
+      statusCell.textContent = 'Upcoming, due soon';
+    } else {
+      statusCell.textContent = 'Upcoming';
+    }
+    statusCell.style.color = color;
+    statusCell.title = 'Status estimate (verify with CPA)';
+    tr.appendChild(statusCell);
+
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  card.appendChild(table);
+}
+
+// --- Sections 6 + 7: cost-seg tracker + candidates ------------------------
+
+function _taxRenderCostSeg(card, studies) {
+  _taxClearCard(card, 'Cost-seg engagements + projected Year-1 deduction');
+
+  if (!studies || !studies.length) {
+    card.appendChild(_taxEmpty('No cost-seg studies engaged yet.'));
+    return;
+  }
+
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'overflow-x:auto;';
+  var table = document.createElement('table');
+  table.style.cssText = 'width:100%;border-collapse:collapse;font-size:0.85rem;min-width:880px;';
+
+  var head = document.createElement('thead');
+  var hr = document.createElement('tr');
+  [
+    'Property', 'Engaged', 'Firm', 'Study cost', 'Total basis',
+    '5-yr accel.', '15-yr accel.', '27.5-yr SL', 'Year-1 ded.', 'Status',
+  ].forEach(function (h) {
+    var th = document.createElement('th');
+    th.textContent = h;
+    th.style.cssText = 'text-align:left;padding:6px 8px;color:rgba(255,255,255,0.6);font-weight:500;border-bottom:1px solid rgba(255,255,255,0.08);white-space:nowrap;';
+    hr.appendChild(th);
+  });
+  head.appendChild(hr);
+  table.appendChild(head);
+
+  var body = document.createElement('tbody');
+  studies.forEach(function (s) {
+    var tr = document.createElement('tr');
+
+    var moneyTip = 'Illustrative projection (verify with CPA)';
+    var moneyFields = [
+      { val: s.address || s.property_id || '-', kind: 'text' },
+      { val: s.engagement_date || '-', kind: 'text' },
+      { val: s.firm || '-', kind: 'text' },
+      { val: _taxFmtUSD(s.study_cost), kind: 'money' },
+      { val: _taxFmtUSD(s.total_basis), kind: 'money' },
+      { val: _taxFmtUSD(s.accelerated_5yr), kind: 'money' },
+      { val: _taxFmtUSD(s.accelerated_15yr), kind: 'money' },
+      { val: _taxFmtUSD(s.sl_27_5yr), kind: 'money' },
+      { val: _taxFmtUSD(s.year1_deduction), kind: 'money' },
+      { val: s.status || '-', kind: 'text' },
+    ];
+    moneyFields.forEach(function (f) {
+      var td = document.createElement('td');
+      td.style.cssText = 'padding:8px;border-bottom:1px solid rgba(255,255,255,0.04);';
+      td.textContent = f.val;
+      if (f.kind === 'money') td.title = moneyTip;
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  wrap.appendChild(table);
+  card.appendChild(wrap);
+}
+
+function _taxRenderCostSegCandidates(card, properties, studies) {
+  _taxClearCard(card, 'Candidates for cost-seg study');
+
+  var sub = document.createElement('div');
+  sub.style.cssText = 'font-size:0.78rem;color:rgba(255,255,255,0.55);margin-bottom:10px;';
+  sub.textContent = 'Properties with cost basis at or above $300,000 and no study on file.';
+  sub.title = 'Threshold heuristic only (verify with CPA)';
+  card.appendChild(sub);
+
+  var studied = {};
+  (studies || []).forEach(function (s) {
+    if (s.property_id) studied[s.property_id] = true;
+  });
+
+  var candidates = (properties || []).filter(function (p) {
+    var basis = Number(p.cost_basis || 0);
+    return basis >= 300000 && !studied[p.id || p.property_id];
+  });
+
+  if (!candidates.length) {
+    card.appendChild(_taxEmpty('No properties currently meet the cost-seg candidate threshold.'));
+    return;
+  }
+
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'overflow-x:auto;';
+  var table = document.createElement('table');
+  table.style.cssText = 'width:100%;border-collapse:collapse;font-size:0.88rem;';
+
+  var head = document.createElement('thead');
+  var hr = document.createElement('tr');
+  ['Property', 'Cost basis', 'Acquired'].forEach(function (h) {
+    var th = document.createElement('th');
+    th.textContent = h;
+    th.style.cssText = 'text-align:left;padding:6px 8px;color:rgba(255,255,255,0.6);font-weight:500;border-bottom:1px solid rgba(255,255,255,0.08);';
+    hr.appendChild(th);
+  });
+  head.appendChild(hr);
+  table.appendChild(head);
+
+  var body = document.createElement('tbody');
+  candidates.forEach(function (p) {
+    var tr = document.createElement('tr');
+
+    var addr = document.createElement('td');
+    addr.style.cssText = 'padding:8px;';
+    addr.textContent = p.address || p.id || '-';
+    tr.appendChild(addr);
+
+    var basis = document.createElement('td');
+    basis.style.cssText = 'padding:8px;';
+    basis.textContent = _taxFmtUSD(p.cost_basis);
+    basis.title = 'Cost basis used for cost-seg eligibility (verify with CPA)';
+    tr.appendChild(basis);
+
+    var acq = document.createElement('td');
+    acq.style.cssText = 'padding:8px;';
+    acq.textContent = p.acquired_date || p.purchase_date || '-';
+    tr.appendChild(acq);
+
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  wrap.appendChild(table);
+  card.appendChild(wrap);
+}
+
+// --- Section 8: Philly LTTA grid ------------------------------------------
+
+function _taxRenderLTTAGrid(card, abatements) {
+  _taxClearCard(card, 'Philly LTTA status grid');
+
+  if (!abatements || !abatements.length) {
+    card.appendChild(_taxEmpty('No LTTA-abated properties.'));
+    return;
+  }
+
+  var now = new Date();
+
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'overflow-x:auto;';
+  var table = document.createElement('table');
+  table.style.cssText = 'width:100%;border-collapse:collapse;font-size:0.88rem;min-width:720px;';
+
+  var head = document.createElement('thead');
+  var hr = document.createElement('tr');
+  ['Property', 'Program', 'Years remaining', 'Annual savings', 'Recert due'].forEach(function (h) {
+    var th = document.createElement('th');
+    th.textContent = h;
+    th.style.cssText = 'text-align:left;padding:6px 8px;color:rgba(255,255,255,0.6);font-weight:500;border-bottom:1px solid rgba(255,255,255,0.08);';
+    hr.appendChild(th);
+  });
+  head.appendChild(hr);
+  table.appendChild(head);
+
+  var body = document.createElement('tbody');
+  abatements.forEach(function (a) {
+    var tr = document.createElement('tr');
+
+    var addr = document.createElement('td');
+    addr.style.cssText = 'padding:8px;';
+    addr.textContent = a.address || a.property_id || '-';
+    tr.appendChild(addr);
+
+    var prog = document.createElement('td');
+    prog.style.cssText = 'padding:8px;';
+    prog.textContent = a.abatement_program || '-';
+    tr.appendChild(prog);
+
+    var yearsCell = document.createElement('td');
+    yearsCell.style.cssText = 'padding:8px;';
+    var endDate = _taxParseDate(a.end_date);
+    if (endDate) {
+      var days = _taxDaysBetween(endDate, now);
+      var years = Math.max(0, days / 365);
+      yearsCell.textContent = _taxFmtNum(years, 1) + 'y';
+    } else if (a.years_remaining != null) {
+      yearsCell.textContent = _taxFmtNum(a.years_remaining, 1) + 'y';
+    } else {
+      yearsCell.textContent = '-';
+    }
+    yearsCell.title = 'Years remaining on abatement (verify with CPA)';
+    tr.appendChild(yearsCell);
+
+    var savings = document.createElement('td');
+    savings.style.cssText = 'padding:8px;';
+    savings.textContent = _taxFmtUSD(a.annual_savings);
+    savings.title = 'Estimated annual savings (verify with CPA)';
+    tr.appendChild(savings);
+
+    var recert = document.createElement('td');
+    recert.style.cssText = 'padding:8px;font-weight:600;';
+    var recertDate = _taxParseDate(a.recert_due);
+    if (recertDate) {
+      var rdays = _taxDaysBetween(recertDate, now);
+      var color;
+      if (rdays <= 30) color = '#ef4444';
+      else if (rdays <= 90) color = '#f59e0b';
+      else color = '#10b981';
+      recert.textContent = a.recert_due + ' (' + rdays + 'd)';
+      recert.style.color = color;
+    } else {
+      recert.textContent = a.recert_due || '-';
+    }
+    recert.title = 'Recertification deadline (verify with CPA)';
+    tr.appendChild(recert);
+
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  wrap.appendChild(table);
+  card.appendChild(wrap);
+}
+
+// --- Refreshers -----------------------------------------------------------
+
+async function refreshTaxClock() {
+  ensureTaxPageDOM();
+  var slug = _taxProjectSlug();
+
+  var depCard = document.getElementById('tax-depreciation');
+  var repsCard = document.getElementById('tax-reps');
+  var strCard = document.getElementById('tax-str');
+  var clocksCard = document.getElementById('tax-1031');
+  var qCard = document.getElementById('tax-q-est');
+  if (!depCard || !repsCard || !strCard || !clocksCard || !qCard) return;
+
+  try {
+    var clock = (typeof fetchFromAPI === 'function')
+      ? await fetchFromAPI('/api/v1/broker/tax-clock?project_id=' + encodeURIComponent(slug))
+      : null;
+    if (clock === null) {
+      // 401 or network failure handled inside fetchFromAPI; do nothing.
+      return;
+    }
+
+    // Studies are rendered in the depreciation card too (for the accelerated
+    // YTD subtotal), so we fetch them here as well.  refreshCostSegTracker
+    // re-fetches and renders the full table separately.
+    var studies = (typeof fetchFromAPI === 'function')
+      ? await fetchFromAPI('/api/v1/broker/cost-seg-studies?project_id=' + encodeURIComponent(slug))
+      : [];
+    if (!Array.isArray(studies)) studies = [];
+
+    _taxRenderDepreciation(depCard, clock, studies);
+    _taxRenderRepsGauge(repsCard, clock);
+    _taxRenderStrGauges(strCard, clock);
+    _taxRenderExchangeClocks(clocksCard, clock);
+    _taxRenderQEstimate(qCard, clock);
+  } catch (e) {
+    depCard.textContent = 'Tax clock unavailable: ' + String(e);
+  }
+}
+
+async function refreshCostSegTracker() {
+  ensureTaxPageDOM();
+  var slug = _taxProjectSlug();
+
+  var trackerCard = document.getElementById('tax-cost-seg');
+  var candCard = document.getElementById('tax-cost-seg-candidates');
+  if (!trackerCard || !candCard) return;
+
+  try {
+    var studies = (typeof fetchFromAPI === 'function')
+      ? await fetchFromAPI('/api/v1/broker/cost-seg-studies?project_id=' + encodeURIComponent(slug))
+      : [];
+    if (!Array.isArray(studies)) studies = [];
+
+    var properties = (typeof fetchFromAPI === 'function')
+      ? await fetchFromAPI('/api/v1/broker/properties?project_id=' + encodeURIComponent(slug))
+      : [];
+    if (!Array.isArray(properties)) properties = [];
+
+    _taxRenderCostSeg(trackerCard, studies);
+    _taxRenderCostSegCandidates(candCard, properties, studies);
+  } catch (e) {
+    trackerCard.textContent = 'Cost-seg data unavailable: ' + String(e);
+  }
+}
+
+async function refreshLTTAGrid() {
+  ensureTaxPageDOM();
+  var slug = _taxProjectSlug();
+
+  var lttaCard = document.getElementById('tax-ltta');
+  if (!lttaCard) return;
+
+  try {
+    var abatements = (typeof fetchFromAPI === 'function')
+      ? await fetchFromAPI('/api/v1/broker/tax-abatements?project_id=' + encodeURIComponent(slug))
+      : [];
+    if (!Array.isArray(abatements)) abatements = [];
+
+    _taxRenderLTTAGrid(lttaCard, abatements);
+  } catch (e) {
+    lttaCard.textContent = 'LTTA data unavailable: ' + String(e);
+  }
+}
+
+// --- Entry point ----------------------------------------------------------
+
+function initTaxPage() {
+  ensureTaxPageDOM();
+  refreshTaxClock();
+  refreshCostSegTracker();
+  refreshLTTAGrid();
+  if (!_taxPageInitialized) {
+    _taxPageInitialized = true;
+    if (typeof addPollingInterval === 'function') {
+      addPollingInterval(refreshTaxClock, 120000);
+      addPollingInterval(refreshCostSegTracker, 300000);
+      addPollingInterval(refreshLTTAGrid, 300000);
+    }
+  }
+}
+
+// --- ProjectBus listener (typeof-guarded) ---------------------------------
+
+if (typeof ProjectBus !== 'undefined' && typeof ProjectBus.on === 'function') {
+  ProjectBus.on(function () {
+    var active = (typeof currentPageId !== 'undefined') ? currentPageId : null;
+    if (!active) {
+      var act = document.querySelector('section.page.active');
+      active = act ? act.id : null;
+    }
+    if (active === 'page-tax') {
+      refreshTaxClock();
+      refreshCostSegTracker();
+      refreshLTTAGrid();
+    }
+  });
+}
+
+
+// --------------------- broker page: participation ---------------------------
+// ============================================================================
+// Paw Broker - Participation Page (material-participation hour log)
+//
+// Step 6.6 of the broker rollout. Mission-critical for the STR loophole and
+// REPS audit defense. Every hour the operator logs here can be the difference
+// between a defensible passive-loss offset and a disallowed deduction.
+//
+// Page sections (top to bottom):
+//   1. Daily hour-log entry form
+//   2. REPS gauge (0 to 750h global)
+//   3. STR 100h gauges (one per STR property)
+//   4. Father-hours warning callout (only if any father entries exist)
+//   5. Running totals per property
+//   6. Recent entries list (paginated, 25 per page)
+//
+// Self-contained vanilla JS blob. createElement only. No frameworks.
+// All public functions attached to window for inline-script injection.
+// ============================================================================
+
+var _participationProperties = [];
+var _participationData = { entries: [], totals: { reps_total: 0, str_per_property: {} } };
+var _entryPage = 0;
+var _entryPageSize = 25;
+
+function _ppSlug() {
+  if (typeof currentProject !== 'undefined' && currentProject && currentProject.slug) return currentProject.slug;
+  return 'broker';
+}
+function _ppToday() {
+  var d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function _ppDayOfYear() {
+  var n = new Date(); var s = new Date(n.getFullYear(), 0, 0);
+  return Math.floor((n - s) / 86400000);
+}
+function _ppValidDate(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  var d = new Date(s + 'T00:00:00');
+  if (isNaN(d.getTime())) return false;
+  var t = new Date(); t.setHours(23, 59, 59, 999);
+  return d.getTime() <= t.getTime();
+}
+function _ppTrunc(s, n) { s = s == null ? '' : String(s); return s.length <= n ? s : s.slice(0, n - 1) + '...'; }
+function _ppToast(msg, type) {
+  if (typeof showToast === 'function') return showToast(msg, type);
+  var el = document.createElement('div');
+  el.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#222;color:#fff;padding:12px 16px;border-radius:6px;z-index:9999;';
+  el.textContent = msg; document.body.appendChild(el);
+  setTimeout(function() { el.remove(); }, 3000);
+}
+
+// Tiny element factory: tag, style/text, optional children.
+function _el(tag, opts, children) {
+  var e = document.createElement(tag);
+  opts = opts || {};
+  if (opts.css) e.style.cssText = opts.css;
+  if (opts.text != null) e.textContent = opts.text;
+  if (opts.id) e.id = opts.id;
+  if (opts.cls) e.className = opts.cls;
+  if (opts.attrs) Object.keys(opts.attrs).forEach(function(k) { e.setAttribute(k, opts.attrs[k]); });
+  if (opts.title) e.title = opts.title;
+  if (Array.isArray(children)) children.forEach(function(c) { if (c) e.appendChild(c); });
+  return e;
+}
+
+// Shared style strings.
+var _S = {
+  cell: 'padding:8px 6px;border-bottom:1px solid rgba(255,255,255,0.06);',
+  th: 'text-align:left;padding:8px 6px;border-bottom:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.65);font-weight:600;font-size:0.74rem;text-transform:uppercase;letter-spacing:0.04em;',
+  card: 'padding:18px;margin-top:12px;',
+  input: 'background:rgba(255,255,255,0.06);color:#fff;border:1px solid rgba(255,255,255,0.12);border-radius:6px;padding:8px 10px;font-size:0.92rem;outline:none;',
+  label: 'font-size:0.78rem;color:rgba(255,255,255,0.65);text-transform:uppercase;letter-spacing:0.04em;',
+};
+
+// ----------------------------------------------------------------------------
+// DOM scaffold
+// ----------------------------------------------------------------------------
+
+function ensureParticipationPageDOM() {
+  if (document.getElementById('page-participation')) return;
+  var main = document.querySelector('.main-content');
+  if (!main) return;
+
+  var page = _el('section', { id: 'page-participation', cls: 'page', attrs: { 'data-page-title': 'Participation', 'aria-label': 'Material Participation Log' } });
+  page.hidden = true;
+
+  var heading = _el('div', { cls: 'page-heading-row' }, [
+    _el('h2', { cls: 'page-heading', text: 'Material Participation' }),
+    _el('span', { cls: 'sop-task-count', text: 'STR loophole and REPS hour log' }),
+  ]);
+  page.appendChild(heading);
+
+  var sections = [
+    { id: 'participation-form-card', text: 'Loading form...', css: 'padding:18px;' },
+    { id: 'participation-reps-gauge', text: 'Loading REPS gauge...', css: _S.card },
+    { id: 'participation-str-gauges', text: 'Loading STR property gauges...', css: _S.card },
+    { id: 'participation-father-callout', css: 'margin-top:12px;', cls: '', hidden: true },
+    { id: 'participation-property-totals', text: 'Loading property totals...', css: _S.card },
+    { id: 'participation-entries', text: 'Loading entries...', css: _S.card },
+  ];
+  sections.forEach(function(s) {
+    var d = _el('div', { id: s.id, css: s.css, cls: s.cls === '' ? '' : 'stat-card', text: s.text });
+    if (s.hidden) d.hidden = true;
+    page.appendChild(d);
+  });
+
+  main.appendChild(page);
+}
+
+// ----------------------------------------------------------------------------
+// Init + refresh orchestration
+// ----------------------------------------------------------------------------
+
+function initParticipationPage() {
+  ensureParticipationPageDOM();
+  refreshParticipationProperties().then(function() {
+    renderParticipationForm();
+    refreshParticipationTotals();
+    refreshParticipationEntries();
+  });
+}
+
+async function refreshParticipationProperties() {
+  try {
+    var data = await fetchFromAPI('/api/v1/broker/properties?project_id=' + encodeURIComponent(_ppSlug()));
+    if (data == null) return;
+    _participationProperties = Array.isArray(data) ? data : (data.properties || []);
+  } catch (e) { _participationProperties = []; }
+}
+
+async function refreshParticipationTotals() {
+  try {
+    var data = await fetchFromAPI('/api/v1/broker/participation-log?project_id=' + encodeURIComponent(_ppSlug()));
+    if (data == null) return;
+    _participationData = {
+      entries: Array.isArray(data.entries) ? data.entries : [],
+      totals: data.totals || { reps_total: 0, str_per_property: {} },
+    };
+    renderParticipationRepsGauge();
+    renderParticipationStrGauges();
+    renderParticipationFatherCallout();
+    renderParticipationPropertyTotals();
+  } catch (e) {
+    var card = document.getElementById('participation-reps-gauge');
+    if (card) card.textContent = 'Totals unavailable: ' + String(e);
+  }
+}
+
+function refreshParticipationEntries() {
+  if (!_participationData || !_participationData.entries) return refreshParticipationTotals();
+  renderParticipationEntries();
+}
+
+// ----------------------------------------------------------------------------
+// 1. Entry form
+// ----------------------------------------------------------------------------
+
+function _ppFieldWrap(labelText) {
+  return _el('div', { css: 'display:flex;flex-direction:column;gap:4px;' }, [_el('label', { css: _S.label, text: labelText })]);
+}
+
+function renderParticipationForm() {
+  var card = document.getElementById('participation-form-card');
+  if (!card) return;
+  while (card.firstChild) card.removeChild(card.firstChild);
+
+  card.appendChild(_el('div', { css: 'font-weight:600;margin-bottom:12px;font-size:1rem;', text: 'Log hours' }));
+
+  if (!_participationProperties.length) {
+    card.appendChild(_el('div', { css: 'color:rgba(255,255,255,0.6);font-size:0.9rem;', text: 'Seed at least one property to start logging hours.' }));
+    return;
+  }
+
+  var form = _el('form', { id: 'participation-form', css: 'display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;align-items:end;' });
+
+  // Date
+  var dateInput = _el('input', { id: 'pf-date', css: _S.input });
+  dateInput.type = 'date'; dateInput.value = _ppToday(); dateInput.max = _ppToday();
+  var dateWrap = _ppFieldWrap('Date'); dateWrap.appendChild(dateInput); form.appendChild(dateWrap);
+
+  // Property
+  var propSelect = _el('select', { id: 'pf-property', css: _S.input });
+  _participationProperties.forEach(function(p) {
+    var tag = p.use_type ? ' [' + p.use_type + ']' : '';
+    propSelect.appendChild(_el('option', { text: (p.address || p.id) + tag, attrs: { value: p.id } }));
+  });
+  var propWrap = _ppFieldWrap('Property'); propWrap.appendChild(propSelect); form.appendChild(propWrap);
+
+  // Hours
+  var hrsInput = _el('input', { id: 'pf-hours', css: _S.input });
+  hrsInput.type = 'number'; hrsInput.step = '0.25'; hrsInput.min = '0.25'; hrsInput.placeholder = '1.0';
+  var hrsWrap = _ppFieldWrap('Hours'); hrsWrap.appendChild(hrsInput); form.appendChild(hrsWrap);
+
+  // Participant
+  var partSelect = _el('select', { id: 'pf-participant', css: _S.input });
+  ['mariano', 'father', 'other'].forEach(function(v) {
+    partSelect.appendChild(_el('option', { text: v.charAt(0).toUpperCase() + v.slice(1), attrs: { value: v } }));
+  });
+  var partWrap = _ppFieldWrap('Participant'); partWrap.appendChild(partSelect); form.appendChild(partWrap);
+
+  // Counted_for
+  var ctfSelect = _el('select', { id: 'pf-counted-for', css: _S.input });
+  [{ v: 'str', t: 'STR (100h test)' }, { v: 'reps', t: 'REPS (750h test)' }, { v: 'both', t: 'Both STR and REPS' }].forEach(function(o) {
+    ctfSelect.appendChild(_el('option', { text: o.t, attrs: { value: o.v } }));
+  });
+  var ctfWrap = _ppFieldWrap('Counted for'); ctfWrap.appendChild(ctfSelect); form.appendChild(ctfWrap);
+
+  // Activity (full-width)
+  var actInput = _el('textarea', { id: 'pf-activity', css: _S.input + 'resize:vertical;' });
+  actInput.rows = 2; actInput.placeholder = 'Met with cleaning crew, debriefed turnover schedule, posted listings';
+  var actWrap = _ppFieldWrap('Activity'); actWrap.style.gridColumn = '1 / -1'; actWrap.appendChild(actInput); form.appendChild(actWrap);
+
+  // Evidence URL (full-width)
+  var evInput = _el('input', { id: 'pf-evidence', css: _S.input });
+  evInput.type = 'url'; evInput.placeholder = 'https://drive.google.com/...';
+  var evWrap = _ppFieldWrap('Evidence URL (optional)'); evWrap.style.gridColumn = '1 / -1'; evWrap.appendChild(evInput); form.appendChild(evWrap);
+
+  form.appendChild(_el('div', { id: 'pf-errors', css: 'grid-column:1 / -1;color:#ff6b6b;font-size:0.85rem;min-height:1em;' }));
+
+  var submitBtn = _el('button', { text: 'Save entry', css: 'background:var(--accent,#4caf50);color:#000;border:none;padding:10px 20px;border-radius:6px;font-weight:600;cursor:pointer;' });
+  submitBtn.type = 'submit';
+  var submitWrap = _el('div', { css: 'grid-column:1 / -1;' }, [submitBtn]);
+  form.appendChild(submitWrap);
+
+  form.addEventListener('submit', function(e) { e.preventDefault(); submitParticipationEntry(); });
+  card.appendChild(form);
+}
+
+async function submitParticipationEntry() {
+  var dateEl = document.getElementById('pf-date'),
+      propEl = document.getElementById('pf-property'),
+      hrsEl = document.getElementById('pf-hours'),
+      partEl = document.getElementById('pf-participant'),
+      ctfEl = document.getElementById('pf-counted-for'),
+      actEl = document.getElementById('pf-activity'),
+      evEl = document.getElementById('pf-evidence'),
+      errBox = document.getElementById('pf-errors');
+  if (!dateEl || !propEl || !hrsEl || !partEl || !ctfEl || !actEl || !errBox) return;
+
+  errBox.textContent = '';
+  var date = dateEl.value;
+  var hours = parseFloat(hrsEl.value);
+  var activity = (actEl.value || '').trim();
+  var errors = [];
+  if (!_ppValidDate(date)) errors.push('Date must be YYYY-MM-DD and not in the future.');
+  if (!hours || hours <= 0) errors.push('Hours must be greater than 0.');
+  if (activity.length < 5) errors.push('Activity must be at least 5 characters.');
+  if (!propEl.value) errors.push('Property is required.');
+  if (errors.length) { errBox.textContent = errors.join(' '); return; }
+
+  var addr = '';
+  for (var i = 0; i < _participationProperties.length; i++) {
+    if (_participationProperties[i].id === propEl.value) { addr = _participationProperties[i].address || propEl.value; break; }
+  }
+  var body = {
+    project_id: _ppSlug(), property_id: propEl.value, date: date,
+    activity: activity, hours: hours, participant: partEl.value, counted_for: ctfEl.value,
+  };
+  if (evEl && evEl.value) body.evidence_url = evEl.value;
+
+  try {
+    var resp = await fetchFromAPI('/api/v1/broker/participation-log', {
+      method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+    });
+    if (resp == null) return;
+    _ppToast('Logged ' + hours + 'h on ' + (addr || 'property'), 'success');
+    if (resp.warning) _ppToast(resp.warning, 'error');
+    actEl.value = ''; hrsEl.value = ''; if (evEl) evEl.value = '';
+    refreshParticipationTotals();
+  } catch (e) {
+    errBox.textContent = 'Save failed: ' + String(e);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// 2. REPS gauge (0 to 750h)
+// ----------------------------------------------------------------------------
+
+function renderParticipationRepsGauge() {
+  var card = document.getElementById('participation-reps-gauge');
+  if (!card) return;
+  while (card.firstChild) card.removeChild(card.firstChild);
+
+  card.appendChild(_el('div', {
+    css: 'font-weight:600;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;',
+  }, [_el('span', { text: 'REPS test (750h annual)' })]));
+
+  var current = Number((_participationData.totals && _participationData.totals.reps_total) || 0);
+  var pacing = (_ppDayOfYear() / 365) * 750;
+  var pct = Math.min(100, (current / 750) * 100);
+  var diff = current - pacing;
+  var color = current >= pacing ? '#4caf50' : (current >= pacing - 50 ? '#f0a020' : '#ff6b6b');
+
+  var bar = _el('div', { css: 'background:rgba(255,255,255,0.07);border-radius:8px;height:18px;position:relative;overflow:hidden;' });
+  bar.appendChild(_el('div', { css: 'height:100%;width:' + pct.toFixed(1) + '%;background:' + color + ';transition:width 0.3s;' }));
+  var pacingPct = (pacing / 750) * 100;
+  bar.appendChild(_el('div', {
+    css: 'position:absolute;top:0;bottom:0;left:' + pacingPct.toFixed(1) + '%;width:2px;background:rgba(255,255,255,0.6);',
+    title: 'Pacing target: ' + pacing.toFixed(0) + 'h',
+  }));
+  card.appendChild(bar);
+
+  var diffText = diff >= 0 ? 'Ahead by ' + diff.toFixed(1) + 'h' : 'Behind by ' + Math.abs(diff).toFixed(1) + 'h';
+  var stats = _el('div', { css: 'margin-top:8px;display:flex;justify-content:space-between;gap:12px;font-size:0.88rem;color:rgba(255,255,255,0.8);' }, [
+    _el('span', { text: current.toFixed(1) + 'h logged of 750h' }),
+    _el('span', { text: diffText, css: 'color:' + color + ';' }),
+  ]);
+  card.appendChild(stats);
+
+  card.appendChild(_el('div', {
+    css: 'margin-top:6px;font-size:0.78rem;color:rgba(255,255,255,0.5);',
+    text: 'Pacing target as of today: ' + pacing.toFixed(0) + 'h. Real-estate-professional status requires 750h plus material participation in real-property trades.',
+  }));
+}
+
+// ----------------------------------------------------------------------------
+// 3. STR 100h gauges per STR property
+// ----------------------------------------------------------------------------
+
+function renderParticipationStrGauges() {
+  var card = document.getElementById('participation-str-gauges');
+  if (!card) return;
+  while (card.firstChild) card.removeChild(card.firstChild);
+
+  card.appendChild(_el('div', { css: 'font-weight:600;margin-bottom:10px;', text: 'STR test (100h per property)' }));
+
+  var strProps = _participationProperties.filter(function(p) { return p.use_type === 'str'; });
+  if (!strProps.length) {
+    card.appendChild(_el('div', {
+      css: 'color:rgba(255,255,255,0.6);font-size:0.9rem;',
+      text: 'STR section will populate when you acquire your first STR.',
+    }));
+    return;
+  }
+
+  var perProp = (_participationData.totals && _participationData.totals.str_per_property) || {};
+  strProps.forEach(function(p) {
+    var hours = Number(perProp[p.id] || 0);
+    var pct = Math.min(100, hours);
+    var color = hours >= 100 ? '#4caf50' : (hours >= 50 ? '#f0a020' : '#ff6b6b');
+    var label = hours >= 100 ? ' (Eligible YTD)' : '';
+
+    var head = _el('div', { css: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-size:0.9rem;' }, [
+      _el('span', { text: p.address || p.id }),
+      _el('span', { css: 'color:' + color + ';font-weight:600;', text: hours.toFixed(1) + 'h / 100h' + label }),
+    ]);
+
+    var bar = _el('div', { css: 'background:rgba(255,255,255,0.07);border-radius:8px;height:14px;position:relative;overflow:hidden;' });
+    bar.appendChild(_el('div', { css: 'height:100%;width:' + pct.toFixed(1) + '%;background:' + color + ';transition:width 0.3s;' }));
+    bar.appendChild(_el('div', { css: 'position:absolute;top:0;bottom:0;right:0;width:2px;background:rgba(255,255,255,0.7);' }));
+
+    card.appendChild(_el('div', { css: 'margin-bottom:14px;' }, [head, bar]));
+  });
+}
+
+// ----------------------------------------------------------------------------
+// 4. Father-hours warning callout
+// ----------------------------------------------------------------------------
+
+function renderParticipationFatherCallout() {
+  var card = document.getElementById('participation-father-callout');
+  if (!card) return;
+  while (card.firstChild) card.removeChild(card.firstChild);
+
+  var hasFather = (_participationData.entries || []).some(function(e) { return e.participant === 'father'; });
+  if (!hasFather) { card.hidden = true; return; }
+  card.hidden = false;
+
+  var box = _el('div', { css: 'background:rgba(240,160,32,0.12);border-left:4px solid #f0a020;border-radius:6px;padding:14px 16px;color:rgba(255,255,255,0.92);' }, [
+    _el('div', { css: 'font-weight:600;margin-bottom:6px;color:#f0a020;', text: 'Father-hours rule check' }),
+    _el('div', {
+      css: 'font-size:0.9rem;line-height:1.45;',
+      text: "Father's hours count toward your material-participation only if you hold at least 5% of the entity that owns the property. Verify entity ownership in legal-shield agent before relying on these hours for STR or REPS.",
+    }),
+  ]);
+  card.appendChild(box);
+}
+
+// ----------------------------------------------------------------------------
+// 5. Running totals per property
+// ----------------------------------------------------------------------------
+
+function renderParticipationPropertyTotals() {
+  var card = document.getElementById('participation-property-totals');
+  if (!card) return;
+  while (card.firstChild) card.removeChild(card.firstChild);
+
+  card.appendChild(_el('div', { css: 'font-weight:600;margin-bottom:10px;', text: 'YTD totals by property' }));
+
+  if (!_participationProperties.length) {
+    card.appendChild(_el('div', { css: 'color:rgba(255,255,255,0.6);font-size:0.9rem;', text: 'No properties yet.' }));
+    return;
+  }
+
+  var byProp = {};
+  _participationProperties.forEach(function(p) {
+    byProp[p.id] = { id: p.id, address: p.address || p.id, use_type: p.use_type || '', total: 0, str: 0, reps: 0, last: '' };
+  });
+  (_participationData.entries || []).forEach(function(e) {
+    var b = byProp[e.property_id]; if (!b) return;
+    var h = Number(e.hours || 0);
+    b.total += h;
+    if (e.counted_for === 'str' || e.counted_for === 'both') b.str += h;
+    if (e.counted_for === 'reps' || e.counted_for === 'both') b.reps += h;
+    if (!b.last || e.date > b.last) b.last = e.date;
+  });
+  var rows = Object.keys(byProp).map(function(k) { return byProp[k]; }).sort(function(a, b) { return b.total - a.total; });
+
+  var thead = _el('thead');
+  var hr = _el('tr');
+  ['Address', 'Use', 'YTD total', 'YTD STR', 'YTD REPS', 'Last entry'].forEach(function(h) {
+    hr.appendChild(_el('th', { text: h, css: _S.th }));
+  });
+  thead.appendChild(hr);
+
+  var tbody = _el('tbody');
+  rows.forEach(function(r) {
+    var tr = _el('tr');
+    [r.address, r.use_type, r.total.toFixed(1) + 'h', r.str.toFixed(1) + 'h', r.reps.toFixed(1) + 'h', r.last || '-']
+      .forEach(function(v) { tr.appendChild(_el('td', { text: v, css: _S.cell })); });
+    tbody.appendChild(tr);
+  });
+
+  card.appendChild(_el('table', { css: 'width:100%;border-collapse:collapse;font-size:0.9rem;' }, [thead, tbody]));
+}
+
+// ----------------------------------------------------------------------------
+// 6. Recent entries list (paginated)
+// ----------------------------------------------------------------------------
+
+function renderParticipationEntries() {
+  var card = document.getElementById('participation-entries');
+  if (!card) return;
+  while (card.firstChild) card.removeChild(card.firstChild);
+
+  card.appendChild(_el('div', { css: 'font-weight:600;margin-bottom:10px;', text: 'Recent entries' }));
+
+  var entries = (_participationData.entries || []).slice().sort(function(a, b) {
+    if (a.date === b.date) return (b.id || 0) - (a.id || 0);
+    return a.date < b.date ? 1 : -1;
+  });
+
+  if (!entries.length) {
+    card.appendChild(_el('div', {
+      css: 'color:rgba(255,255,255,0.6);font-size:0.92rem;',
+      text: 'No hours logged yet. STR loophole and REPS both require contemporaneous logs. Start today.',
+    }));
+    return;
+  }
+
+  var totalPages = Math.max(1, Math.ceil(entries.length / _entryPageSize));
+  if (_entryPage >= totalPages) _entryPage = totalPages - 1;
+  if (_entryPage < 0) _entryPage = 0;
+  var slice = entries.slice(_entryPage * _entryPageSize, _entryPage * _entryPageSize + _entryPageSize);
+
+  var addrMap = {};
+  _participationProperties.forEach(function(p) { addrMap[p.id] = p.address || p.id; });
+
+  var thead = _el('thead');
+  var hr = _el('tr');
+  ['Date', 'Property', 'Activity', 'Hours', 'Who', 'Counted', 'Evidence', ''].forEach(function(h) {
+    hr.appendChild(_el('th', { text: h, css: _S.th }));
+  });
+  thead.appendChild(hr);
+
+  var tbody = _el('tbody');
+  slice.forEach(function(e) {
+    var tr = _el('tr', { css: 'cursor:pointer;' });
+
+    var actTd = _el('td', { text: _ppTrunc(e.activity, 80), css: _S.cell + 'max-width:340px;', title: e.activity || '' });
+
+    var evTd = _el('td', { css: _S.cell });
+    if (e.evidence_url) {
+      var a = _el('a', { text: 'link', css: 'color:var(--accent,#4caf50);', attrs: { href: e.evidence_url, target: '_blank', rel: 'noopener noreferrer' } });
+      a.addEventListener('click', function(ev) { ev.stopPropagation(); });
+      evTd.appendChild(a);
+    } else {
+      evTd.textContent = '-';
+    }
+
+    var delBtn = _el('button', { text: 'delete', css: 'background:transparent;border:1px solid rgba(255,255,255,0.18);color:rgba(255,255,255,0.7);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:0.78rem;' });
+    delBtn.addEventListener('click', function(ev) { ev.stopPropagation(); _ppToast('Delete coming soon', 'error'); });
+    var actionsTd = _el('td', { css: _S.cell }, [delBtn]);
+
+    tr.appendChild(_el('td', { text: e.date || '', css: _S.cell + 'white-space:nowrap;' }));
+    tr.appendChild(_el('td', { text: addrMap[e.property_id] || e.property_id || '', css: _S.cell }));
+    tr.appendChild(actTd);
+    tr.appendChild(_el('td', { text: Number(e.hours || 0).toFixed(2) + 'h', css: _S.cell + 'white-space:nowrap;' }));
+    tr.appendChild(_el('td', { text: e.participant || '', css: _S.cell }));
+    tr.appendChild(_el('td', { text: e.counted_for || '', css: _S.cell }));
+    tr.appendChild(evTd);
+    tr.appendChild(actionsTd);
+
+    tr.addEventListener('click', function() { openEntryDetailModal(e); });
+    tbody.appendChild(tr);
+  });
+
+  card.appendChild(_el('table', { css: 'width:100%;border-collapse:collapse;font-size:0.88rem;' }, [thead, tbody]));
+
+  // Pagination
+  var prev = _el('button', { text: 'Prev' });
+  var next = _el('button', { text: 'Next' });
+  prev.disabled = _entryPage === 0;
+  next.disabled = _entryPage >= totalPages - 1;
+  var btnCss = 'background:rgba(255,255,255,0.06);color:#fff;border:1px solid rgba(255,255,255,0.14);border-radius:6px;padding:6px 12px;cursor:pointer;';
+  prev.style.cssText = btnCss + (prev.disabled ? 'opacity:0.4;cursor:not-allowed;' : '');
+  next.style.cssText = btnCss + (next.disabled ? 'opacity:0.4;cursor:not-allowed;' : '');
+  prev.addEventListener('click', function() { _entryPage = Math.max(0, _entryPage - 1); renderParticipationEntries(); });
+  next.addEventListener('click', function() { _entryPage = Math.min(totalPages - 1, _entryPage + 1); renderParticipationEntries(); });
+
+  var pager = _el('div', { css: 'margin-top:12px;display:flex;justify-content:space-between;align-items:center;font-size:0.85rem;color:rgba(255,255,255,0.7);' }, [
+    _el('span', { text: 'Page ' + (_entryPage + 1) + ' of ' + totalPages + ' (' + entries.length + ' entries)' }),
+    _el('div', { css: 'display:flex;gap:8px;' }, [prev, next]),
+  ]);
+  card.appendChild(pager);
+}
+
+function openEntryDetailModal(entry) {
+  var existing = document.getElementById('participation-entry-modal');
+  if (existing) existing.remove();
+
+  var addr = '';
+  for (var i = 0; i < _participationProperties.length; i++) {
+    if (_participationProperties[i].id === entry.property_id) { addr = _participationProperties[i].address || entry.property_id; break; }
+  }
+
+  var overlay = _el('div', { id: 'participation-entry-modal', css: 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9000;' });
+  var modal = _el('div', { css: 'background:#1a1d24;border:1px solid rgba(255,255,255,0.14);border-radius:10px;padding:20px;max-width:560px;width:92%;max-height:80vh;overflow:auto;color:#fff;' }, [
+    _el('div', { css: 'font-weight:600;font-size:1.05rem;margin-bottom:10px;', text: (entry.date || '') + '  -  ' + (addr || entry.property_id || '') }),
+    _el('div', { css: 'font-size:0.85rem;color:rgba(255,255,255,0.7);margin-bottom:12px;', text: Number(entry.hours || 0).toFixed(2) + 'h, ' + (entry.participant || '') + ', counted for ' + (entry.counted_for || '') }),
+    _el('div', { css: 'background:rgba(255,255,255,0.04);border-radius:6px;padding:12px;font-size:0.92rem;line-height:1.5;white-space:pre-wrap;margin-bottom:12px;', text: entry.activity || '(no activity text)' }),
+  ]);
+
+  if (entry.evidence_url) {
+    modal.appendChild(_el('a', { text: 'Open evidence', css: 'color:var(--accent,#4caf50);display:inline-block;margin-bottom:12px;', attrs: { href: entry.evidence_url, target: '_blank', rel: 'noopener noreferrer' } }));
+  }
+
+  var close = _el('button', { text: 'Close', css: 'background:rgba(255,255,255,0.08);color:#fff;border:1px solid rgba(255,255,255,0.18);border-radius:6px;padding:8px 16px;cursor:pointer;display:block;' });
+  close.addEventListener('click', function() { overlay.remove(); });
+  modal.appendChild(close);
+
+  overlay.addEventListener('click', function(ev) { if (ev.target === overlay) overlay.remove(); });
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+}
+
+// ----------------------------------------------------------------------------
+// Export to window for inline-script injection
+// ----------------------------------------------------------------------------
+
+if (typeof window !== 'undefined') {
+  window.ensureParticipationPageDOM = ensureParticipationPageDOM;
+  window.initParticipationPage = initParticipationPage;
+  window.refreshParticipationTotals = refreshParticipationTotals;
+  window.refreshParticipationEntries = refreshParticipationEntries;
+  window.submitParticipationEntry = submitParticipationEntry;
+  window.openEntryDetailModal = openEntryDetailModal;
+}
+
+// ----------------------------------------------------------------------------
+// ProjectBus listener -- refresh when participation page is active.
+// ----------------------------------------------------------------------------
+
+if (typeof ProjectBus !== 'undefined' && ProjectBus && typeof ProjectBus.on === 'function') {
+  ProjectBus.on(function() {
+    var active = document.querySelector('section.page.active');
+    var pageId = active ? active.id : (typeof currentPageId !== 'undefined' ? currentPageId : '');
+    if (pageId === 'page-participation') {
+      _entryPage = 0;
+      refreshParticipationProperties().then(function() {
+        renderParticipationForm();
+        refreshParticipationTotals();
+        refreshParticipationEntries();
+      });
+    }
+  });
+}
+
+
+// --------------------- broker page: investments -----------------------------
+// Paw Broker -- Investments page (private-only ledger). ADR-006: manual
+// non-RE asset ledger for portfolio completeness. No analysis, no Plaid,
+// no automated pricing. The OSS sanitizer strips this file before publish.
+// Single entry point: initInvestmentsPage().
+
+var _invRows = [];
+var _invSort = { col: 'as_of', dir: 'desc' };
+
+var INV_TYPE_LABELS = {
+  stock: 'Stock', etf: 'ETF', bond: 'Bond', crypto: 'Crypto',
+  retirement_401k: '401(k)', retirement_ira: 'IRA',
+  cash: 'Cash', other: 'Other',
+};
+
+var INV_TYPE_ORDER = [
+  'stock', 'etf', 'bond', 'crypto',
+  'retirement_401k', 'retirement_ira', 'cash', 'other',
+];
+
+function ensureInvestmentsPageDOM() {
+  if (document.getElementById('page-investments')) return;
+  var main = document.querySelector('.main-content');
+  if (!main) return;
+
+  var page = document.createElement('section');
+  page.id = 'page-investments';
+  page.className = 'page';
+  page.setAttribute('data-page-title', 'Investments');
+  page.setAttribute('aria-label', 'Investments ledger');
+  page.hidden = true;
+
+  var heading = document.createElement('div');
+  heading.className = 'page-heading-row';
+
+  var h2 = document.createElement('h2');
+  h2.className = 'page-heading';
+  h2.textContent = 'Investments';
+  heading.appendChild(h2);
+
+  var addBtn = document.createElement('button');
+  addBtn.id = 'inv-add-btn';
+  addBtn.className = 'btn btn--sm btn--primary';
+  addBtn.textContent = '+ Add Row';
+  addBtn.addEventListener('click', function() { openInvestmentModal(null); });
+  heading.appendChild(addBtn);
+
+  page.appendChild(heading);
+
+  var sub = document.createElement('div');
+  sub.className = 'page-subtitle';
+  sub.style.cssText = 'margin-bottom:18px;';
+  sub.textContent = 'Manual ledger of non-real-estate assets. Update values once a month when the Telegram nudge fires.';
+  page.appendChild(sub);
+
+  var summary = document.createElement('div');
+  summary.id = 'inv-summary';
+  summary.className = 'stat-card';
+  summary.style.cssText = 'padding:18px;margin-bottom:14px;';
+  summary.textContent = 'Loading totals...';
+  page.appendChild(summary);
+
+  var freshness = document.createElement('div');
+  freshness.id = 'inv-freshness';
+  freshness.className = 'stat-card';
+  freshness.style.cssText = 'padding:14px 18px;margin-bottom:14px;';
+  freshness.textContent = 'Loading account freshness...';
+  page.appendChild(freshness);
+
+  var tableCard = document.createElement('div');
+  tableCard.id = 'inv-table-card';
+  tableCard.className = 'stat-card';
+  tableCard.style.cssText = 'padding:14px;';
+  tableCard.textContent = 'Loading investments...';
+  page.appendChild(tableCard);
+
+  main.appendChild(page);
+}
+
+function initInvestmentsPage() {
+  ensureInvestmentsPageDOM();
+  refreshInvestmentsTable();
+}
+
+// Helpers: formatting + freshness math.
+
+function invFmtUsd(n) {
+  if (n == null || isNaN(n)) return '$0.00';
+  var v = Number(n);
+  return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function invFmtQty(n) {
+  if (n == null || n === '' || isNaN(n)) return '';
+  var v = Number(n);
+  if (Math.abs(v) < 1) return v.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+  if (v % 1 === 0) return String(v);
+  return v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function invDaysSince(asOf) {
+  if (!asOf) return null;
+  var t = Date.parse(asOf);
+  if (isNaN(t)) return null;
+  var diff = Date.now() - t;
+  return Math.floor(diff / (24 * 60 * 60 * 1000));
+}
+
+function invFreshnessTone(days) {
+  if (days == null) return { color: '#888', label: 'unknown' };
+  if (days < 30) return { color: '#4caf50', label: days + 'd ago' };
+  if (days < 90) return { color: '#f0a020', label: days + 'd ago' };
+  return { color: '#e05050', label: days + 'd ago' };
+}
+
+function invRelDate(asOf) {
+  var d = invDaysSince(asOf);
+  if (d == null) return asOf || '';
+  if (d === 0) return 'today';
+  if (d === 1) return 'yesterday';
+  if (d < 30) return d + 'd ago';
+  if (d < 365) return Math.round(d / 30) + 'mo ago';
+  return Math.round(d / 365) + 'y ago';
+}
+
+function invTodayIso() {
+  var d = new Date();
+  var mm = String(d.getMonth() + 1).padStart(2, '0');
+  var dd = String(d.getDate()).padStart(2, '0');
+  return d.getFullYear() + '-' + mm + '-' + dd;
+}
+
+// Data fetch + render orchestration.
+
+async function refreshInvestmentsTable() {
+  var summary = document.getElementById('inv-summary');
+  var freshness = document.getElementById('inv-freshness');
+  var card = document.getElementById('inv-table-card');
+  if (!card) return;
+
+  var slug = (typeof currentProject !== 'undefined' && currentProject && currentProject.slug) ? currentProject.slug : 'broker';
+  var url = '/api/v1/broker/investments?project_id=' + encodeURIComponent(slug);
+
+  var data;
+  try {
+    data = await fetchFromAPI(url);
+  } catch (e) {
+    if (card) card.textContent = 'Investments unavailable: ' + String(e);
+    return;
+  }
+  if (data === null) return;
+
+  _invRows = Array.isArray(data) ? data : (data && data.rows) || [];
+
+  renderInvestmentsSummary(summary);
+  renderInvestmentsFreshness(freshness);
+  renderInvestmentsTable(card);
+}
+
+function renderInvestmentsSummary(container) {
+  if (!container) return;
+  while (container.firstChild) container.removeChild(container.firstChild);
+
+  var total = 0;
+  var latest = null;
+  for (var i = 0; i < _invRows.length; i++) {
+    var r = _invRows[i];
+    var v = Number(r.value_usd);
+    if (!isNaN(v)) total += v;
+    if (r.as_of && (!latest || r.as_of > latest)) latest = r.as_of;
+  }
+
+  var label = document.createElement('div');
+  label.className = 'stat-card__label';
+  label.textContent = 'Total non-real-estate value';
+  container.appendChild(label);
+
+  var value = document.createElement('div');
+  value.className = 'stat-card__value';
+  value.textContent = invFmtUsd(total);
+  container.appendChild(value);
+
+  var meta = document.createElement('div');
+  meta.style.cssText = 'font-size:0.85rem;color:var(--text-secondary);margin-top:6px;';
+  if (_invRows.length === 0) meta.textContent = 'No rows yet.';
+  else if (latest) {
+    var tone = invFreshnessTone(invDaysSince(latest));
+    meta.textContent = _invRows.length + ' rows. Last overall update: ' + latest + ' (' + tone.label + ').';
+  } else meta.textContent = _invRows.length + ' rows.';
+  container.appendChild(meta);
+}
+
+function renderInvestmentsFreshness(container) {
+  if (!container) return;
+  while (container.firstChild) container.removeChild(container.firstChild);
+
+  var label = document.createElement('div');
+  label.style.cssText = 'font-size:0.78rem;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em;';
+  label.textContent = 'Account freshness';
+  container.appendChild(label);
+
+  if (_invRows.length === 0) {
+    var empty = document.createElement('div');
+    empty.style.cssText = 'font-size:0.9rem;color:var(--text-secondary);';
+    empty.textContent = 'No accounts logged.';
+    container.appendChild(empty);
+    return;
+  }
+
+  var byAcct = {};
+  for (var i = 0; i < _invRows.length; i++) {
+    var r = _invRows[i];
+    var a = r.account_label || '(no label)';
+    if (!byAcct[a] || (r.as_of && r.as_of > byAcct[a])) {
+      byAcct[a] = r.as_of || null;
+    }
+  }
+
+  var pillRow = document.createElement('div');
+  pillRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;';
+
+  var keys = Object.keys(byAcct).sort();
+  for (var k = 0; k < keys.length; k++) {
+    var name = keys[k];
+    var tone = invFreshnessTone(invDaysSince(byAcct[name]));
+    var pill = document.createElement('div');
+    pill.style.cssText = 'display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,0.05);border:1px solid ' + tone.color + ';font-size:0.82rem;';
+    var dot = document.createElement('span');
+    dot.style.cssText = 'width:8px;height:8px;border-radius:50%;background:' + tone.color + ';';
+    pill.appendChild(dot);
+    var nameEl = document.createElement('span');
+    nameEl.textContent = name;
+    nameEl.style.cssText = 'color:var(--text-primary);font-weight:500;';
+    pill.appendChild(nameEl);
+    var ageEl = document.createElement('span');
+    ageEl.textContent = 'Updated ' + tone.label;
+    ageEl.style.cssText = 'color:' + tone.color + ';';
+    pill.appendChild(ageEl);
+    pillRow.appendChild(pill);
+  }
+  container.appendChild(pillRow);
+}
+
+// Table render with sortable headers.
+
+function renderInvestmentsTable(card) {
+  if (!card) return;
+  while (card.firstChild) card.removeChild(card.firstChild);
+
+  if (_invRows.length === 0) {
+    var empty = document.createElement('div');
+    empty.style.cssText = 'padding:32px 18px;text-align:center;color:var(--text-secondary);font-size:0.95rem;line-height:1.5;';
+    empty.textContent = 'No investments logged. Use this page for non-real-estate assets, stocks, retirement, crypto. The page exists for portfolio completeness only and is hidden in the public OSS mirror.';
+    card.appendChild(empty);
+    return;
+  }
+
+  var rows = _invRows.slice();
+  var col = _invSort.col;
+  var dir = _invSort.dir === 'asc' ? 1 : -1;
+  rows.sort(function(a, b) {
+    var av = a[col];
+    var bv = b[col];
+    if (col === 'value_usd' || col === 'quantity') {
+      av = av == null ? -Infinity : Number(av);
+      bv = bv == null ? -Infinity : Number(bv);
+    } else {
+      av = (av == null ? '' : String(av)).toLowerCase();
+      bv = (bv == null ? '' : String(bv)).toLowerCase();
+    }
+    if (av < bv) return -1 * dir;
+    if (av > bv) return 1 * dir;
+    return 0;
+  });
+
+  var table = document.createElement('table');
+  table.style.cssText = 'width:100%;border-collapse:collapse;font-size:0.9rem;';
+
+  var thead = document.createElement('thead');
+  var hr = document.createElement('tr');
+  var cols = [
+    { key: 'asset_type', label: 'Type', width: '90px' },
+    { key: 'account_label', label: 'Account' },
+    { key: 'symbol', label: 'Symbol', width: '90px' },
+    { key: 'quantity', label: 'Qty', width: '90px', align: 'right' },
+    { key: 'value_usd', label: 'Value', width: '120px', align: 'right' },
+    { key: 'as_of', label: 'As of', width: '110px' },
+    { key: 'notes', label: 'Notes' },
+    { key: '_actions', label: '', width: '120px', align: 'right' },
+  ];
+
+  for (var c = 0; c < cols.length; c++) {
+    var def = cols[c];
+    var th = document.createElement('th');
+    th.style.cssText = 'text-align:' + (def.align || 'left') + ';padding:8px 10px;border-bottom:1px solid var(--border-subtle);font-weight:600;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-secondary);' + (def.width ? 'width:' + def.width + ';' : '');
+    if (def.key !== '_actions') {
+      th.style.cursor = 'pointer';
+      th.dataset.col = def.key;
+      var arrow = (_invSort.col === def.key) ? (_invSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+      th.textContent = def.label + arrow;
+      (function(key, node) {
+        node.addEventListener('click', function() {
+          if (_invSort.col === key) {
+            _invSort.dir = _invSort.dir === 'asc' ? 'desc' : 'asc';
+          } else {
+            _invSort.col = key;
+            _invSort.dir = key === 'value_usd' || key === 'as_of' ? 'desc' : 'asc';
+          }
+          renderInvestmentsTable(card);
+        });
+      })(def.key, th);
+    } else {
+      th.textContent = def.label;
+    }
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  table.appendChild(thead);
+
+  var tbody = document.createElement('tbody');
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var tr = document.createElement('tr');
+    tr.style.cssText = 'border-bottom:1px solid rgba(255,255,255,0.04);';
+
+    var tdType = document.createElement('td');
+    tdType.style.cssText = 'padding:8px 10px;';
+    var badge = document.createElement('span');
+    badge.style.cssText = 'display:inline-block;padding:2px 8px;border-radius:6px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);font-size:0.78rem;color:var(--text-secondary);font-weight:500;';
+    badge.textContent = INV_TYPE_LABELS[r.asset_type] || r.asset_type || 'other';
+    tdType.appendChild(badge);
+    tr.appendChild(tdType);
+
+    var tdAcct = document.createElement('td');
+    tdAcct.style.cssText = 'padding:8px 10px;color:var(--text-primary);';
+    tdAcct.textContent = r.account_label || '';
+    tr.appendChild(tdAcct);
+
+    var tdSym = document.createElement('td');
+    tdSym.style.cssText = 'padding:8px 10px;font-family:var(--font-mono, monospace);color:var(--text-secondary);';
+    tdSym.textContent = r.symbol || '';
+    tr.appendChild(tdSym);
+
+    var tdQty = document.createElement('td');
+    tdQty.style.cssText = 'padding:8px 10px;text-align:right;font-family:var(--font-mono, monospace);color:var(--text-secondary);';
+    tdQty.textContent = invFmtQty(r.quantity);
+    tr.appendChild(tdQty);
+
+    var tdVal = document.createElement('td');
+    tdVal.style.cssText = 'padding:8px 10px;text-align:right;font-weight:600;color:var(--text-primary);';
+    tdVal.textContent = invFmtUsd(r.value_usd);
+    tr.appendChild(tdVal);
+
+    var tdDate = document.createElement('td');
+    tdDate.style.cssText = 'padding:8px 10px;color:var(--text-secondary);font-size:0.85rem;';
+    tdDate.textContent = invRelDate(r.as_of);
+    if (r.as_of) tdDate.title = r.as_of;
+    tr.appendChild(tdDate);
+
+    var tdNotes = document.createElement('td');
+    tdNotes.style.cssText = 'padding:8px 10px;color:var(--text-secondary);font-size:0.85rem;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+    var notesText = r.notes || '';
+    tdNotes.textContent = notesText;
+    if (notesText) tdNotes.title = notesText;
+    tr.appendChild(tdNotes);
+
+    var tdAct = document.createElement('td');
+    tdAct.style.cssText = 'padding:8px 10px;text-align:right;';
+    var editBtn = document.createElement('button');
+    editBtn.className = 'btn btn--sm btn--ghost';
+    editBtn.textContent = 'Edit';
+    editBtn.style.cssText = 'margin-right:4px;';
+    (function(row) {
+      editBtn.addEventListener('click', function() { openInvestmentModal(row); });
+    })(r);
+    tdAct.appendChild(editBtn);
+
+    var delBtn = document.createElement('button');
+    delBtn.className = 'btn btn--sm btn--danger';
+    delBtn.textContent = 'Delete';
+    (function(row) {
+      delBtn.addEventListener('click', function() {
+        confirmDeleteInvestment(row.id, row.account_label || ('row #' + row.id));
+      });
+    })(r);
+    tdAct.appendChild(delBtn);
+    tr.appendChild(tdAct);
+
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  card.appendChild(table);
+}
+
+// Modal: add or edit a row. Pre-fills if existingRow is supplied.
+
+function openInvestmentModal(existingRow) {
+  var existing = document.getElementById('inv-crud-modal');
+  if (existing) existing.remove();
+
+  var isEdit = !!(existingRow && existingRow.id);
+
+  var overlay = document.createElement('div');
+  overlay.id = 'inv-crud-modal';
+  overlay.className = 'modal-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
+
+  var box = document.createElement('div');
+  box.className = 'modal-box card';
+  box.style.cssText = 'width:min(560px,95vw);max-height:85vh;overflow-y:auto;padding:24px;background:var(--bg-raised, #1a1a1a);border:1px solid var(--border-subtle);border-radius:12px;';
+
+  var hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;';
+  var title = document.createElement('h3');
+  title.style.margin = '0';
+  title.textContent = isEdit ? 'Edit investment row' : 'Add investment row';
+  var closeBtn = document.createElement('button');
+  closeBtn.className = 'btn btn--sm btn--ghost';
+  closeBtn.textContent = 'Close';
+  closeBtn.onclick = function() { overlay.remove(); };
+  hdr.appendChild(title);
+  hdr.appendChild(closeBtn);
+
+  var form = document.createElement('div');
+  form.className = 'modal-form';
+
+  var typeWrap = document.createElement('div');
+  typeWrap.className = 'modal-form__field';
+  var typeLbl = document.createElement('label');
+  typeLbl.textContent = 'Asset type';
+  typeWrap.appendChild(typeLbl);
+  var typeSel = document.createElement('select');
+  typeSel.id = 'inv-asset-type';
+  for (var t = 0; t < INV_TYPE_ORDER.length; t++) {
+    var key = INV_TYPE_ORDER[t];
+    var opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = INV_TYPE_LABELS[key];
+    typeSel.appendChild(opt);
+  }
+  if (isEdit && existingRow.asset_type) typeSel.value = existingRow.asset_type;
+  typeWrap.appendChild(typeSel);
+  form.appendChild(typeWrap);
+
+  function textField(id, label, placeholder, value, opts) {
+    opts = opts || {};
+    var w = document.createElement('div');
+    w.className = 'modal-form__field';
+    var lbl = document.createElement('label');
+    lbl.textContent = label;
+    w.appendChild(lbl);
+    var input;
+    if (opts.textarea) {
+      input = document.createElement('textarea');
+      input.rows = 3;
+    } else {
+      input = document.createElement('input');
+      input.type = opts.type || 'text';
+      if (opts.type === 'number') {
+        if (opts.step) input.step = opts.step;
+        if (opts.min != null) input.min = opts.min;
+      }
+    }
+    input.id = id;
+    if (placeholder) input.placeholder = placeholder;
+    if (value != null && value !== '') input.value = value;
+    w.appendChild(input);
+    return w;
+  }
+
+  form.appendChild(textField('inv-account-label', 'Account label',
+    'e.g. Vanguard Roth, Coinbase BTC, Chase savings',
+    isEdit ? existingRow.account_label : ''));
+
+  form.appendChild(textField('inv-symbol', 'Symbol (optional)',
+    'e.g. VTSAX, BTC, AAPL',
+    isEdit ? existingRow.symbol : ''));
+
+  form.appendChild(textField('inv-quantity', 'Quantity (optional)',
+    'e.g. 12.345',
+    isEdit ? existingRow.quantity : '',
+    { type: 'number', step: 'any' }));
+
+  form.appendChild(textField('inv-value-usd', 'Value USD',
+    'e.g. 25000.00',
+    isEdit ? existingRow.value_usd : '',
+    { type: 'number', step: '0.01', min: 0 }));
+
+  form.appendChild(textField('inv-as-of', 'As of date',
+    'YYYY-MM-DD',
+    isEdit && existingRow.as_of ? existingRow.as_of : invTodayIso(),
+    { type: 'date' }));
+
+  form.appendChild(textField('inv-notes', 'Notes (optional)',
+    'Free text, e.g. employer match, vested by 2027',
+    isEdit ? existingRow.notes : '',
+    { textarea: true }));
+
+  var errRow = document.createElement('div');
+  errRow.id = 'inv-modal-err';
+  errRow.style.cssText = 'min-height:18px;color:#e05050;font-size:0.85rem;margin-bottom:6px;';
+  form.appendChild(errRow);
+
+  var actions = document.createElement('div');
+  actions.className = 'modal-form__actions';
+  var cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn btn--sm btn--ghost';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.onclick = function() { overlay.remove(); };
+  var saveBtn = document.createElement('button');
+  saveBtn.className = 'btn btn--sm btn--primary';
+  saveBtn.textContent = isEdit ? 'Save changes' : 'Add row';
+  saveBtn.onclick = function() { submitInvestmentEntry(overlay, saveBtn, isEdit ? existingRow.id : null); };
+  actions.appendChild(cancelBtn);
+  actions.appendChild(saveBtn);
+  form.appendChild(actions);
+
+  box.appendChild(hdr);
+  box.appendChild(form);
+  overlay.appendChild(box);
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+
+  setTimeout(function() {
+    var firstInput = document.getElementById('inv-account-label');
+    if (firstInput) firstInput.focus();
+  }, 30);
+}
+
+// Submit handler: POST for create, PUT for edit.
+
+async function submitInvestmentEntry(overlay, saveBtn, editId) {
+  var errEl = document.getElementById('inv-modal-err');
+  if (errEl) errEl.textContent = '';
+
+  var typeEl = document.getElementById('inv-asset-type');
+  var acctEl = document.getElementById('inv-account-label');
+  var symEl = document.getElementById('inv-symbol');
+  var qtyEl = document.getElementById('inv-quantity');
+  var valEl = document.getElementById('inv-value-usd');
+  var dateEl = document.getElementById('inv-as-of');
+  var notesEl = document.getElementById('inv-notes');
+
+  var assetType = typeEl ? typeEl.value : '';
+  var acct = acctEl ? acctEl.value.trim() : '';
+  var sym = symEl ? symEl.value.trim() : '';
+  var qty = qtyEl ? qtyEl.value.trim() : '';
+  var val = valEl ? valEl.value.trim() : '';
+  var asOf = dateEl ? dateEl.value.trim() : '';
+  var notes = notesEl ? notesEl.value.trim() : '';
+
+  if (!assetType) { if (errEl) errEl.textContent = 'Asset type is required.'; return; }
+  if (!acct) { if (errEl) errEl.textContent = 'Account label is required.'; return; }
+  if (!val) { if (errEl) errEl.textContent = 'Value USD is required.'; return; }
+  var valNum = Number(val);
+  if (isNaN(valNum) || valNum < 0) { if (errEl) errEl.textContent = 'Value USD must be a non-negative number.'; return; }
+  if (!asOf) { if (errEl) errEl.textContent = 'As-of date is required.'; return; }
+
+  var slug = (typeof currentProject !== 'undefined' && currentProject && currentProject.slug) ? currentProject.slug : 'broker';
+
+  var body = {
+    project_id: slug,
+    asset_type: assetType,
+    account_label: acct,
+    symbol: sym || null,
+    quantity: qty === '' ? null : Number(qty),
+    value_usd: valNum,
+    as_of: asOf,
+    notes: notes || null,
+  };
+
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = editId ? 'Saving...' : 'Adding...';
+  }
+
+  var url = editId ? '/api/v1/broker/investments/' + encodeURIComponent(editId) : '/api/v1/broker/investments';
+  var method = editId ? 'PUT' : 'POST';
+
+  var result;
+  try {
+    result = await apiFetch(url, {
+      method: method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    if (errEl) errEl.textContent = 'Network error: ' + String(e);
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = editId ? 'Save changes' : 'Add row'; }
+    return;
+  }
+
+  if (!result || !result.ok) {
+    var msg = (result && result.data && result.data.error) ? result.data.error : 'Save failed.';
+    if (errEl) errEl.textContent = msg;
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = editId ? 'Save changes' : 'Add row'; }
+    return;
+  }
+
+  if (overlay) overlay.remove();
+  if (typeof showToast === 'function') {
+    showToast(editId ? 'Investment updated' : 'Investment added', 'success');
+  }
+  refreshInvestmentsTable();
+}
+
+// Delete confirmation. Uses showConfirm when available, window.confirm otherwise.
+
+function confirmDeleteInvestment(id, label) {
+  var msg = 'Remove ' + (label || 'this entry') + ' entry?';
+  function onOk() {
+    runDeleteInvestment(id);
+  }
+  if (typeof showConfirm === 'function') {
+    showConfirm('Delete investment', msg, onOk);
+  } else {
+    if (window.confirm(msg)) onOk();
+  }
+}
+
+async function runDeleteInvestment(id) {
+  if (!id) return;
+  var result;
+  try {
+    result = await apiFetch('/api/v1/broker/investments/' + encodeURIComponent(id), { method: 'DELETE' });
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('Delete failed: ' + String(e), 'error');
+    return;
+  }
+  if (!result || !result.ok) {
+    var msg = (result && result.data && result.data.error) ? result.data.error : 'Delete failed.';
+    if (typeof showToast === 'function') showToast(msg, 'error');
+    return;
+  }
+  if (typeof showToast === 'function') showToast('Investment removed', 'success');
+  refreshInvestmentsTable();
+}
+
+// ProjectBus integration: refresh only when the investments page is active.
+
+if (typeof ProjectBus !== 'undefined' && ProjectBus && typeof ProjectBus.on === 'function') {
+  ProjectBus.on(function() {
+    var active = document.querySelector('section.page.active');
+    var pageId = active ? active.id : null;
+    if (!pageId && typeof currentPageId !== 'undefined') pageId = currentPageId;
+    if (pageId === 'page-investments') refreshInvestmentsTable();
+  });
 }

@@ -8,7 +8,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700;800;900&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20260427">
+  <link rel="stylesheet" href="style.css?v=20260428">
+  <!-- Leaflet OSS map library -- used by the Paw Broker Portfolio page (server/public/app.js initPortfolioPage). -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous">
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/lucide@0.468.0/dist/umd/lucide.min.js"></script>
@@ -69,6 +72,24 @@
       </a>
       <a href="#paws" class="sidebar-link" data-page="page-paws">
         <i data-lucide="paw-print"></i><span>Paws</span>
+      </a>
+      <a href="#deals" class="sidebar-link" data-page="page-deals">
+        <i data-lucide="home"></i><span>Deals</span>
+      </a>
+      <a href="#portfolio" class="sidebar-link" data-page="page-portfolio">
+        <i data-lucide="map"></i><span>Portfolio</span>
+      </a>
+      <a href="#rehab" class="sidebar-link" data-page="page-rehab">
+        <i data-lucide="hammer"></i><span>Rehab</span>
+      </a>
+      <a href="#tax" class="sidebar-link" data-page="page-tax">
+        <i data-lucide="receipt"></i><span>Tax</span>
+      </a>
+      <a href="#participation" class="sidebar-link" data-page="page-participation">
+        <i data-lucide="timer"></i><span>Participation</span>
+      </a>
+      <a href="#investments" class="sidebar-link" data-page="page-investments">
+        <i data-lucide="briefcase"></i><span>Investments</span>
       </a>
       <a href="#graph" class="sidebar-link" data-page="page-graph">
         <i data-lucide="brain"></i><span>Knowledge Graph</span>
@@ -1727,6 +1748,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20260427"></script>
+  <script src="app.js?v=20260428"></script>
 </body>
 </html>
