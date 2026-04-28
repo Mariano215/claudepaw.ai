@@ -103,21 +103,3 @@ export async function runCollector(
 
 registerCollector('github-community', githubCommunityCollector)
 registerCollector('competitive-landscape', competitiveLandscapeCollector)
-
-// Paw Broker — 15 collectors. Names match the `observe_collector` strings
-// configured in src/paws/broker-paw-defs.ts.
-registerCollector('broker-assessment-pull', brokerAssessmentPullCollector)
-registerCollector('broker-cost-seg-candidates', brokerCostSegCandidatesCollector)
-registerCollector('broker-equity-snapshot', brokerEquitySnapshotCollector)
-registerCollector('broker-father-broker-inbox', brokerFatherBrokerInboxCollector)
-registerCollector('broker-listings', brokerListingsCollector)
-registerCollector('broker-ltta-status', brokerLttaStatusCollector)
-registerCollector('broker-market-deltas', brokerMarketDeltasCollector)
-registerCollector('broker-participation-snapshot', brokerParticipationSnapshotCollector)
-registerCollector('broker-pipeline-snapshot', brokerPipelineSnapshotCollector)
-registerCollector('broker-policy-roll', brokerPolicyRollCollector)
-registerCollector('broker-portfolio-rollup', brokerPortfolioRollupCollector)
-registerCollector('broker-str-bookings-snapshot', brokerStrBookingsSnapshotCollector)
-registerCollector('broker-str-pricing', brokerStrPricingCollector)
-registerCollector('broker-tax-clock', brokerTaxClockCollector)
-registerCollector('broker-vendor-rollup', brokerVendorRollupCollector)
