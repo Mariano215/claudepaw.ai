@@ -12927,6 +12927,7 @@ function apRenderList(items) {
   const container = document.getElementById('ap-list');
   if (!container) return;
   const isArchiveTab = apState.tab === 'archive';
+  const isActiveTab = apState.tab === 'active';
   // Render purge button in archive tab header
   const purgeContainer = document.getElementById('ap-purge-row');
   if (purgeContainer) {
@@ -12941,8 +12942,10 @@ function apRenderList(items) {
     setElementHTML(container, '<div class="ap-empty">No items.</div>');
     return;
   }
-  const html = filtered.map(i => (
-    '<div class="ap-row" data-id="' + escapeHtml(String(i.id)) + '">' +
+  // Statuses that require immediate attention
+  const AP_ACTION_STATUSES = new Set(['active', 'in_progress', 'approved', 'blocked']);
+  function renderRow(i) {
+    return '<div class="ap-row" data-id="' + escapeHtml(String(i.id)) + '">' +
       '<span class="ap-priority ap-priority--' + escapeHtml(i.priority || 'medium') + '"></span>' +
       '<span class="ap-title">' + escapeHtml(i.title || '') + '</span>' +
       '<span class="ap-status ap-status--' + escapeHtml(i.status || '') + '">' + escapeHtml(i.status || '') + '</span>' +
@@ -12950,9 +12953,40 @@ function apRenderList(items) {
       (isArchiveTab
         ? '<button class="btn btn--ghost btn--sm ap-delete-btn" data-id="' + escapeHtml(String(i.id)) + '" type="button" style="color:var(--color-danger,#e55);margin-left:auto;">Delete permanently</button>'
         : '') +
-    '</div>'
-  )).join('');
+    '</div>';
+  }
+  let html;
+  if (isActiveTab) {
+    // Split: items needing action vs the rest (proposed, rejected, paused, etc.)
+    const main = filtered.filter(i => AP_ACTION_STATUSES.has(i.status));
+    const other = filtered.filter(i => !AP_ACTION_STATUSES.has(i.status));
+    const mainHtml = main.length
+      ? main.map(renderRow).join('')
+      : '<div class="ap-empty" style="padding:12px 16px;font-size:0.85rem;opacity:0.5;">No active items needing attention.</div>';
+    let otherHtml = '';
+    if (other.length) {
+      otherHtml =
+        '<details class="ap-other-section">' +
+          '<summary class="ap-other-summary">' +
+            '<span class="ap-other-chevron">▶</span>' +
+            'Other items (' + other.length + ')' +
+          '</summary>' +
+          '<div class="ap-other-list">' + other.map(renderRow).join('') + '</div>' +
+        '</details>';
+    }
+    html = mainHtml + otherHtml;
+  } else {
+    html = filtered.map(renderRow).join('');
+  }
   setElementHTML(container, html);
+  // Animate chevron on details toggle
+  const detailsEl = container.querySelector('.ap-other-section');
+  if (detailsEl) {
+    detailsEl.addEventListener('toggle', () => {
+      const chevron = detailsEl.querySelector('.ap-other-chevron');
+      if (chevron) chevron.textContent = detailsEl.open ? '▼' : '▶';
+    });
+  }
   container.querySelectorAll('.ap-row').forEach(el => {
     el.addEventListener('click', (e) => {
       if (e.target && e.target.classList && e.target.classList.contains('ap-delete-btn')) return;
