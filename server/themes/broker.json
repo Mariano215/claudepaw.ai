@@ -36,8 +36,8 @@
     "mono": "'JetBrains Mono', monospace"
   },
   "gradients": {
-    "card": "linear-gradient(135deg, rgba(180, 83, 9, 0.05) 0%, rgba(5, 150, 105, 0.02) 60%, transparent 100%)",
-    "cardHover": "linear-gradient(135deg, rgba(180, 83, 9, 0.09) 0%, rgba(5, 150, 105, 0.04) 60%, transparent 100%)"
+    "card": "none",
+    "cardHover": "none"
   },
   "shadows": {
     "card": "0 1px 3px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3)",

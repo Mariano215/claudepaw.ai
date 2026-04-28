@@ -15183,20 +15183,22 @@ function _dealsFmtDate(ms) {
   } catch (e) { return '-'; }
 }
 
-function _dealsSeverityColor(sev) {
+// Map deal severity (0-10) to a semantic tone keyword used by .bk-row[data-tone]
+// and .bk-sev-badge[data-tone] in the broker CSS section of style.css.
+// Tones: high (red, sev>=7) / med (amber, 5-6) / low (accent, 3-4) / mute (<3).
+function _dealsSeverityTone(sev) {
   var s = Number(sev) || 0;
-  if (s >= 7) return '#f44336';   // red
-  if (s >= 5) return '#ff9800';   // amber
-  if (s >= 3) return '#ffc107';   // yellow
-  return 'rgba(255,255,255,0.45)'; // dim
+  if (s >= 7) return 'high';
+  if (s >= 5) return 'med';
+  if (s >= 3) return 'low';
+  return 'mute';
 }
 
 function _dealsSeverityBadge(sev) {
   var badge = document.createElement('span');
+  badge.className = 'bk-sev-badge';
+  badge.dataset.tone = _dealsSeverityTone(sev);
   badge.textContent = 'S' + (Number(sev) || 0);
-  badge.style.cssText = 'display:inline-block;padding:2px 6px;border-radius:4px;' +
-    'font-size:0.72rem;font-weight:600;background:' + _dealsSeverityColor(sev) +
-    ';color:#000;letter-spacing:0.3px;';
   return badge;
 }
 
@@ -15238,33 +15240,30 @@ function ensureDealsPageDOM() {
   page.appendChild(scoutCard);
 
   // Segmented control: Kanban | Father-Broker Inbox
-  var segCard = document.createElement('div');
-  segCard.className = 'stat-card';
-  segCard.style.cssText = 'padding:12px 18px;margin-top:12px;';
-  var segRow = document.createElement('div');
-  segRow.style.cssText = 'display:flex;gap:6px;align-items:center;';
-  var segLabel = document.createElement('div');
-  segLabel.textContent = 'View:';
-  segLabel.style.cssText = 'opacity:0.7;font-size:0.85rem;margin-right:6px;';
-  segRow.appendChild(segLabel);
+  var segWrap = document.createElement('div');
+  segWrap.style.cssText = 'margin-top:12px;display:flex;justify-content:flex-start;';
+  var seg = document.createElement('div');
+  seg.className = 'bk-segmented';
+  seg.setAttribute('role', 'tablist');
+  seg.setAttribute('aria-label', 'Deals view');
 
   ['kanban', 'inbox'].forEach(function(viewKey) {
     var btn = document.createElement('button');
     btn.type = 'button';
+    btn.className = 'bk-segmented__btn';
     btn.dataset.dealsView = viewKey;
+    btn.setAttribute('role', 'tab');
+    btn.setAttribute('aria-pressed', 'false');
     btn.textContent = viewKey === 'kanban' ? 'Kanban' : 'Father-Broker Inbox';
-    btn.style.cssText = 'background:rgba(255,255,255,0.05);color:inherit;' +
-      'border:1px solid rgba(255,255,255,0.15);padding:5px 12px;border-radius:4px;' +
-      'cursor:pointer;font-size:0.85rem;';
     btn.addEventListener('click', function() {
       DEALS_STATE.view = viewKey;
       _dealsRenderViewToggle();
       _dealsRenderActiveView();
     });
-    segRow.appendChild(btn);
+    seg.appendChild(btn);
   });
-  segCard.appendChild(segRow);
-  page.appendChild(segCard);
+  segWrap.appendChild(seg);
+  page.appendChild(segWrap);
 
   // Kanban container (visible by default)
   var kanban = document.createElement('div');
@@ -15283,16 +15282,16 @@ function ensureDealsPageDOM() {
   // Modal backdrop (hidden until openDealUnderwritingModal)
   var modal = document.createElement('div');
   modal.id = 'deal-underwriting-modal';
-  modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.72);' +
-    'z-index:9000;align-items:flex-start;justify-content:center;padding:48px 24px;overflow-y:auto;';
+  modal.className = 'bk-modal';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', 'deal-underwriting-modal-inner');
   modal.addEventListener('click', function(e) {
     if (e.target === modal) closeDealUnderwritingModal();
   });
   var modalInner = document.createElement('div');
   modalInner.id = 'deal-underwriting-modal-inner';
-  modalInner.style.cssText = 'background:var(--card-bg, #1a1a1a);color:var(--text-primary, #eee);' +
-    'border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:24px;max-width:760px;' +
-    'width:100%;box-shadow:0 12px 36px rgba(0,0,0,0.5);';
+  modalInner.className = 'bk-modal__inner';
   modal.appendChild(modalInner);
   page.appendChild(modal);
 
@@ -15309,8 +15308,7 @@ function _dealsRenderViewToggle() {
   for (var i = 0; i < btns.length; i++) {
     var b = btns[i];
     var on = b.dataset.dealsView === DEALS_STATE.view;
-    b.style.background = on ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.05)';
-    b.style.fontWeight = on ? '600' : '400';
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
   }
   var kanban = document.getElementById('deals-kanban');
   var inbox = document.getElementById('deals-inbox');
@@ -15354,7 +15352,9 @@ function _renderScoutFeed(deals) {
 
   if (top.length === 0) {
     var empty = document.createElement('div');
-    empty.style.cssText = 'opacity:0.6;font-size:0.9rem;';
+    empty.className = 'bk-empty';
+    empty.style.padding = '14px';
+    empty.style.fontSize = '0.9rem';
     empty.textContent = 'No new finds in the last 7 days. Scout sweeps Mondays at 8am.';
     card.appendChild(empty);
     return;
@@ -15362,36 +15362,42 @@ function _renderScoutFeed(deals) {
 
   var list = document.createElement('div');
   list.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+  list.setAttribute('role', 'list');
   top.forEach(function(d) {
     var row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 10px;' +
-      'background:rgba(255,255,255,0.04);border-radius:6px;cursor:pointer;' +
-      'border-left:3px solid ' + _dealsSeverityColor(d.severity) + ';';
-    row.addEventListener('click', function() { openDealUnderwritingModal(d); });
-    row.addEventListener('mouseover', function() { row.style.background = 'rgba(255,255,255,0.08)'; });
-    row.addEventListener('mouseout',  function() { row.style.background = 'rgba(255,255,255,0.04)'; });
+    row.className = 'bk-row';
+    row.dataset.tone = _dealsSeverityTone(d.severity);
+    row.setAttribute('role', 'button');
+    row.setAttribute('tabindex', '0');
+    var addrText = (d.address || 'unknown address') + (d.zip ? ' ' + d.zip : '');
+    row.setAttribute('aria-label', 'Open underwriting for ' + addrText + ', severity ' + (Number(d.severity) || 0));
+    var openModal = function() { openDealUnderwritingModal(d); };
+    row.addEventListener('click', openModal);
+    row.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openModal(); }
+    });
 
     row.appendChild(_dealsSeverityBadge(d.severity));
 
     var addr = document.createElement('div');
-    addr.style.cssText = 'flex:1;min-width:0;';
+    addr.className = 'bk-row__addr';
     var addrLine = document.createElement('div');
-    addrLine.style.cssText = 'font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-    addrLine.textContent = (d.address || 'unknown address') + (d.zip ? '  ' + d.zip : '');
+    addrLine.className = 'bk-row__title';
+    addrLine.textContent = addrText;
     addr.appendChild(addrLine);
     var meta = document.createElement('div');
-    meta.style.cssText = 'opacity:0.65;font-size:0.78rem;';
+    meta.className = 'bk-row__meta';
     meta.textContent = (d.deal_type || 'unspecified') + ' · list ' + _dealsFmtMoney(d.list_price) +
       (d.max_offer != null ? ' · max ' + _dealsFmtMoney(d.max_offer) : '');
     addr.appendChild(meta);
     row.appendChild(addr);
 
     var capWrap = document.createElement('div');
-    capWrap.style.cssText = 'text-align:right;font-size:0.8rem;opacity:0.85;min-width:90px;';
+    capWrap.className = 'bk-row__stats';
     var capLine = document.createElement('div');
+    capLine.className = 'bk-row__stats--strong';
     capLine.textContent = 'cap ' + _dealsFmtPct(d.est_cap_rate);
     var cocLine = document.createElement('div');
-    cocLine.style.cssText = 'opacity:0.7;';
     cocLine.textContent = 'CoC ' + _dealsFmtPct(d.est_coc);
     capWrap.appendChild(capLine);
     capWrap.appendChild(cocLine);
@@ -15528,41 +15534,51 @@ function _renderDealCard(d) {
   card.draggable = true;
   card.dataset.dealId = d.id;
   card.dataset.dealStatus = d.status || 'sourced';
-  card.style.cssText = 'background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);' +
-    'border-left:3px solid ' + _dealsSeverityColor(d.severity) + ';' +
-    'border-radius:6px;padding:8px 10px;cursor:grab;font-size:0.85rem;';
+  card.className = 'bk-deal-card';
+  card.dataset.tone = _dealsSeverityTone(d.severity);
+  card.setAttribute('role', 'button');
+  card.setAttribute('tabindex', '0');
+  card.setAttribute('aria-label',
+    'Deal ' + (d.address || 'unknown') + ', severity ' + (Number(d.severity) || 0) +
+    ', status ' + (d.status || 'sourced') + '. Press Enter to open underwriting.');
 
   card.addEventListener('dragstart', function(e) {
-    card.style.opacity = '0.5';
+    card.dataset.dragging = 'true';
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/deal-id', String(d.id));
     e.dataTransfer.setData('text/deal-from', String(d.status || 'sourced'));
   });
   card.addEventListener('dragend', function() {
-    card.style.opacity = '1';
+    delete card.dataset.dragging;
   });
-  card.addEventListener('click', function() { openDealUnderwritingModal(d); });
+  var openModal = function() { openDealUnderwritingModal(d); };
+  card.addEventListener('click', openModal);
+  card.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openModal(); }
+  });
 
   var topRow = document.createElement('div');
-  topRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px;';
+  topRow.className = 'bk-deal-card__top';
   var addr = document.createElement('div');
-  addr.style.cssText = 'font-weight:500;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+  addr.className = 'bk-deal-card__addr';
   addr.textContent = d.address || 'unknown';
   topRow.appendChild(addr);
   topRow.appendChild(_dealsSeverityBadge(d.severity));
   card.appendChild(topRow);
 
   var metaRow = document.createElement('div');
-  metaRow.style.cssText = 'opacity:0.65;font-size:0.74rem;margin-top:3px;';
+  metaRow.className = 'bk-deal-card__meta';
   metaRow.textContent = (d.zip || '') + (d.deal_type ? '  ·  ' + d.deal_type : '');
   card.appendChild(metaRow);
 
   var priceRow = document.createElement('div');
-  priceRow.style.cssText = 'display:flex;justify-content:space-between;font-size:0.78rem;margin-top:4px;';
+  priceRow.className = 'bk-deal-card__price-row';
   var priceL = document.createElement('span');
-  priceL.textContent = 'list ' + _dealsFmtMoney(d.list_price);
+  var priceLstrong = document.createElement('strong');
+  priceLstrong.textContent = _dealsFmtMoney(d.list_price);
+  priceL.appendChild(document.createTextNode('list '));
+  priceL.appendChild(priceLstrong);
   var priceR = document.createElement('span');
-  priceR.style.opacity = '0.75';
   priceR.textContent = (d.est_cap_rate != null ? 'cap ' + _dealsFmtPct(d.est_cap_rate) : '') +
     (d.est_coc != null ? '  ·  CoC ' + _dealsFmtPct(d.est_coc) : '');
   priceRow.appendChild(priceL);
@@ -15658,12 +15674,17 @@ function openDealUnderwritingModal(deal) {
   header.appendChild(sevWrap);
   inner.appendChild(header);
 
-  // Conservative-formula reminder banner
+  // Conservative-formula reminder banner — info-tone callout
   var reminder = document.createElement('div');
-  reminder.style.cssText = 'background:rgba(255,193,7,0.10);border:1px solid rgba(255,193,7,0.35);' +
-    'border-radius:6px;padding:10px 12px;font-size:0.82rem;line-height:1.45;margin-bottom:14px;';
-  reminder.textContent = 'Analyzer defaults: BRRRR all-in <= 70% ARV, DSCR >= 1.30 at quoted +1.5% stress. ' +
+  reminder.className = 'bk-callout';
+  reminder.dataset.tone = 'info';
+  reminder.style.fontSize = '0.82rem';
+  reminder.style.marginBottom = '14px';
+  var reminderBody = document.createElement('div');
+  reminderBody.className = 'bk-callout__body';
+  reminderBody.textContent = 'Analyzer defaults: BRRRR all-in <= 70% ARV, DSCR >= 1.30 at quoted +1.5% stress. ' +
     'STR Y1 occupancy 0.65 with LTR-backstop DSCR >= 1.30.';
+  reminder.appendChild(reminderBody);
   inner.appendChild(reminder);
 
   // Math grid: three columns when a STR adr is present, else two
@@ -15741,7 +15762,11 @@ function openDealUnderwritingModal(deal) {
   footer.appendChild(updated);
   inner.appendChild(footer);
 
-  modal.style.display = 'flex';
+  // Use data-open attribute so CSS can transition opacity + transform.
+  // requestAnimationFrame defers the open state by one frame, so the
+  // initial display:none -> display:flex is committed before the
+  // opacity transition begins, preventing instant-paint flashes.
+  modal.dataset.open = 'true';
   DEALS_STATE.modalOpen = true;
 
   // Esc closes
@@ -15756,7 +15781,7 @@ function openDealUnderwritingModal(deal) {
 function closeDealUnderwritingModal() {
   var modal = document.getElementById('deal-underwriting-modal');
   if (!modal) return;
-  modal.style.display = 'none';
+  modal.dataset.open = 'false';
   DEALS_STATE.modalOpen = false;
 }
 
@@ -16117,11 +16142,15 @@ function ensurePortfolioPageDOM() {
   page.appendChild(heading);
 
   // Summary strip across the top with door / equity / debt / cash flow.
+  // Inner grid of .bk-summary-tile wraps via .bk-summary-row.
+  var summaryWrap = document.createElement('div');
+  summaryWrap.className = 'stat-card';
+  summaryWrap.style.cssText = 'padding:18px;';
   var summary = document.createElement('div');
   summary.id = 'portfolio-summary';
-  summary.className = 'stat-card';
-  summary.style.cssText = 'padding:18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;';
-  page.appendChild(summary);
+  summary.className = 'bk-summary-row';
+  summaryWrap.appendChild(summary);
+  page.appendChild(summaryWrap);
 
   // Map card.
   var mapCard = _bpCardWrap('Property Map');
@@ -16319,25 +16348,32 @@ function _bpRenderSummary() {
   var props = BROKER_PORTFOLIO_STATE.data.properties || [];
   var rollup = BROKER_PORTFOLIO_STATE.data.rollup || {};
 
+  // Tones use semantic data-tone keywords; the .bk-summary-tile CSS class
+  // colors only the value text (no border-left stripe). DSCR threshold
+  // 1.30 + cashflow sign + vacancy 8% are the broker-side decision triggers.
+  var monthlyCf = Number(rollup.monthly_cash_flow) || 0;
+  var dscr = rollup.dscr_avg != null ? Number(rollup.dscr_avg) : null;
+  var vacancy = rollup.vacancy_pct != null ? Number(rollup.vacancy_pct) : null;
   var tiles = [
-    { label: 'Properties', value: String(props.length), accent: '#64b5f6' },
-    { label: 'Doors', value: String(rollup.doors || props.length || 0), accent: '#81c784' },
-    { label: 'Total Equity', value: _bpFmtUsd(rollup.total_equity), accent: '#4caf50' },
-    { label: 'Total Debt', value: _bpFmtUsd(rollup.total_debt), accent: '#e57373' },
-    { label: 'Monthly CF', value: _bpFmtUsd(rollup.monthly_cash_flow), accent: (rollup.monthly_cash_flow >= 0 ? '#4caf50' : '#e53935') },
-    { label: 'Avg DSCR', value: rollup.dscr_avg != null ? Number(rollup.dscr_avg).toFixed(2) : '—', accent: '#ffb300' },
-    { label: 'Vacancy', value: rollup.vacancy_pct != null ? _bpFmtPctRaw(rollup.vacancy_pct) : '—', accent: '#ba68c8' },
+    { label: 'Properties',   value: String(props.length),                      tone: 'mute' },
+    { label: 'Doors',        value: String(rollup.doors || props.length || 0), tone: 'mute' },
+    { label: 'Total Equity', value: _bpFmtUsd(rollup.total_equity),            tone: 'good' },
+    { label: 'Total Debt',   value: _bpFmtUsd(rollup.total_debt),              tone: 'mute' },
+    { label: 'Monthly CF',   value: _bpFmtUsd(monthlyCf),                      tone: monthlyCf >= 0 ? 'good' : 'high' },
+    { label: 'Avg DSCR',     value: dscr != null ? dscr.toFixed(2) : '—',      tone: dscr == null ? 'mute' : (dscr >= 1.30 ? 'good' : (dscr >= 1.10 ? 'med' : 'high')) },
+    { label: 'Vacancy',      value: vacancy != null ? _bpFmtPctRaw(vacancy) : '—', tone: vacancy == null ? 'mute' : (vacancy <= 0.05 ? 'good' : (vacancy <= 0.08 ? 'med' : 'high')) },
   ];
   for (var i = 0; i < tiles.length; i++) {
     var t = tiles[i];
     var tile = document.createElement('div');
-    tile.style.cssText = 'border-left:3px solid ' + t.accent + ';padding-left:10px;';
+    tile.className = 'bk-summary-tile';
+    tile.dataset.tone = t.tone;
     var lab = document.createElement('div');
-    lab.style.cssText = 'font-size:0.75rem;opacity:0.7;text-transform:uppercase;letter-spacing:0.05em;';
+    lab.className = 'bk-summary-tile__label';
     lab.textContent = t.label;
     tile.appendChild(lab);
     var val = document.createElement('div');
-    val.style.cssText = 'font-size:1.4rem;font-weight:600;margin-top:2px;';
+    val.className = 'bk-summary-tile__value';
     val.textContent = t.value;
     tile.appendChild(val);
     host.appendChild(tile);
@@ -16523,30 +16559,33 @@ function _bpRenderCashFlow() {
     totalNet += net;
 
     var block = document.createElement('div');
-    block.style.cssText = 'padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06);';
+    block.style.cssText = 'padding:10px 0;border-bottom:1px solid var(--border-subtle);';
 
     var head = document.createElement('div');
     head.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;';
     var addr = document.createElement('span');
-    addr.style.cssText = 'font-weight:500;';
+    addr.style.cssText = 'font-weight:500;color:var(--text-primary);';
     addr.textContent = String(addrById[row.property_id] || row.address || row.property_id || 'Unnamed');
     head.appendChild(addr);
     var netVal = document.createElement('span');
-    netVal.style.cssText = 'font-weight:600;color:' + (net >= 0 ? '#4caf50' : '#e53935') + ';';
+    netVal.style.fontWeight = '600';
+    netVal.className = net >= 0 ? 'bk-num--good' : 'bk-num--bad';
     netVal.textContent = (net >= 0 ? '+' : '') + _bpFmtUsdExact(net);
     head.appendChild(netVal);
     block.appendChild(head);
 
     var segWrap = document.createElement('div');
     segWrap.style.cssText = 'display:flex;gap:6px;font-size:0.82rem;flex-wrap:wrap;';
+    // Tones map to .bk-pill[data-tone] CSS classes (good/med/high/low/mute).
     [
-      { lab: 'Gross', amt: revenue, color: '#81c784', sign: '+' },
-      { lab: 'Expenses', amt: -expenses, color: '#ffb74d', sign: '−' },
-      { lab: 'Debt Svc', amt: -debtService, color: '#e57373', sign: '−' },
-      { lab: 'Net', amt: net, color: (net >= 0 ? '#4caf50' : '#e53935'), sign: (net >= 0 ? '+' : '−') },
+      { lab: 'Gross',    amt: revenue,      tone: 'good', sign: '+' },
+      { lab: 'Expenses', amt: -expenses,    tone: 'med',  sign: '−' },
+      { lab: 'Debt Svc', amt: -debtService, tone: 'high', sign: '−' },
+      { lab: 'Net',      amt: net,          tone: net >= 0 ? 'good' : 'high', sign: net >= 0 ? '+' : '−' },
     ].forEach(function(seg) {
       var pill = document.createElement('span');
-      pill.style.cssText = 'background:rgba(255,255,255,0.04);border-left:3px solid ' + seg.color + ';padding:2px 8px;border-radius:3px;color:' + seg.color + ';';
+      pill.className = 'bk-pill';
+      pill.dataset.tone = seg.tone;
       var absAmt = Math.abs(seg.amt);
       pill.textContent = seg.lab + ' ' + seg.sign + _bpFmtUsdExact(absAmt);
       segWrap.appendChild(pill);
@@ -16563,7 +16602,7 @@ function _bpRenderCashFlow() {
   lab.textContent = 'Portfolio Net Cash Flow';
   totalRow.appendChild(lab);
   var v = document.createElement('span');
-  v.style.cssText = 'color:' + (totalNet >= 0 ? '#4caf50' : '#e53935') + ';';
+  v.className = totalNet >= 0 ? 'bk-num--good' : 'bk-num--bad';
   v.textContent = (totalNet >= 0 ? '+' : '') + _bpFmtUsdExact(totalNet);
   totalRow.appendChild(v);
   host.appendChild(totalRow);
@@ -17625,31 +17664,27 @@ function ensureTaxPageDOM() {
 
   // CPA-disclaimer banner.  MUST render first.  Sticky-top, yellow / amber,
   // bold first sentence.  Plan section 5 + verification #7 require this.
+  // Sticky CPA disclaimer — stays pinned while user scrolls the tax page.
+  // Uses .bk-callout--sticky + data-tone="warn" for full-border treatment;
+  // no border-left stripe.
   var banner = document.createElement('div');
   banner.id = 'tax-cpa-banner';
+  banner.className = 'bk-callout bk-callout--sticky';
+  banner.dataset.tone = 'warn';
   banner.setAttribute('role', 'alert');
-  banner.style.cssText = [
-    'position:sticky',
-    'top:0',
-    'z-index:50',
-    'background:#fef3c7',
-    'color:#78350f',
-    'padding:16px',
-    'margin-bottom:16px',
-    'border-left:4px solid #d97706',
-    'border-radius:4px',
-    'font-size:0.9rem',
-    'line-height:1.5',
-  ].join(';') + ';';
+  var bannerBody = document.createElement('div');
+  bannerBody.className = 'bk-callout__body';
   var bannerStrong = document.createElement('strong');
-  bannerStrong.textContent = 'Not tax advice. ';
-  banner.appendChild(bannerStrong);
-  banner.appendChild(document.createTextNode(
+  bannerStrong.className = 'bk-callout__title';
+  bannerStrong.textContent = 'Not tax advice';
+  bannerBody.appendChild(bannerStrong);
+  bannerBody.appendChild(document.createTextNode(
     'Coordinate with your CPA before any action. Numbers shown are ' +
     'illustrative projections from automated paws and may be incomplete or ' +
     'wrong. Verify every figure against your actual returns and a licensed ' +
     "professional's review before filing or making decisions."
   ));
+  banner.appendChild(bannerBody);
   page.appendChild(banner);
 
   // Page heading
@@ -17801,23 +17836,22 @@ function _taxRenderGauge(opts) {
 function _taxRenderDepreciation(card, taxClock, costSegStudies) {
   _taxClearCard(card, 'YTD depreciation schedule');
 
-  // OBBB banner
+  // OBBB banner — full border + tinted background, no stripe.
   var obbb = document.createElement('div');
-  obbb.style.cssText = [
-    'background:rgba(16,185,129,0.10)',
-    'color:#a7f3d0',
-    'padding:10px 12px',
-    'border-left:3px solid #10b981',
-    'border-radius:4px',
-    'margin-bottom:12px',
-    'font-size:0.85rem',
-  ].join(';') + ';';
+  obbb.className = 'bk-callout';
+  obbb.dataset.tone = 'success';
+  obbb.style.marginBottom = '12px';
+  obbb.style.fontSize = '0.85rem';
+  var obbbBody = document.createElement('div');
+  obbbBody.className = 'bk-callout__body';
   var obbbStrong = document.createElement('strong');
-  obbbStrong.textContent = 'OBBB Act: ';
-  obbb.appendChild(obbbStrong);
-  obbb.appendChild(document.createTextNode(
+  obbbStrong.className = 'bk-callout__title';
+  obbbStrong.textContent = 'OBBB Act';
+  obbbBody.appendChild(obbbStrong);
+  obbbBody.appendChild(document.createTextNode(
     '100% bonus depreciation permanently restored for properties acquired after Jan 19, 2025.'
   ));
+  obbb.appendChild(obbbBody);
   card.appendChild(obbb);
 
   // Sum accelerated year-1 deductions across studies
@@ -18786,12 +18820,16 @@ function renderParticipationFatherCallout() {
   if (!hasFather) { card.hidden = true; return; }
   card.hidden = false;
 
-  var box = _el('div', { css: 'background:rgba(240,160,32,0.12);border-left:4px solid #f0a020;border-radius:6px;padding:14px 16px;color:rgba(255,255,255,0.92);' }, [
-    _el('div', { css: 'font-weight:600;margin-bottom:6px;color:#f0a020;', text: 'Father-hours rule check' }),
-    _el('div', {
-      css: 'font-size:0.9rem;line-height:1.45;',
-      text: "Father's hours count toward your material-participation only if you hold at least 5% of the entity that owns the property. Verify entity ownership in legal-shield agent before relying on these hours for STR or REPS.",
-    }),
+  // Father-hours callout — warn tone, full-border treatment.
+  // ADR-014: this fires unconditionally in v1 because we don't yet have
+  // an entity_ownership table to gate on the 5% rule.
+  var box = _el('div', { cls: 'bk-callout', attrs: { 'data-tone': 'warn', role: 'note' } }, [
+    _el('div', { cls: 'bk-callout__body' }, [
+      _el('strong', { cls: 'bk-callout__title', text: 'Father-hours rule check' }),
+      _el('div', {
+        text: "Father's hours count toward your material-participation only if you hold at least 5% of the entity that owns the property. Verify entity ownership in legal-shield agent before relying on these hours for STR or REPS.",
+      }),
+    ]),
   ]);
   card.appendChild(box);
 }
