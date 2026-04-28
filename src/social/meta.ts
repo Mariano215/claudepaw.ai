@@ -1,5 +1,87 @@
+import { execSync } from 'node:child_process'
 import { logger } from '../logger.js'
 import type { PublishResult } from './types.js'
+
+// ---------------------------------------------------------------------------
+// Instagram image proxy
+//
+// Some WordPress hosting providers (e.g. HostPapa) block Meta's crawler IPs
+// at the WAF level, causing error 9004/2207052 ("Media download has failed").
+// Proxy the image to GitHub raw CDN which Meta can always reach.
+// ---------------------------------------------------------------------------
+
+const GH_PROXY_REPO = 'YourGitHubUser/claudepaw.ai'
+const GH_PROXY_BRANCH = 'main'
+const GH_PROXY_PREFIX = 'assets/ig-proxy'
+
+async function proxyImageForInstagram(imageUrl: string): Promise<string> {
+  // Only proxy URLs that are likely hosted on blocked providers
+  if (!imageUrl.includes('wp-content/uploads')) return imageUrl
+
+  try {
+    // Fetch the image
+    const resp = await fetch(imageUrl)
+    if (!resp.ok) {
+      logger.warn({ imageUrl, status: resp.status }, 'IG proxy: failed to fetch source image, using original URL')
+      return imageUrl
+    }
+    const buffer = Buffer.from(await resp.arrayBuffer())
+    const base64 = buffer.toString('base64')
+
+    // Derive a stable filename from the URL
+    const filename = imageUrl.split('/').pop() ?? `ig-${Date.now()}.jpg`
+    const path = `${GH_PROXY_PREFIX}/${filename}`
+
+    // Get GitHub token from gh CLI
+    const ghToken = execSync('gh auth token', { encoding: 'utf-8' }).trim()
+    if (!ghToken) throw new Error('gh auth token returned empty')
+
+    // Check if file already exists (get its SHA to allow update)
+    const checkResp = await fetch(
+      `https://api.github.com/repos/${GH_PROXY_REPO}/contents/${path}?ref=${GH_PROXY_BRANCH}`,
+      { headers: { Authorization: `Bearer ${ghToken}`, Accept: 'application/vnd.github+json' } },
+    )
+    let sha: string | undefined
+    if (checkResp.ok) {
+      const existing = await checkResp.json() as { sha?: string }
+      sha = existing.sha
+    }
+
+    // Upload (create or update)
+    const body: Record<string, string> = {
+      message: `ig-proxy: ${filename}`,
+      content: base64,
+      branch: GH_PROXY_BRANCH,
+    }
+    if (sha) body.sha = sha
+
+    const uploadResp = await fetch(
+      `https://api.github.com/repos/${GH_PROXY_REPO}/contents/${path}`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${ghToken}`,
+          Accept: 'application/vnd.github+json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      },
+    )
+
+    if (!uploadResp.ok) {
+      const err = await uploadResp.text()
+      logger.warn({ path, status: uploadResp.status, err }, 'IG proxy: GitHub upload failed, using original URL')
+      return imageUrl
+    }
+
+    const rawUrl = `https://raw.githubusercontent.com/${GH_PROXY_REPO}/${GH_PROXY_BRANCH}/${path}`
+    logger.info({ imageUrl, rawUrl }, 'IG proxy: image proxied to GitHub CDN')
+    return rawUrl
+  } catch (err) {
+    logger.warn({ err, imageUrl }, 'IG proxy: error during proxy, falling back to original URL')
+    return imageUrl
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Meta Graph API client (Facebook Pages + Instagram Business)
@@ -112,10 +194,15 @@ export async function postInstagram(
   const accessToken = config.defaultPageToken
 
   try {
+    // Proxy WordPress-hosted images to GitHub CDN -- HostPapa WAF blocks Meta's crawler IPs
+    const resolvedImageUrl = await proxyImageForInstagram(imageUrl)
+
     // Step 1: Create media container
+    // media_type=IMAGE is required by Graph API v22.0 for image posts
     const containerParams = new URLSearchParams({
       caption: text,
-      image_url: imageUrl,
+      image_url: resolvedImageUrl,
+      media_type: 'IMAGE',
     })
 
     const containerResponse = await fetch(`${API_BASE}/${igUserId}/media`, {
