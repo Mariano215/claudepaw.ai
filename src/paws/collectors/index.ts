@@ -23,25 +23,6 @@
 import { logger } from '../../logger.js'
 import { competitiveLandscapeCollector } from './competitive-landscape.js'
 import { githubCommunityCollector } from './github-community.js'
-// Paw Broker collectors (15 total) — back the 17 broker paws defined in
-// src/paws/broker-paw-defs.ts. Two paws (re-tenant-screening-queue and
-// re-investments-log-nudge) intentionally have no collector and use a
-// Bash-driven OBSERVE phase instead.
-import { brokerAssessmentPullCollector } from './broker-assessment-pull.js'
-import { brokerCostSegCandidatesCollector } from './broker-cost-seg-candidates.js'
-import { brokerEquitySnapshotCollector } from './broker-equity-snapshot.js'
-import { brokerFatherBrokerInboxCollector } from './broker-father-broker-inbox.js'
-import { brokerListingsCollector } from './broker-listings.js'
-import { brokerLttaStatusCollector } from './broker-ltta-status.js'
-import { brokerMarketDeltasCollector } from './broker-market-deltas.js'
-import { brokerParticipationSnapshotCollector } from './broker-participation-snapshot.js'
-import { brokerPipelineSnapshotCollector } from './broker-pipeline-snapshot.js'
-import { brokerPolicyRollCollector } from './broker-policy-roll.js'
-import { brokerPortfolioRollupCollector } from './broker-portfolio-rollup.js'
-import { brokerStrBookingsSnapshotCollector } from './broker-str-bookings-snapshot.js'
-import { brokerStrPricingCollector } from './broker-str-pricing.js'
-import { brokerTaxClockCollector } from './broker-tax-clock.js'
-import { brokerVendorRollupCollector } from './broker-vendor-rollup.js'
 
 export interface CollectorContext {
   pawId: string
@@ -124,20 +105,3 @@ export async function runCollector(
 registerCollector('github-community', githubCommunityCollector)
 registerCollector('competitive-landscape', competitiveLandscapeCollector)
 
-// Paw Broker — 15 collectors. Names match the `observe_collector` strings
-// configured in src/paws/broker-paw-defs.ts.
-registerCollector('broker-assessment-pull', brokerAssessmentPullCollector)
-registerCollector('broker-cost-seg-candidates', brokerCostSegCandidatesCollector)
-registerCollector('broker-equity-snapshot', brokerEquitySnapshotCollector)
-registerCollector('broker-father-broker-inbox', brokerFatherBrokerInboxCollector)
-registerCollector('broker-listings', brokerListingsCollector)
-registerCollector('broker-ltta-status', brokerLttaStatusCollector)
-registerCollector('broker-market-deltas', brokerMarketDeltasCollector)
-registerCollector('broker-participation-snapshot', brokerParticipationSnapshotCollector)
-registerCollector('broker-pipeline-snapshot', brokerPipelineSnapshotCollector)
-registerCollector('broker-policy-roll', brokerPolicyRollCollector)
-registerCollector('broker-portfolio-rollup', brokerPortfolioRollupCollector)
-registerCollector('broker-str-bookings-snapshot', brokerStrBookingsSnapshotCollector)
-registerCollector('broker-str-pricing', brokerStrPricingCollector)
-registerCollector('broker-tax-clock', brokerTaxClockCollector)
-registerCollector('broker-vendor-rollup', brokerVendorRollupCollector)
