@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { CronExpressionParser } from 'cron-parser'
 import { logger } from './logger.js'
@@ -127,6 +127,155 @@ function ensureBotProjectLifecycleSchema(dbh: Database.Database): void {
   }
 }
 
+// Path to the canonical projects manifest. Loaded lazily by
+// seedCanonicalProjects() and cached after first read so we don't
+// re-parse JSON on every bot-DB open. Override via PROJECTS_SEED_PATH
+// env var for tests / alternate deployments.
+const PROJECTS_SEED_PATH =
+  process.env.PROJECTS_SEED_PATH ||
+  path.join(__dirname, '..', 'seeds', 'projects.json')
+
+interface CanonicalProjectSettings {
+  theme_id?: string
+  primary_color?: string | null
+  accent_color?: string | null
+  sidebar_color?: string | null
+}
+interface CanonicalProject {
+  id: string
+  slug: string
+  name: string
+  display_name: string
+  icon?: string | null
+  status?: 'active' | 'paused' | 'archived'
+  settings?: CanonicalProjectSettings
+}
+interface CanonicalProjectsManifest {
+  schemaVersion: number
+  projects: CanonicalProject[]
+}
+
+let canonicalProjectsCache: CanonicalProjectsManifest | null = null
+let canonicalProjectsSeeded = false
+
+function loadCanonicalProjectsManifest(): CanonicalProjectsManifest | null {
+  if (canonicalProjectsCache) return canonicalProjectsCache
+  if (!existsSync(PROJECTS_SEED_PATH)) {
+    logger.warn({ path: PROJECTS_SEED_PATH }, 'Canonical projects manifest not found, skipping seed')
+    return null
+  }
+  try {
+    const raw = readFileSync(PROJECTS_SEED_PATH, 'utf-8')
+    const parsed = JSON.parse(raw) as CanonicalProjectsManifest
+    if (parsed.schemaVersion !== 1) {
+      logger.warn(
+        { path: PROJECTS_SEED_PATH, version: parsed.schemaVersion },
+        'Canonical projects manifest has unexpected schemaVersion, skipping seed',
+      )
+      return null
+    }
+    canonicalProjectsCache = parsed
+    return parsed
+  } catch (err) {
+    logger.error({ err, path: PROJECTS_SEED_PATH }, 'Failed to load canonical projects manifest')
+    return null
+  }
+}
+
+/**
+ * Seed canonical projects defined in `server/seeds/projects.json` into
+ * the bot DB on first boot. Idempotent: uses INSERT OR IGNORE so existing
+ * rows are never overwritten and runtime mutations (cost caps, paused_at,
+ * status changes) survive boots.
+ *
+ * Why this exists: the bot DB on Hostinger is a synced copy of the local
+ * Mac bot DB. When a project is added locally (e.g. via the dashboard
+ * Projects page or createProjectInDb()), it lives only in the local DB
+ * until a manual SQL INSERT on Hostinger. This function makes the deploy
+ * pipeline declarative -- update the JSON, deploy, server boot ensures
+ * canonical rows exist regardless of what's already in the synced DB.
+ *
+ * Adding a new project: edit `server/seeds/projects.json`, add the row to
+ * the local bot DB via the dashboard, then deploy. Both must stay in sync.
+ *
+ * Skips silently if `projects` or `project_settings` tables don't yet
+ * exist (rare; would only happen on a fresh DB before the bot's own
+ * schema migration runs).
+ */
+function seedCanonicalProjects(dbh: Database.Database): void {
+  if (canonicalProjectsSeeded) return
+  const manifest = loadCanonicalProjectsManifest()
+  if (!manifest || !Array.isArray(manifest.projects) || manifest.projects.length === 0) return
+
+  // Sanity check: required tables must exist.
+  const projectsExists = dbh
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'")
+    .get()
+  const settingsExists = dbh
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='project_settings'")
+    .get()
+  if (!projectsExists) {
+    logger.warn('seedCanonicalProjects: projects table missing, deferring seed')
+    return
+  }
+
+  const insertProject = dbh.prepare(`
+    INSERT OR IGNORE INTO projects (
+      id, name, slug, display_name, icon, status, created_at, updated_at,
+      paused_at, archived_at, auto_archive_days
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  const insertSettings = settingsExists
+    ? dbh.prepare(`
+        INSERT OR IGNORE INTO project_settings (
+          project_id, theme_id, primary_color, accent_color, sidebar_color
+        ) VALUES (?, ?, ?, ?, ?)
+      `)
+    : null
+
+  let added = 0
+  let addedSettings = 0
+  const now = Date.now()
+  const tx = dbh.transaction(() => {
+    for (const proj of manifest.projects) {
+      const result = insertProject.run(
+        proj.id,
+        proj.name ?? proj.id,
+        proj.slug ?? proj.id,
+        proj.display_name,
+        proj.icon ?? null,
+        proj.status ?? 'active',
+        now,
+        now,
+        null,
+        null,
+        null,
+      )
+      if (result.changes > 0) added++
+      if (insertSettings) {
+        const s = proj.settings ?? {}
+        const settingsResult = insertSettings.run(
+          proj.id,
+          s.theme_id ?? null,
+          s.primary_color ?? null,
+          s.accent_color ?? null,
+          s.sidebar_color ?? null,
+        )
+        if (settingsResult.changes > 0) addedSettings++
+      }
+    }
+  })
+  tx()
+
+  canonicalProjectsSeeded = true
+  if (added > 0 || addedSettings > 0) {
+    logger.info(
+      { added, addedSettings, total: manifest.projects.length, path: PROJECTS_SEED_PATH },
+      'Seeded canonical projects from manifest',
+    )
+  }
+}
+
 /** Open the bot DB in read-only mode (for GET queries). Returns null if file not found. */
 export function getBotDb(): Database.Database | null {
   if (botDbReadonly) return botDbReadonly
@@ -158,6 +307,7 @@ export function getBotDbWrite(): Database.Database | null {
     botDbWrite.pragma('journal_mode = WAL')
     ensureBotProjectLifecycleSchema(botDbWrite)
     ensureActionItemsResearchLink(botDbWrite)
+    seedCanonicalProjects(botDbWrite)
     return botDbWrite
   } catch (err) {
     logger.error({ err }, 'Failed to open bot DB (write)')

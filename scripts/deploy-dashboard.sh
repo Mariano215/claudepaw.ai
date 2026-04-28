@@ -42,6 +42,14 @@ rsync -az --delete \
   "$DASHBOARD_HOST:$DASHBOARD_DIR/themes/"
 echo "✓ themes/"
 
+# Canonical projects manifest -- read on server boot by seedCanonicalProjects()
+# in server/src/db.ts. Source of truth for which projects exist in the bot DB
+# on Hostinger; idempotent INSERT OR IGNORE so runtime mutations survive.
+rsync -az --delete \
+  server/seeds/ \
+  "$DASHBOARD_HOST:$DASHBOARD_DIR/seeds/"
+echo "✓ seeds/"
+
 rsync -az --delete \
   server/integrations/ \
   "$DASHBOARD_HOST:$DASHBOARD_DIR/integrations/"

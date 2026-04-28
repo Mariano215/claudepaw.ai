@@ -1,0 +1,68 @@
+{
+  "$schema": "./projects.schema.json",
+  "schemaVersion": 1,
+  "description": "Canonical projects manifest. Source of truth for which projects must exist in any deployed bot DB. Loaded by seedCanonicalProjects() in server/src/db.ts on every server boot. Idempotent: rows are added with INSERT OR IGNORE, so existing rows are never overwritten and runtime mutations (cost caps, paused_at, etc.) survive boots. Adding a new project: add a block here AND insert the row in the local bot DB via the dashboard's Projects page or createProjectInDb(). Both must stay in sync. OSS variant: personal projects replaced with example-company scaffold.",
+  "projects": [
+    {
+      "id": "default",
+      "slug": "default",
+      "name": "default",
+      "display_name": "Personal Assistant",
+      "icon": "layers",
+      "status": "active",
+      "settings": {
+        "theme_id": "claudepaw",
+        "primary_color": "#f97316",
+        "accent_color": "#6366f1",
+        "sidebar_color": "#0e0e1a"
+      }
+    },
+    {
+      "id": "claudepaw",
+      "slug": "claudepaw",
+      "name": "claudepaw",
+      "display_name": "ClaudePaw Platform",
+      "icon": "code",
+      "status": "active",
+      "settings": {
+        "theme_id": "claudepaw",
+        "primary_color": "#f97316",
+        "accent_color": "#6366f1",
+        "sidebar_color": "#0e0e1a"
+      }
+    },
+    {
+      "id": "trader",
+      "slug": "trader",
+      "name": "trader",
+      "display_name": "Paw Trader",
+      "icon": "trending-up",
+      "status": "active",
+      "settings": {
+        "theme_id": "synthwave-nights"
+      }
+    },
+    {
+      "id": "broker",
+      "slug": "broker",
+      "name": "broker",
+      "display_name": "Paw Broker",
+      "icon": "home",
+      "status": "active",
+      "settings": {
+        "theme_id": "broker"
+      }
+    },
+    {
+      "id": "example-company",
+      "slug": "example-company",
+      "name": "example-company",
+      "display_name": "Example Company",
+      "icon": "building",
+      "status": "active",
+      "settings": {
+        "theme_id": "minimal"
+      }
+    }
+  ]
+}
