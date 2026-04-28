@@ -103,3 +103,4 @@ export async function runCollector(
 
 registerCollector('github-community', githubCommunityCollector)
 registerCollector('competitive-landscape', competitiveLandscapeCollector)
+
