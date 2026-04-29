@@ -54,9 +54,11 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-      'script-src': ["'self'", 'https://cdn.jsdelivr.net'],
-      'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      'script-src': ["'self'", 'https://cdn.jsdelivr.net', 'https://unpkg.com'],
+      'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com', 'https://unpkg.com'],
       'font-src': ["'self'", 'https://fonts.gstatic.com'],
+      'img-src': ["'self'", 'data:', 'https://unpkg.com', 'https://*.tile.openstreetmap.org'],
+      'connect-src': ["'self'", 'https://cdn.jsdelivr.net', 'https://unpkg.com'],
       'upgrade-insecure-requests': null, // Dashboard served over HTTP on Tailscale; mobile Safari blocks all resources when this is set
     }
   }

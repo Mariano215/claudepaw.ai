@@ -622,6 +622,12 @@ async function refreshWithProjectFilter() {
     if (pageId === 'page-webhooks') fetchWebhooks();
     if (pageId === 'page-plugins') fetchPlugins();
     if (pageId === 'page-graph') { fetchGraphData(); }
+    if (pageId === 'page-deals') initDealsPage();
+    if (pageId === 'page-portfolio') initPortfolioPage();
+    if (pageId === 'page-rehab') initRehabPage();
+    if (pageId === 'page-tax') initTaxPage();
+    if (pageId === 'page-participation') initParticipationPage();
+    if (pageId === 'page-investments') initInvestmentsPage();
     if (pageId === 'page-chat') {
       chatState.messages = [];
       chatState.pending = [];
@@ -1370,6 +1376,7 @@ async function fetchAgentStatuses() {
 
     // Rebuild all agent UI
     buildDashboardAgentCards();
+    initAgentCards();
     buildDetailAgentCards();
     buildAgentSelect();
     // Rebuild comms agent UI if on comms page
@@ -16746,7 +16753,7 @@ async function refreshSTRSection() {
   // tolerate empty data sets.
   var slug = _bpProjectSlug();
   var bookings = await fetchFromAPI('/api/v1/broker/str-bookings?project_id=' + encodeURIComponent(slug));
-  var participation = await fetchFromAPI('/api/v1/broker/participation-log?project_id=' + encodeURIComponent(slug));
+  var participation = await fetchFromAPI('/api/v1/broker/participation/log?project_id=' + encodeURIComponent(slug));
   if (bookings === null && participation === null) return;
   BROKER_PORTFOLIO_STATE.data.str = bookings || {};
   BROKER_PORTFOLIO_STATE.data.participation = participation || {};
@@ -17112,7 +17119,7 @@ async function refreshRehabActiveList() {
     var pid = _rehabProjectId();
     var data = await fetchFromAPI('/api/v1/broker/rehab-estimates?project_id=' + encodeURIComponent(pid));
     if (data === null) return;
-    _rehabRows = (data && data.rows) || (Array.isArray(data) ? data : []);
+    _rehabRows = (data && Array.isArray(data.rehab_estimates)) ? data.rehab_estimates : [];
     renderRehabActiveList(container);
   } catch (e) {
     container.textContent = 'Active rehab list unavailable: ' + String(e);
@@ -17266,7 +17273,7 @@ async function refreshContractorScoreboard() {
     var pid = _rehabProjectId();
     var data = await fetchFromAPI('/api/v1/broker/contractors?project_id=' + encodeURIComponent(pid));
     if (data === null) return;
-    _contractorRows = (data && data.rows) || (Array.isArray(data) ? data : []);
+    _contractorRows = (data && Array.isArray(data.contractors)) ? data.contractors : [];
     renderContractorScoreboard(container);
   } catch (e) {
     container.textContent = 'Contractor scoreboard unavailable: ' + String(e);
@@ -17396,8 +17403,8 @@ async function refreshImprovementsLedger() {
     var props = await fetchFromAPI('/api/v1/broker/properties?project_id=' + encodeURIComponent(pid));
     var imps = await fetchFromAPI('/api/v1/broker/improvements?project_id=' + encodeURIComponent(pid));
     if (props === null && imps === null) return;
-    _propertyRows = (props && props.rows) || (Array.isArray(props) ? props : []);
-    _improvementRows = (imps && imps.rows) || (Array.isArray(imps) ? imps : []);
+    _propertyRows = (props && Array.isArray(props.properties)) ? props.properties : [];
+    _improvementRows = (imps && Array.isArray(imps.improvements)) ? imps.improvements : [];
     renderImprovementsLedger(container);
   } catch (e) {
     container.textContent = 'Improvements ledger unavailable: ' + String(e);
@@ -18355,10 +18362,10 @@ async function refreshTaxClock() {
     // Studies are rendered in the depreciation card too (for the accelerated
     // YTD subtotal), so we fetch them here as well.  refreshCostSegTracker
     // re-fetches and renders the full table separately.
-    var studies = (typeof fetchFromAPI === 'function')
+    var studiesResp = (typeof fetchFromAPI === 'function')
       ? await fetchFromAPI('/api/v1/broker/cost-seg-studies?project_id=' + encodeURIComponent(slug))
-      : [];
-    if (!Array.isArray(studies)) studies = [];
+      : null;
+    var studies = (studiesResp && Array.isArray(studiesResp.cost_seg_studies)) ? studiesResp.cost_seg_studies : [];
 
     _taxRenderDepreciation(depCard, clock, studies);
     _taxRenderRepsGauge(repsCard, clock);
@@ -18379,15 +18386,15 @@ async function refreshCostSegTracker() {
   if (!trackerCard || !candCard) return;
 
   try {
-    var studies = (typeof fetchFromAPI === 'function')
+    var studiesResp = (typeof fetchFromAPI === 'function')
       ? await fetchFromAPI('/api/v1/broker/cost-seg-studies?project_id=' + encodeURIComponent(slug))
-      : [];
-    if (!Array.isArray(studies)) studies = [];
+      : null;
+    var studies = (studiesResp && Array.isArray(studiesResp.cost_seg_studies)) ? studiesResp.cost_seg_studies : [];
 
-    var properties = (typeof fetchFromAPI === 'function')
+    var propsResp = (typeof fetchFromAPI === 'function')
       ? await fetchFromAPI('/api/v1/broker/properties?project_id=' + encodeURIComponent(slug))
-      : [];
-    if (!Array.isArray(properties)) properties = [];
+      : null;
+    var properties = (propsResp && Array.isArray(propsResp.properties)) ? propsResp.properties : [];
 
     _taxRenderCostSeg(trackerCard, studies);
     _taxRenderCostSegCandidates(candCard, properties, studies);
@@ -18404,10 +18411,10 @@ async function refreshLTTAGrid() {
   if (!lttaCard) return;
 
   try {
-    var abatements = (typeof fetchFromAPI === 'function')
+    var abatementsResp = (typeof fetchFromAPI === 'function')
       ? await fetchFromAPI('/api/v1/broker/tax-abatements?project_id=' + encodeURIComponent(slug))
-      : [];
-    if (!Array.isArray(abatements)) abatements = [];
+      : null;
+    var abatements = (abatementsResp && Array.isArray(abatementsResp.tax_abatements)) ? abatementsResp.tax_abatements : [];
 
     _taxRenderLTTAGrid(lttaCard, abatements);
   } catch (e) {
@@ -18584,7 +18591,7 @@ async function refreshParticipationProperties() {
 
 async function refreshParticipationTotals() {
   try {
-    var data = await fetchFromAPI('/api/v1/broker/participation-log?project_id=' + encodeURIComponent(_ppSlug()));
+    var data = await fetchFromAPI('/api/v1/broker/participation/log?project_id=' + encodeURIComponent(_ppSlug()));
     if (data == null) return;
     _participationData = {
       entries: Array.isArray(data.entries) ? data.entries : [],
@@ -18713,7 +18720,7 @@ async function submitParticipationEntry() {
   if (evEl && evEl.value) body.evidence_url = evEl.value;
 
   try {
-    var resp = await fetchFromAPI('/api/v1/broker/participation-log', {
+    var resp = await fetchFromAPI('/api/v1/broker/participation/log', {
       method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
     });
     if (resp == null) return;
@@ -19187,7 +19194,7 @@ async function refreshInvestmentsTable() {
   }
   if (data === null) return;
 
-  _invRows = Array.isArray(data) ? data : (data && data.rows) || [];
+  _invRows = (data && Array.isArray(data.investments)) ? data.investments : [];
 
   renderInvestmentsSummary(summary);
   renderInvestmentsFreshness(freshness);
