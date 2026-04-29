@@ -1,0 +1,39 @@
+# .gitleaks.toml — gitleaks configuration for ClaudePaw
+# Docs: https://github.com/gitleaks/gitleaks?tab=readme-ov-file#configuration
+
+title = "ClaudePaw gitleaks config"
+
+[extend]
+# Use the default ruleset as a base
+useDefault = true
+
+[allowlist]
+description = "Global allowlists — test fixtures, mock tokens, and known safe patterns"
+
+# Vitest/test files with mock credentials
+paths = [
+  "src/social/meta.test.ts",
+  "src/social/scheduler.test.ts",
+  "src/integrations/google/client.test.ts",
+  # Guard layer tests — contain canary tokens and injection patterns as test fixtures
+  "src/guard/layers/l6-output-validate.test.ts",
+  # Telemetry tests — contain mock Slack tokens, AWS keys, and RSA key stubs
+  # to verify that summarizeToolInput() properly redacts sensitive values
+  "src/telemetry.test.ts",
+]
+
+# Regex patterns that are safe (mock/placeholder values)
+regexes = [
+  # Vitest mock config blocks
+  '''CREDENTIAL_ENCRYPTION_KEY.*randomBytes''',
+  # Placeholder tokens in test fixtures
+  '''page-token-xyz|app-123|secret-abc|mock-token|test-token|fake-token|dummy''',
+  # Canary tokens used in guard layer tests
+  '''CANARY-[a-z0-9]+''',
+  # Mock Slack token pattern used in telemetry tests
+  '''xoxb-12345-abcdef''',
+  # Mock AWS key used in telemetry redaction tests
+  '''abcdEFghIJklMN0123456789''',
+  # RSA key stub used in telemetry redaction tests (truncated, not a real key)
+  '''MIIEowIBAA\.\.\."""''',
+]
