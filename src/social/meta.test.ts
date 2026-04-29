@@ -71,19 +71,30 @@ describe('postFacebook', () => {
   })
 
   it('posts photo when mediaUrl is provided', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ id: 'page-001_photo-42' }),
-    }))
+    // postFacebook now preprocesses the image first (size check + optional resize/proxy).
+    // Call 0: preprocessImageForFacebook fetches the image to check its size.
+    // Call 1: the actual Facebook Graph API call.
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(1024), // 1 KB — well under 10 MB limit
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: 'page-001_photo-42' }),
+      }),
+    )
 
     const result = await postFacebook('A photo post', TEST_CONFIG, {
       mediaUrl: 'https://cdn.example.com/photo.jpg',
     })
 
     expect(result.success).toBe(true)
-    const [url, opts] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit]
+    // calls[1] is the Facebook API call (calls[0] was the image prefetch)
+    const [url, opts] = (fetch as ReturnType<typeof vi.fn>).mock.calls[1] as [string, RequestInit]
     expect(url).toContain('/page-001/photos')
     const body = new URLSearchParams(opts.body as string)
+    // Small image from non-blocked host — URL passes through unchanged
     expect(body.get('url')).toBe('https://cdn.example.com/photo.jpg')
   })
 

@@ -3,40 +3,30 @@ import { logger } from '../logger.js'
 import type { PublishResult } from './types.js'
 
 // ---------------------------------------------------------------------------
-// Instagram image proxy
+// GitHub CDN image proxy
 //
-// Some WordPress hosting providers (e.g. HostPapa) block Meta's crawler IPs
-// at the WAF level, causing error 9004/2207052 ("Media download has failed").
-// Proxy the image to GitHub raw CDN which Meta can always reach.
+// Used for both Instagram (HostPapa WAF blocks Meta crawlers) and Facebook
+// (image size enforcement — FB cap is 10 MB).
 // ---------------------------------------------------------------------------
 
 const GH_PROXY_REPO = 'YourGitHubUser/claudepaw.ai'
 const GH_PROXY_BRANCH = 'main'
 const GH_PROXY_PREFIX = 'assets/ig-proxy'
+const FB_MAX_BYTES = 10 * 1024 * 1024 // 10 MB
 
-async function proxyImageForInstagram(imageUrl: string): Promise<string> {
-  // Only proxy URLs that are likely hosted on blocked providers
-  if (!imageUrl.includes('wp-content/uploads')) return imageUrl
-
+/**
+ * Upload a buffer to the GitHub CDN proxy and return its raw URL.
+ * Returns null on failure so callers can fall back to the original URL.
+ */
+async function uploadToGithubCDN(buffer: Uint8Array, filename: string, label: string): Promise<string | null> {
   try {
-    // Fetch the image
-    const resp = await fetch(imageUrl)
-    if (!resp.ok) {
-      logger.warn({ imageUrl, status: resp.status }, 'IG proxy: failed to fetch source image, using original URL')
-      return imageUrl
-    }
-    const buffer = Buffer.from(await resp.arrayBuffer())
-    const base64 = buffer.toString('base64')
-
-    // Derive a stable filename from the URL
-    const filename = imageUrl.split('/').pop() ?? `ig-${Date.now()}.jpg`
-    const path = `${GH_PROXY_PREFIX}/${filename}`
-
-    // Get GitHub token from gh CLI
     const ghToken = execSync('gh auth token', { encoding: 'utf-8' }).trim()
     if (!ghToken) throw new Error('gh auth token returned empty')
 
-    // Check if file already exists (get its SHA to allow update)
+    const path = `${GH_PROXY_PREFIX}/${filename}`
+    const base64 = Buffer.from(buffer).toString('base64')
+
+    // Check for existing file SHA (required for update)
     const checkResp = await fetch(
       `https://api.github.com/repos/${GH_PROXY_REPO}/contents/${path}?ref=${GH_PROXY_BRANCH}`,
       { headers: { Authorization: `Bearer ${ghToken}`, Accept: 'application/vnd.github+json' } },
@@ -47,9 +37,8 @@ async function proxyImageForInstagram(imageUrl: string): Promise<string> {
       sha = existing.sha
     }
 
-    // Upload (create or update)
     const body: Record<string, string> = {
-      message: `ig-proxy: ${filename}`,
+      message: `${label}: ${filename}`,
       content: base64,
       branch: GH_PROXY_BRANCH,
     }
@@ -70,15 +59,90 @@ async function proxyImageForInstagram(imageUrl: string): Promise<string> {
 
     if (!uploadResp.ok) {
       const err = await uploadResp.text()
-      logger.warn({ path, status: uploadResp.status, err }, 'IG proxy: GitHub upload failed, using original URL')
-      return imageUrl
+      logger.warn({ path, status: uploadResp.status, err }, `${label}: GitHub upload failed`)
+      return null
     }
 
-    const rawUrl = `https://raw.githubusercontent.com/${GH_PROXY_REPO}/${GH_PROXY_BRANCH}/${path}`
+    return `https://raw.githubusercontent.com/${GH_PROXY_REPO}/${GH_PROXY_BRANCH}/${path}`
+  } catch (err) {
+    logger.warn({ err, filename }, `${label}: GitHub CDN upload threw`)
+    return null
+  }
+}
+
+async function proxyImageForInstagram(imageUrl: string): Promise<string> {
+  // Only proxy URLs that are likely hosted on blocked providers
+  if (!imageUrl.includes('wp-content/uploads')) return imageUrl
+
+  try {
+    const resp = await fetch(imageUrl)
+    if (!resp.ok) {
+      logger.warn({ imageUrl, status: resp.status }, 'IG proxy: failed to fetch source image, using original URL')
+      return imageUrl
+    }
+    const buffer = Buffer.from(await resp.arrayBuffer())
+    const filename = imageUrl.split('/').pop() ?? `ig-${Date.now()}.jpg`
+    const rawUrl = await uploadToGithubCDN(buffer, filename, 'ig-proxy')
+    if (!rawUrl) return imageUrl
     logger.info({ imageUrl, rawUrl }, 'IG proxy: image proxied to GitHub CDN')
     return rawUrl
   } catch (err) {
     logger.warn({ err, imageUrl }, 'IG proxy: error during proxy, falling back to original URL')
+    return imageUrl
+  }
+}
+
+/**
+ * Preprocess an image for Facebook:
+ * - Resize to fit within the 10 MB limit using sharp (JPEG, quality 85 → 70 → scale down)
+ * - Upload the result to GitHub CDN so Facebook can always fetch it
+ * Returns the original URL unchanged if the image is already small enough and not from a blocked host.
+ */
+async function preprocessImageForFacebook(imageUrl: string): Promise<string> {
+  try {
+    const resp = await fetch(imageUrl)
+    if (!resp.ok) {
+      logger.warn({ imageUrl, status: resp.status }, 'FB preprocess: failed to fetch image, using original URL')
+      return imageUrl
+    }
+    // Use Uint8Array → Buffer<ArrayBuffer> to satisfy sharp's strict type
+    const raw = Buffer.from(new Uint8Array(await resp.arrayBuffer()))
+
+    const needsResize = raw.byteLength > FB_MAX_BYTES
+    const needsProxy = imageUrl.includes('wp-content/uploads') // same WAF concern as IG
+
+    if (!needsResize && !needsProxy) return imageUrl
+
+    let finalBuffer: Uint8Array = raw
+    if (needsResize) {
+      const { default: sharp } = await import('sharp')
+      // Pass 1: JPEG at quality 85
+      finalBuffer = await sharp(raw).jpeg({ quality: 85 }).toBuffer()
+      // Pass 2: lower quality
+      if (finalBuffer.byteLength > FB_MAX_BYTES) {
+        finalBuffer = await sharp(raw).jpeg({ quality: 70 }).toBuffer()
+      }
+      // Pass 3: scale down to 2048px wide
+      if (finalBuffer.byteLength > FB_MAX_BYTES) {
+        finalBuffer = await sharp(raw)
+          .resize({ width: 2048, withoutEnlargement: true })
+          .jpeg({ quality: 70 })
+          .toBuffer()
+      }
+      logger.info(
+        { imageUrl, originalBytes: raw.byteLength, resizedBytes: finalBuffer.byteLength },
+        'FB preprocess: resized image to fit 10 MB limit',
+      )
+    }
+
+    const basename = imageUrl.split('/').pop()?.replace(/\.[^.]+$/, '') ?? `fb-${Date.now()}`
+    const filename = `fb-${basename}-${Date.now()}.jpg`
+    const cdnUrl = await uploadToGithubCDN(finalBuffer, filename, 'fb-proxy')
+    if (!cdnUrl) return imageUrl
+    logger.info({ imageUrl, cdnUrl }, 'FB preprocess: image uploaded to GitHub CDN')
+    return cdnUrl
+  } catch (err) {
+    logger.warn({ err, imageUrl }, 'FB preprocess: error, using original URL')
     return imageUrl
   }
 }
@@ -124,10 +188,11 @@ export async function postFacebook(
     const params = new URLSearchParams()
 
     if (opts?.mediaUrl) {
-      // Photo post
+      // Photo post — preprocess image (resize if > 10 MB, proxy if needed)
+      const resolvedMediaUrl = await preprocessImageForFacebook(opts.mediaUrl)
       endpoint = `${API_BASE}/${pageId}/photos`
       params.set('message', text)
-      params.set('url', opts.mediaUrl)
+      params.set('url', resolvedMediaUrl)
       if (opts.published === false) params.set('published', 'false')
     } else {
       // Text post
