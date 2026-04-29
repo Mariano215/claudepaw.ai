@@ -747,6 +747,24 @@ export function initDatabase(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_rentcast_log_called_at ON rentcast_call_log(called_at);
 
+    -- Historical market snapshots for MoM delta tracking.
+    -- broker-market-deltas collector writes one row per zip per day_bucket
+    -- (day_bucket = floor(ms / 86400000)). The paw reads prior-month rows
+    -- to compute price_pct_change / rent_pct_change.
+    CREATE TABLE IF NOT EXISTS markets_history (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      zip                  TEXT    NOT NULL,
+      observed_at          INTEGER NOT NULL,
+      day_bucket           INTEGER NOT NULL,
+      sale_median_price    INTEGER,
+      sale_total_listings  INTEGER,
+      rental_median_rent   INTEGER,
+      rental_total_listings INTEGER,
+      UNIQUE(zip, day_bucket)
+    );
+    CREATE INDEX IF NOT EXISTS idx_markets_history_zip_observed
+      ON markets_history(zip, observed_at DESC);
+
     CREATE TABLE IF NOT EXISTS chat_messages (
       id INTEGER PRIMARY KEY,
       chat_id TEXT NOT NULL,
