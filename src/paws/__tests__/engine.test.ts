@@ -90,7 +90,7 @@ describe('runPawCycle', () => {
     expect(cycle!.phase).toBe('decide')
     expect(cycle!.state.approval_requested).toBe(true)
     expect(cycle!.state.approval_granted).toBeNull()
-    expect(mockSend).toHaveBeenCalledWith('12345', expect.stringContaining('need your call'))
+    expect(mockSend).toHaveBeenCalledWith('12345', expect.stringContaining('need your call'), expect.any(String))
   })
 
   it('skips ACT/REPORT and sends nothing on a quiet cycle (no findings, no decisions)', async () => {
@@ -248,7 +248,7 @@ describe('runPawCycle', () => {
     const cycle = getCycle(db, cycleId)
     expect(cycle!.findings[0].is_new).toBe(true)
     expect(cycle!.phase).toBe('completed')
-    expect(mockSend).toHaveBeenCalledWith('12345', expect.stringContaining('Cycle complete'))
+    expect(mockSend).toHaveBeenCalledWith('12345', expect.stringContaining('Cycle complete'), expect.any(String))
   })
 
   it('does not request approval for repeated high-severity findings once dedupe marks them known', async () => {
@@ -331,7 +331,7 @@ describe('runPawCycle', () => {
     const cycle = getCycle(db, cycleId)
     expect(cycle!.phase).toBe('completed')
     expect(cycle!.state.approval_requested).toBe(false)
-    expect(mockSend).toHaveBeenCalledWith('12345', expect.stringContaining('Cycle complete'))
+    expect(mockSend).toHaveBeenCalledWith('12345', expect.stringContaining('Cycle complete'), expect.any(String))
   })
 
   it('records error if a phase fails', async () => {
