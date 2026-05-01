@@ -54,7 +54,7 @@ function sweepArchivedCredentials(): void {
 
 // ── Types ──────────────────────────────────────────────────────────────
 
-type Sender = (chatId: string, text: string) => Promise<void>
+type Sender = (chatId: string, text: string, projectId?: string) => Promise<void>
 
 interface ScheduledTask {
   id: string
@@ -447,7 +447,7 @@ async function executeDueTasks(send: Sender): Promise<void> {
             await triggerPaw(paw.id, agentRunner, send, storedSendApproval, storedPawSend)
           } catch (err) {
             logger.error({ err, pawId: paw.id }, 'Paw cycle failed')
-            await send(paw.config.chat_id, `Paw "${paw.name}" cycle failed: ${err instanceof Error ? err.message : String(err)}`).catch(() => {})
+            await send(paw.config.chat_id, `Paw "${paw.name}" cycle failed: ${err instanceof Error ? err.message : String(err)}`, paw.project_id).catch(() => {})
           } finally {
             runningPaws.delete(paw.id)
           }
