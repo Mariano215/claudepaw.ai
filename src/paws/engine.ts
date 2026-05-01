@@ -21,7 +21,7 @@ type AgentRunResult = {
 }
 
 type AgentRunner = (prompt: string) => Promise<AgentRunResult>
-type Sender = (chatId: string, text: string) => Promise<void>
+type Sender = (chatId: string, text: string, projectId?: string) => Promise<void>
 const FINDING_DEDUPE_HISTORY_LIMIT = 10
 const COMPETITIVE_WATCH_PAW_ID = 'cp-competitive-watch'
 
@@ -166,13 +166,14 @@ export async function runPawCycle(
       const card = buildApprovalCard(paw, projectName, cardFindings, Date.now())
 
       if (pawSend) {
-        await pawSend(paw.config.chat_id, card.text, card.keyboard)
+        await pawSend(paw.config.chat_id, card.text, card.keyboard, paw.project_id)
       } else if (sendApproval) {
-        await sendApproval(paw.config.chat_id, card.text, pawId)
+        await sendApproval(paw.config.chat_id, card.text, pawId, paw.project_id)
       } else {
         await send(
           paw.config.chat_id,
           card.text + `\n\nReply "approve ${pawId}" to continue or "skip ${pawId}" to skip.`,
+          paw.project_id,
         )
       }
 
@@ -251,7 +252,7 @@ export async function resumePawCycle(
     const projectName = getProjectName(paw.project_id)
     const meta = `paw: ${paw.id}  •  project: ${paw.project_id}  •  cron: ${paw.cron}`
     const header = `🛡 ${paw.name}\n${projectName}  •  ACT skipped\n${meta}\n\n`
-    await send(paw.config.chat_id, header + reportResult)
+    await send(paw.config.chat_id, header + reportResult, paw.project_id)
     return
   }
 
@@ -522,7 +523,7 @@ async function runActAndReport(
     const projectName = getProjectName(paw.project_id)
     const meta = `paw: ${paw.id}  •  project: ${paw.project_id}  •  cron: ${paw.cron}`
     const header = `🛡 ${paw.name}\n${projectName}  •  Cycle complete\n${meta}\n\n`
-    await send(paw.config.chat_id, header + reportResult)
+    await send(paw.config.chat_id, header + reportResult, paw.project_id)
   }
 }
 

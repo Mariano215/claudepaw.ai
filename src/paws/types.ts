@@ -79,7 +79,7 @@ export interface PawDecision {
  * Sends an approval request with inline action buttons (e.g. Telegram inline keyboard).
  * Falls back to plain text if the channel doesn't support buttons.
  */
-export type ApprovalSender = (chatId: string, text: string, pawId: string) => Promise<void>
+export type ApprovalSender = (chatId: string, text: string, pawId: string, projectId?: string) => Promise<void>
 
 /** Inline keyboard payload matching the grammy / Telegram Bot API shape. */
 export interface InlineKeyboardButton {
@@ -96,4 +96,4 @@ export interface InlineKeyboard {
  * When the underlying channel does not support keyboards, the implementation
  * silently ignores the third argument.
  */
-export type PawSender = (chatId: string, text: string, keyboard?: InlineKeyboard) => Promise<void>
+export type PawSender = (chatId: string, text: string, keyboard?: InlineKeyboard, projectId?: string) => Promise<void>

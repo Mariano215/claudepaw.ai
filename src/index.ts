@@ -379,35 +379,35 @@ async function main(): Promise<void> {
   await channelManager.startAll()
 
   // 8. Init scheduler -- wired to channel manager
-  const sendFn = async (chatId: string, text: string): Promise<void> => {
-    // Default to Telegram for backward compatibility with existing scheduled tasks
-    await channelManager.send('telegram', chatId, text)
+  const sendFn = async (chatId: string, text: string, projectId?: string): Promise<void> => {
+    // Route to project-specific bot if one is registered; fall back to main telegram channel.
+    const channelId = projectId ? channelManager.getChannelForProject(projectId) : 'telegram'
+    await channelManager.send(channelId, chatId, text)
   }
-  // Paw-scoped sender: carries an optional inline keyboard to Telegram.
-  const pawSendFn: import('./paws/types.js').PawSender = async (chatId, text, keyboard) => {
+  // Paw-scoped sender: carries an optional inline keyboard to the project's bot.
+  const pawSendFn: import('./paws/types.js').PawSender = async (chatId, text, keyboard, projectId) => {
+    const channelId = projectId ? channelManager.getChannelForProject(projectId) : 'telegram'
     if (keyboard) {
-      for (const ch of channelManager.getRunningChannels()) {
-        if (typeof (ch as any).sendWithKeyboard === 'function') {
-          try {
-            await (ch as any).sendWithKeyboard(chatId, text, keyboard)
-            return
-          } catch { /* try next channel */ }
-        }
+      const ch = channelManager.getChannel(channelId)
+      if (ch && typeof (ch as any).sendWithKeyboard === 'function') {
+        try {
+          await (ch as any).sendWithKeyboard(chatId, text, keyboard)
+          return
+        } catch { /* fall through to plain text */ }
       }
-      // Fallback: channel has no keyboard capability — send plain text.
     }
-    await channelManager.send('telegram', chatId, text)
+    await channelManager.send(channelId, chatId, text)
   }
 
   // Legacy approval sender kept for scheduled-task paths that still use it.
-  const sendApprovalFn = async (chatId: string, text: string, pawId: string): Promise<void> => {
+  const sendApprovalFn = async (chatId: string, text: string, pawId: string, projectId?: string): Promise<void> => {
     const keyboard = {
       inline_keyboard: [[
         { text: 'Approve', callback_data: `paw:approve:${pawId}` },
         { text: 'Skip', callback_data: `paw:skip:${pawId}` },
       ]],
     }
-    await pawSendFn(chatId, text, keyboard)
+    await pawSendFn(chatId, text, keyboard, projectId)
   }
 
   initScheduler(sendFn, sendApprovalFn, pawSendFn)
