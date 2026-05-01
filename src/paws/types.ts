@@ -36,6 +36,20 @@ export interface PawConfig {
    * Optional arguments passed to the collector at runtime (JSON-serialized).
    */
   observe_collector_args?: Record<string, unknown>
+  /**
+   * Optional named handler that runs AFTER the ACT LLM call.
+   * Handlers are deterministic TypeScript functions registered in
+   * `src/paws/handlers/index.ts`. They receive the cycle ID and the
+   * raw ACT phase text output, parse structured JSON from it, and
+   * perform the actual side-effects (DB inserts, notify.sh calls, emails).
+   *
+   * This solves the ACT-phase hallucination problem: agents running on
+   * non-claude_desktop providers have no real tool access, so telling them
+   * to run Bash/SQLite in ACT instructions produces plausible-sounding but
+   * fake output. Handlers move deterministic work to TypeScript where it
+   * actually executes.
+   */
+  post_act_handler?: string
 }
 
 export interface PawCycle {

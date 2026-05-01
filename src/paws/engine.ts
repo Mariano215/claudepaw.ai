@@ -5,6 +5,7 @@ import { buildApprovalCard, type ApprovalFinding } from './approval-card.js'
 import { getProjectName } from './project-name.js'
 import { getPaw, createCycle, updateCycle, getCycle, updatePawStatus, listCycles } from './db.js'
 import { runCollector } from './collectors/index.js'
+import { getHandler } from './handlers/index.js'
 import { guardChain } from '../guard/index.js'
 import { logger } from '../logger.js'
 import { extractAndLogFindings } from '../research.js'
@@ -490,6 +491,25 @@ async function runActAndReport(
   state.act_result = actResult
   const actionsTaken = [actResult]
   updateCycle(db, cycleId, { state, actions_taken: actionsTaken })
+
+  // Run post-ACT handler if configured.  Handlers do the deterministic work
+  // (DB inserts, notify.sh) that the agent cannot actually execute — agents
+  // running on non-claude_desktop providers have no real tool access and will
+  // hallucinate Bash/SQLite execution.  The ACT phase text is the handler's
+  // sole input; it must contain a structured JSON block the handler can parse.
+  if (paw.config.post_act_handler) {
+    const handler = getHandler(paw.config.post_act_handler)
+    if (handler) {
+      try {
+        await handler(cycleId, paw.id, paw.project_id, actResult)
+      } catch (err) {
+        logger.error(
+          { err, cycleId, handler: paw.config.post_act_handler },
+          '[paws] post_act_handler threw — continuing to REPORT phase',
+        )
+      }
+    }
+  }
 
   updateCycle(db, cycleId, { phase: 'report' })
 
