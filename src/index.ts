@@ -385,18 +385,25 @@ async function main(): Promise<void> {
     await channelManager.send(channelId, chatId, text)
   }
   // Paw-scoped sender: carries an optional inline keyboard to the project's bot.
+  const PAW_SEND_TIMEOUT_MS = 15_000 // 15 s — Telegram API should respond in < 2 s; anything longer is a hung bot token
   const pawSendFn: import('./paws/types.js').PawSender = async (chatId, text, keyboard, projectId) => {
     const channelId = projectId ? channelManager.getChannelForProject(projectId) : 'telegram'
     if (keyboard) {
       const ch = channelManager.getChannel(channelId)
       if (ch && typeof (ch as any).sendWithKeyboard === 'function') {
         try {
-          await (ch as any).sendWithKeyboard(chatId, text, keyboard)
+          const timeout = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('sendWithKeyboard timed out')), PAW_SEND_TIMEOUT_MS),
+          )
+          await Promise.race([(ch as any).sendWithKeyboard(chatId, text, keyboard), timeout])
           return
         } catch { /* fall through to plain text */ }
       }
     }
-    await channelManager.send(channelId, chatId, text)
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('channelManager.send timed out')), PAW_SEND_TIMEOUT_MS),
+    )
+    await Promise.race([channelManager.send(channelId, chatId, text), timeout])
   }
 
   // Legacy approval sender kept for scheduled-task paths that still use it.
