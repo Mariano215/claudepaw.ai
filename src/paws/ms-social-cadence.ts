@@ -21,7 +21,11 @@ export const msSocialCadencePhaseInstructions = {
     'Severity guide:\n' +
     '- overdue_approved > 0 or repeated failed rows = 4.\n' +
     '- 0 published in last 7 days and nothing queued in the next 72 hours = 3.\n' +
+    '- rows with status=published but published_at IS NULL = 2 (data integrity gap; can mask silent publish failures).\n' +
     '- queued but not yet due = 1 informational only.\n' +
+    'Finding quality gate (enforce strictly):\n' +
+    '- Recommended action must be a concrete executable step, not an investigation. Bad: "verify which column". Good: "Run: SELECT id, status FROM social_posts WHERE status=\'published\' AND published_at IS NULL LIMIT 10".\n' +
+    '- If the only honest recommended action is investigative and current impact is zero, suppress the finding. Do not emit severity 1 noise with no executable next step.\n' +
     'Only emit findings when there is a clear action or status change.\n' +
     'Hard cap: at most 2 findings total.\n' +
     'In each finding detail include: Target, Why it matters, Recommended action.\n' +
@@ -30,8 +34,8 @@ export const msSocialCadencePhaseInstructions = {
   act: 'No automated actions. Cadence alerts are informational.',
   report:
     'Format:\n' +
-    '- LinkedIn: published_last_7d [n], overdue approved [n], next scheduled [absolute UTC date or none]\n' +
-    '- X/Twitter: published_last_7d [n], overdue approved [n], next scheduled [absolute UTC date or none]\n' +
+    '- LinkedIn: published_last_7d [n], overdue approved [n], next scheduled [exact datetime from next_scheduled_utc, or "none" if NULL -- never write "see queue"]\n' +
+    '- X/Twitter: published_last_7d [n], overdue approved [n], next scheduled [exact datetime from next_scheduled_utc, or "none" if NULL -- never write "see queue"]\n' +
     '- Overall: HEALTHY / QUEUED / NEEDS ATTENTION / STUCK\n' +
     '- Action: one sentence only\n\n' +
     'If approved posts are scheduled later today or later this week and overdue approved is 0, say the queue is staged correctly.\n' +
