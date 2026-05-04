@@ -520,7 +520,7 @@ function defaultModelForProvider(provider: ExecutionProvider, tier: ModelTier): 
   }
   if (provider === 'openrouter_api') {
     if (tier === 'cheap') return 'anthropic/claude-haiku-4-5'
-    if (tier === 'premium') return 'anthropic/claude-sonnet-4-5'
+    if (tier === 'premium') return 'anthropic/claude-sonnet-4-6'
     return 'openai/gpt-4o'
   }
   if (provider === 'ollama') {

@@ -4,7 +4,7 @@ import { readEnvFile } from '../env.js'
 import type { ScoredArticle, CategoryId, TopicId, ExecutiveBrief } from './types.js'
 
 const env = readEnvFile()
-const BRIEF_MODEL = env.NEWSLETTER_BRIEF_MODEL || 'claude-sonnet-4-5'
+const BRIEF_MODEL = env.NEWSLETTER_BRIEF_MODEL || 'claude-sonnet-4-6'
 
 function getAnthropicKey(): string {
   // Read at call time so tests can override via process.env and the bot picks
