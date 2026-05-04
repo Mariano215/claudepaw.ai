@@ -12,6 +12,8 @@ description = "Global allowlists — test fixtures, mock tokens, and known safe 
 
 # Vitest/test files with mock credentials
 paths = [
+  # Config file itself — allowlist regexes trigger scanner on this file
+  ".gitleaks.toml",
   "src/social/meta.test.ts",
   "src/social/scheduler.test.ts",
   "src/integrations/google/client.test.ts",
