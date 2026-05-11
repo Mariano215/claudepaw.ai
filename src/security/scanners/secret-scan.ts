@@ -18,12 +18,26 @@ interface GitleaksLeak {
   Secret: string;
 }
 
-function runGitleaks(projectPath: string): Promise<GitleaksLeak[]> {
+async function buildGitleaksArgs(projectPath: string): Promise<string[]> {
+  const args = ['detect', '--source', projectPath, '--report-format', 'json', '--no-banner'];
+  const configPath = join(projectPath, '.gitleaks.toml');
+  try {
+    await access(configPath, constants.F_OK);
+    args.push('--config', configPath);
+  } catch {
+    // no project config — use gitleaks defaults
+  }
+  return args;
+}
+
+async function runGitleaks(projectPath: string): Promise<GitleaksLeak[]> {
+  const args = await buildGitleaksArgs(projectPath);
   return new Promise((resolve, reject) => {
     execFile(
       'gitleaks',
-      ['detect', '--source', projectPath, '--report-format', 'json', '--no-banner'],
-      { maxBuffer: 10 * 1024 * 1024, timeout: 120_000 },
+      args,
+      // cwd=projectPath so gitleaks resolves .gitleaks.toml and honours # gitleaks:allow
+      { maxBuffer: 10 * 1024 * 1024, timeout: 120_000, cwd: projectPath },
       (error, stdout, _stderr) => {
         // gitleaks exits with code 1 when leaks are found, 0 when clean
         if (error && error.code !== 1) {
