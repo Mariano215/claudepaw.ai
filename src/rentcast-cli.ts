@@ -23,12 +23,18 @@
 //   1 — invalid args / missing API key
 //   2 — upstream HTTP error (non-2xx, still logs to call_log)
 
+import { execFile } from 'node:child_process'
+import path from 'node:path'
 import { initDatabase, getDb, checkpointAndCloseDatabase } from './db.js'
 import { getCredential, initCredentialStore } from './credentials.js'
 
 // Cap is configurable via env but defaults to 45 (headroom under the
 // Developer tier's 50/month so on-demand analyzer calls don't tip us over).
 const MONTHLY_CAP = Number(process.env.RENTCAST_MONTHLY_CAP) || 45
+
+// Alert when usage crosses this fraction of the cap exactly once per month.
+// 0.8 of 45 = 36 calls. Disable by setting RENTCAST_ALERT_PCT=0.
+const ALERT_PCT = Number(process.env.RENTCAST_ALERT_PCT ?? 0.8)
 
 // Per-endpoint TTLs (ms). Listings change when an agent flips a status or
 // price; 24h is plenty for a weekly paw. Markets are slow-moving zip-level
@@ -105,6 +111,40 @@ function logCall(endpoint: string, query: string, statusCode: number, bytes: num
     .run(endpoint, query, Date.now(), statusCode, bytes)
 }
 
+// Fire a single Telegram alert when monthly usage first crosses the
+// configured threshold. Uses an INSERT OR IGNORE on (month_key, threshold)
+// so we never double-fire within the same calendar month. The shell-out
+// to notify.sh is fire-and-forget; failures here must never break the
+// CLI's primary contract (returning the Rentcast response).
+function maybeFireThresholdAlert(callsThisMonth: number): void {
+  if (!ALERT_PCT || ALERT_PCT <= 0) return
+  const threshold = Math.ceil(MONTHLY_CAP * ALERT_PCT)
+  if (callsThisMonth < threshold) return
+
+  const monthKey = new Date(firstOfMonthMs()).toISOString().slice(0, 7) // YYYY-MM
+  const result = getDb()
+    .prepare(
+      `INSERT OR IGNORE INTO rentcast_alerts (month_key, threshold, sent_at, calls_at_send)
+       VALUES (?, ?, ?, ?)`,
+    )
+    .run(monthKey, threshold, Date.now(), callsThisMonth)
+  if (result.changes === 0) return // already alerted this month at this threshold
+
+  const notifyScript = path.resolve(process.cwd(), 'scripts/notify.sh')
+  const remaining = Math.max(0, MONTHLY_CAP - callsThisMonth)
+  const msg = `Rentcast: ${callsThisMonth}/${MONTHLY_CAP} calls this month (>= ${threshold}, ${Math.round(ALERT_PCT * 100)}% cap). ${remaining} remaining before refusal.`
+  // Detach -- never block the CLI on an alert send.
+  try {
+    execFile('/bin/bash', [notifyScript, msg], { timeout: 10_000 }, () => {
+      /* swallow stdout/stderr/exit; the row is already written so we
+         won't retry, but a failed send is acceptable -- the budget gate
+         still protects us regardless of notification delivery. */
+    })
+  } catch {
+    /* notify is best-effort */
+  }
+}
+
 function buildQuery(params: Record<string, string | undefined>): string {
   // Stable key: sort by key so cache hits are deterministic regardless of arg order.
   const entries = Object.entries(params)
@@ -167,7 +207,9 @@ async function callRentcast(
   }
 
   setCache(cacheKey, body, ttlMs)
-  return { body, fromCache: false, callsThisMonth: callsThisMonth + 1 }
+  const newCount = callsThisMonth + 1
+  maybeFireThresholdAlert(newCount)
+  return { body, fromCache: false, callsThisMonth: newCount }
 }
 
 async function cmdListings(flags: Record<string, string>): Promise<void> {

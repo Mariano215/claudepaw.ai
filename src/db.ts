@@ -747,6 +747,19 @@ export function initDatabase(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_rentcast_log_called_at ON rentcast_call_log(called_at);
 
+    -- One-shot threshold alerts so the CLI can ping the operator on Telegram
+    -- when monthly usage crosses 80% (or any other configured threshold)
+    -- exactly once per calendar month. Composite PK gives us free
+    -- INSERT OR IGNORE de-dup -- the first crossing row wins; subsequent
+    -- calls in the same month at the same threshold are no-ops.
+    CREATE TABLE IF NOT EXISTS rentcast_alerts (
+      month_key      TEXT    NOT NULL,
+      threshold      INTEGER NOT NULL,
+      sent_at        INTEGER NOT NULL,
+      calls_at_send  INTEGER NOT NULL,
+      PRIMARY KEY (month_key, threshold)
+    );
+
     -- Historical market snapshots for MoM delta tracking.
     -- broker-market-deltas collector writes one row per zip per day_bucket
     -- (day_bucket = floor(ms / 86400000)). The paw reads prior-month rows
