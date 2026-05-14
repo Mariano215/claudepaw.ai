@@ -20,25 +20,26 @@ const paw = {
 } as unknown as Paw
 
 describe('buildApprovalCard', () => {
-  it('renders project header with emoji, name and finding count', () => {
+  it('renders paw name, project, finding count and body', () => {
     const findings: TestFinding[] = [
       { id: 'f1', title: 'NPM CVEs — example-app', detail: 'path-to-regexp DoS', severity: 4, target: '/tmp/example-app', auto_fixable: 1 },
     ]
     const card = buildApprovalCard(paw, 'ClaudePaw', findings, 1700000000000)
-    expect(card.text).toContain('🛡 Sentinel Security Patrol')
-    expect(card.text).toContain('ClaudePaw  •  1 finding')
+    expect(card.text).toContain('Sentinel Security Patrol')
+    expect(card.text).toContain('ClaudePaw')
+    expect(card.text).toContain('1 item need approval')
     expect(card.text).toContain('🔴 NPM CVEs — example-app')
     expect(card.text).toContain('path-to-regexp DoS')
   })
 
-  it('renders identifying metadata line so operators can trace the source', () => {
+  it('does not include meta/cron line or dashboard footer', () => {
     const findings: TestFinding[] = [
       { id: 'f1', title: 'a', detail: '', severity: 4, target: 't', auto_fixable: 0 },
     ]
     const card = buildApprovalCard(paw, 'ClaudePaw', findings, 1700000000000)
-    expect(card.text).toContain('paw: sentinel-patrol')
-    expect(card.text).toContain('project: default')
-    expect(card.text).toContain('cron: 0 */4 * * *')
+    expect(card.text).not.toContain('paw:')
+    expect(card.text).not.toContain('cron:')
+    expect(card.text).not.toContain('dashboard')
   })
 
   it('uses 🔴 for high/critical (severity >= 4), 🟡 for medium (3), ⚪ for low (<=2)', () => {
@@ -53,15 +54,7 @@ describe('buildApprovalCard', () => {
     expect(card.text).toContain('⚪ low')
   })
 
-  it('includes dashboard review note in footer text', () => {
-    const findings: TestFinding[] = [
-      { id: 'f1', title: 'a', detail: '', severity: 4, target: 't', auto_fixable: 0 },
-    ]
-    const card = buildApprovalCard(paw, 'ClaudePaw', findings, 1700000000000)
-    expect(card.text).toContain('Review full findings on the dashboard')
-  })
-
-  it('keyboard has exactly one row with Approve and Skip at cycle level', () => {
+  it('keyboard has exactly one row with Approve and Reject at cycle level', () => {
     const findings: TestFinding[] = [
       { id: 'f1', title: 'a', detail: '', severity: 4, target: 't', auto_fixable: 0 },
       { id: 'f2', title: 'b', detail: '', severity: 3, target: 't', auto_fixable: 1 },
@@ -69,7 +62,7 @@ describe('buildApprovalCard', () => {
     const card = buildApprovalCard(paw, 'ClaudePaw', findings, 1700000000000)
     expect(card.keyboard.inline_keyboard).toHaveLength(1)
     expect(card.keyboard.inline_keyboard[0][0]).toEqual({ text: 'Approve', callback_data: 'paw:approve:sentinel-patrol' })
-    expect(card.keyboard.inline_keyboard[0][1]).toEqual({ text: 'Skip', callback_data: 'paw:skip:sentinel-patrol' })
+    expect(card.keyboard.inline_keyboard[0][1]).toEqual({ text: 'Reject', callback_data: 'paw:skip:sentinel-patrol' })
   })
 
   it('keyboard stays minimal even with many findings', () => {
@@ -77,7 +70,7 @@ describe('buildApprovalCard', () => {
       id: `f${i}`, title: `t${i}`, detail: '', severity: 4, target: 't', auto_fixable: 0,
     }))
     const card = buildApprovalCard(paw, 'ClaudePaw', findings, 1700000000000)
-    // Always just one row: Approve / Skip
+    // Always just one row: Approve / Reject
     expect(card.keyboard.inline_keyboard).toHaveLength(1)
     // text body still lists all 10
     for (let i = 0; i < 10; i++) {

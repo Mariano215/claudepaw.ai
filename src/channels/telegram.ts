@@ -525,14 +525,14 @@ export class TelegramChannel implements Channel {
         // Answer the callback query (Telegram toast) — must not block approval processing
         // if the query is expired or already answered (e.g. stale button from a previous session)
         try {
-          await ctx.answerCallbackQuery({ text: approved ? 'Approving...' : 'Skipping...' })
+          await ctx.answerCallbackQuery({ text: approved ? 'Approving...' : 'Rejected.' })
         } catch { /* query may be expired or already answered; proceed anyway */ }
 
         const chatId = String(ctx.chat?.id ?? ctx.callbackQuery.message?.chat?.id ?? '')
         try {
           const { processPawApproval } = await import('../paws/index.js')
           await processPawApproval(pawId, approved, this.send.bind(this))
-          const label = approved ? 'Approved. Running ACT phase...' : 'Skipped. ACT phase will not run.'
+          const label = approved ? 'Approved. Running ACT phase...' : 'Rejected. ACT phase will not run.'
           try {
             await ctx.editMessageText(label)
           } catch {

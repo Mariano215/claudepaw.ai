@@ -25,9 +25,7 @@ function severityEmoji(sev: number): string {
  * Build the approval card: structured text body + inline keyboard.
  * Pure formatter — no I/O, no side effects, safe to unit-test.
  *
- * Keyboard is intentionally minimal: Approve / Skip at the cycle level.
- * Per-finding actions (fix, dismiss) were removed — review findings on
- * the dashboard SOPs page instead.
+ * Keyboard: Approve (run ACT) / Reject (skip this cycle).
  */
 export function buildApprovalCard(
   paw: Paw,
@@ -35,19 +33,17 @@ export function buildApprovalCard(
   findings: ApprovalFinding[],
   _cycleStartedAtMs: number,
 ): { text: string; keyboard: InlineKeyboard } {
-  const findingWord = findings.length === 1 ? 'finding' : 'findings'
-  const header = `🛡 ${paw.name}\n${projectName}  •  ${findings.length} ${findingWord} need your call`
-  const meta = `paw: ${paw.id}  •  project: ${paw.project_id}  •  cron: ${paw.cron}`
+  const findingWord = findings.length === 1 ? 'item' : 'items'
+  const header = `${paw.name}  (${projectName})\n${findings.length} ${findingWord} need approval before ACT runs`
   const body = findings
     .map(f => `${severityEmoji(f.severity)} ${f.title}\n${f.detail}`)
     .join('\n\n')
-  const footer = 'Review full findings on the dashboard before approving.'
-  const text = `${header}\n${meta}\n\n${body}\n\n${footer}`
+  const text = `${header}\n\n${body}`
 
   const keyboard: InlineKeyboard = {
     inline_keyboard: [[
       { text: 'Approve', callback_data: `paw:approve:${paw.id}` },
-      { text: 'Skip', callback_data: `paw:skip:${paw.id}` },
+      { text: 'Reject', callback_data: `paw:skip:${paw.id}` },
     ]],
   }
 

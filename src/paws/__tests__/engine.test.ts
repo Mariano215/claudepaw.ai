@@ -90,7 +90,7 @@ describe('runPawCycle', () => {
     expect(cycle!.phase).toBe('decide')
     expect(cycle!.state.approval_requested).toBe(true)
     expect(cycle!.state.approval_granted).toBeNull()
-    expect(mockSend).toHaveBeenCalledWith('12345', expect.stringContaining('need your call'), expect.any(String))
+    expect(mockSend).toHaveBeenCalledWith('12345', expect.stringContaining('need approval'), expect.any(String))
   })
 
   it('skips ACT/REPORT and sends nothing on a quiet cycle (no findings, no decisions)', async () => {
@@ -436,9 +436,9 @@ describe('runPawCycle', () => {
     expect(pawSend).toHaveBeenCalledTimes(1)
     const [chatId, text, keyboard] = pawSend.mock.calls[0]
     expect(chatId).toBe('12345')
-    expect(text).toContain('🛡 Sentinel Security Patrol')
-    expect(text).toContain('ClaudePaw  •  1 finding')
-    // Simplified keyboard: one row with Approve / Skip at cycle level
+    expect(text).toContain('Sentinel Security Patrol')
+    expect(text).toContain('1 item need approval')
+    // Simplified keyboard: one row with Approve / Reject at cycle level
     expect(keyboard.inline_keyboard).toHaveLength(1)
     expect(keyboard.inline_keyboard[0][0].callback_data).toBe('paw:approve:sentinel-patrol')
     expect(keyboard.inline_keyboard[0][1].callback_data).toBe('paw:skip:sentinel-patrol')
