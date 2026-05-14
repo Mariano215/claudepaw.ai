@@ -160,7 +160,7 @@ describe('full cycle integration', () => {
     expect(cycle!.completed_at).toBeNull()
 
     // Verify approval message was sent via Telegram
-    expect(mockSend).toHaveBeenCalledWith('123456789', expect.stringContaining('need your call'), expect.any(String))
+    expect(mockSend).toHaveBeenCalledWith('123456789', expect.stringContaining('need approval'), expect.any(String))
     expect(mockSend).toHaveBeenCalledWith('123456789', expect.stringContaining('Admin panel exposed'), expect.any(String))
 
     // Now simulate user approving
