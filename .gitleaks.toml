@@ -32,8 +32,8 @@ regexes = [
   '''page-token-xyz|app-123|secret-abc|mock-token|test-token|fake-token|dummy''',
   # Canary tokens used in guard layer tests
   '''CANARY-[a-z0-9]+''',
-  # Mock Slack token pattern used in telemetry tests
-  '''xoxb-12345-abcdef''',
+  # Mock Slack token pattern used in telemetry tests (regex form to avoid scanner self-match)
+  '''xoxb-[0-9]+-[a-f]+(-[a-f]+)?''',
   # Mock AWS key used in telemetry redaction tests
   '''abcdEFghIJklMN0123456789''',
   # RSA key stub used in telemetry redaction tests (truncated, not a real key)
