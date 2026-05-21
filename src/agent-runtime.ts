@@ -155,6 +155,66 @@ function isModelCompatibleWithProvider(provider: ExecutionProvider, model: strin
   return true
 }
 
+/**
+ * Providers whose usage counts against Anthropic's Agent SDK Credit Pool
+ * (the $20/$100/$200 metered bucket introduced June 15 2026 for programmatic
+ * Claude usage). Used by the pool-level cost gate to decide what to aggregate.
+ *
+ * - claude_desktop: SDK spawns `claude -p` / Agent SDK → counted.
+ * - anthropic_api : direct Anthropic API → counted.
+ * - codex_local   : NOT counted (OpenAI Codex CLI, separate billing).
+ * - openai_api / openrouter_api / ollama / lm_studio: NOT counted.
+ */
+export function countsAgainstAgentSdkPool(provider: ExecutionProvider | null | undefined): boolean {
+  return provider === 'claude_desktop' || provider === 'anthropic_api'
+}
+
+/**
+ * Whitelist of Anthropic models allowed on pool-counting providers post-June-15.
+ * Family substrings — any model whose normalized id contains one of these is OK.
+ * Anything else on a pool-counting provider is rejected (in particular Opus,
+ * but also any unknown future variant we haven't priced/audited).
+ *
+ * To extend: add the family substring AND a row in src/cost/pricing.ts.
+ */
+const ANTHROPIC_ALLOWED_FAMILIES = ['claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-haiku-4-5'] as const
+
+/** Returns true iff the model is allowed on a pool-counting Anthropic provider. */
+function isAnthropicModelAllowed(model: string | null | undefined): boolean {
+  if (!model?.trim()) return true // null/unspecified → adapter picks default
+  const normalized = model.trim().toLowerCase().replace(/^anthropic\//, '')
+  if (/opus/.test(normalized)) return false
+  return ANTHROPIC_ALLOWED_FAMILIES.some((fam) => normalized.includes(fam))
+}
+
+/**
+ * Throws if the resolved settings would attempt to invoke a non-allowed Anthropic
+ * model on a provider that honors explicit model selection. Called from
+ * resolveExecutionSettings as the single chokepoint — agent frontmatter, project
+ * settings, runtime overrides all funnel through here.
+ *
+ * Only enforced on `anthropic_api` (which passes our model id straight to
+ * Anthropic). `claude_desktop` is also pool-counting but Anthropic Desktop
+ * picks the model server-side and ignores the field we pass, so a stray model
+ * id there is harmless — historical agent configs pair it with cross-provider
+ * fallback models that get used by other adapters, not by claude_desktop.
+ */
+function enforceAnthropicModelWhitelist(resolved: ResolvedExecutionSettings): void {
+  const pairs: Array<{ provider: ExecutionProvider | null; model: string | null; slot: string }> = [
+    { provider: resolved.provider, model: resolved.modelPrimary, slot: 'primary' },
+    { provider: resolved.secondaryProvider, model: resolved.modelSecondary, slot: 'secondary' },
+    { provider: resolved.fallbackProvider, model: resolved.modelFallback, slot: 'fallback' },
+  ]
+  for (const p of pairs) {
+    if (p.provider !== 'anthropic_api') continue
+    if (isAnthropicModelAllowed(p.model)) continue
+    throw new Error(
+      `agent-runtime: ${p.slot} model "${p.model}" is not allowed on Anthropic provider "${p.provider}". `
+      + `Allowed families: ${ANTHROPIC_ALLOWED_FAMILIES.join(', ')}. Opus is banned per the $200 Agent SDK Pool budget.`,
+    )
+  }
+}
+
 function parseFrontmatter(raw: string): Record<string, string | string[]> {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/)
   if (!match) return {}
@@ -287,6 +347,11 @@ export function resolveExecutionSettings(context?: AgentRuntimeContext): Resolve
 
   if (!resolved.modelPrimary && resolved.model) resolved.modelPrimary = resolved.model
   resolved.model = resolved.modelPrimary
+
+  // SINGLE CHOKEPOINT: ban Opus + enforce Sonnet/Haiku-only on pool-counting
+  // providers. Catches every path — project settings, agent frontmatter, runtime
+  // overrides, dashboard mutations — because everything funnels through here.
+  enforceAnthropicModelWhitelist(resolved)
 
   return resolved
 }

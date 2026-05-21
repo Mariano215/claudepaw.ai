@@ -82,7 +82,21 @@ export async function runAgent(
     }
 
     let capOverride: 'ollama' | null = null
-    const { getCostGateStatus } = await import('./cost/cost-gate.js')
+
+    // POOL GATE — account-wide Anthropic Agent SDK Credit Pool ($200/mo Max 20x,
+    // metered post-June-15 2026). Checked before the per-project gate so an
+    // exhausted account never leaks spend regardless of which project owns the
+    // call. See plan: ~/.claude/plans/sparkling-questing-wadler.md.
+    const { getPoolGateStatus, getCostGateStatus } = await import('./cost/cost-gate.js')
+    const pool = await getPoolGateStatus()
+    if (pool.action === 'refuse') {
+      const msg = `Anthropic Agent SDK Pool hard-stop reached: $${pool.spend_usd.toFixed(2)} of $${pool.cap_usd} (${pool.percent_of_pool.toFixed(0)}%). All Anthropic-backed runs refused. Pool resets on the 1st. Override via AGENT_SDK_POOL_HARDSTOP_PCT or raise the cap to continue.`
+      return buildRefusalResult(msg, `agent SDK pool exceeded at ${pool.percent_of_pool.toFixed(0)}%`, startMs)
+    }
+    if (pool.action === 'override_to_ollama') capOverride = 'ollama'
+
+    // PER-PROJECT GATE — unchanged. Layered on top of the pool gate so a single
+    // project can still be capped tighter than the pool allows.
     const status = await getCostGateStatus(gateProjectId)
     if (status.action === 'refuse') {
       const scope = status.triggering_cap === 'daily' ? 'Daily' : 'Monthly'

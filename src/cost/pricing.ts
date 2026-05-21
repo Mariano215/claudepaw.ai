@@ -33,13 +33,14 @@ interface ModelPrice {
 // Canonical prices. Prefer exact match; otherwise fall back to a "family"
 // match on substring (e.g. "anthropic/claude-sonnet-4-5" maps to "claude-sonnet-4").
 const PRICES: Record<string, ModelPrice> = {
-  // Anthropic (via API or Claude Desktop SDK, same economics)
+  // Anthropic (via API or Claude Desktop SDK, same economics).
+  // Allowed Anthropic-backed models post-June-15 2026: Sonnet 4.6 + Haiku 4.5.
+  // Opus is banned (price too high to fit $200 Agent SDK pool).
+  // Sonnet 4 / Opus 4 retired June 15 2026; legacy 4-5 kept for pricing of
+  // historical cost rows only — runtime resolution rejects non-allowed models.
   'claude-sonnet-4-6':  { inputUsdPer1M: 3.00,  outputUsdPer1M: 15.00, cacheReadUsdPer1M: 0.30, cacheWriteUsdPer1M: 3.75 },
   'claude-sonnet-4-5':  { inputUsdPer1M: 3.00,  outputUsdPer1M: 15.00, cacheReadUsdPer1M: 0.30, cacheWriteUsdPer1M: 3.75 },
-  'claude-sonnet-4':    { inputUsdPer1M: 3.00,  outputUsdPer1M: 15.00 },
   'claude-haiku-4-5':   { inputUsdPer1M: 0.80,  outputUsdPer1M: 4.00 },
-  'claude-haiku-4':     { inputUsdPer1M: 0.80,  outputUsdPer1M: 4.00 },
-  'claude-opus-4':      { inputUsdPer1M: 15.00, outputUsdPer1M: 75.00 },
   // OpenAI
   'gpt-5.4':            { inputUsdPer1M: 5.00,  outputUsdPer1M: 20.00 },
   'gpt-5.2-codex':      { inputUsdPer1M: 3.00,  outputUsdPer1M: 12.00 },

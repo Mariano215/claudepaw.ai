@@ -140,6 +140,59 @@ async function fetchCostGate(projectId: string): Promise<CostGateResponse | null
   }
 }
 
+/**
+ * Anthropic Agent SDK Credit Pool snapshot for the digest. Aggregates spend
+ * across all projects in the current month where executed_provider counts
+ * against the pool. Thresholds match server/src/cost-gate.ts.
+ */
+function gatherAgentSdkPool(telemetry: InstanceType<typeof Database>): {
+  spend_usd: number
+  cap_usd: number
+  percent_of_pool: number
+  projected_eom_usd: number
+  action: 'allow' | 'override_to_ollama' | 'refuse'
+  override_threshold_pct: number
+  hardstop_threshold_pct: number
+} | null {
+  try {
+    const cap = Number(process.env.AGENT_SDK_POOL_CAP_USD ?? 200)
+    const overridePct = Number(process.env.AGENT_SDK_POOL_OVERRIDE_PCT ?? 0.80)
+    const hardstopPct = Number(process.env.AGENT_SDK_POOL_HARDSTOP_PCT ?? 0.95)
+    const ms = monthStartMs()
+    const row = telemetry.prepare(
+      `SELECT COALESCE(SUM(total_cost_usd), 0) AS total
+         FROM agent_events
+        WHERE received_at >= ?
+          AND executed_provider IN ('claude_desktop', 'anthropic_api')`,
+    ).get(ms) as { total: number }
+    const spend = row.total ?? 0
+    const percent = cap > 0 ? Math.min((spend / cap) * 100, 10000) : 0
+    const now = Date.now()
+    const monthEnd = (() => {
+      const d = new Date()
+      d.setMonth(d.getMonth() + 1, 1)
+      d.setHours(0, 0, 0, 0)
+      return d.getTime()
+    })()
+    const fraction = Math.max((now - ms) / (monthEnd - ms), 1 / 1000)
+    const projected = Math.max(spend, spend / fraction)
+    let action: 'allow' | 'override_to_ollama' | 'refuse' = 'allow'
+    if (percent >= hardstopPct * 100) action = 'refuse'
+    else if (percent >= overridePct * 100) action = 'override_to_ollama'
+    return {
+      spend_usd: Math.round(spend * 100) / 100,
+      cap_usd: cap,
+      percent_of_pool: Math.round(percent * 10) / 10,
+      projected_eom_usd: Math.round(projected * 100) / 100,
+      action,
+      override_threshold_pct: overridePct * 100,
+      hardstop_threshold_pct: hardstopPct * 100,
+    }
+  } catch {
+    return null
+  }
+}
+
 function gatherCost(telemetry: InstanceType<typeof Database>): {
   today_usd: number
   yesterday_usd: number
@@ -463,6 +516,7 @@ async function gatherReportData(): Promise<ReportData> {
     const tasks = gatherScheduledTasks(core)
     const events = gatherAgentEvents(telemetry, PERIOD_HOURS)
     const remediations = gatherRemediations(core)
+    const agentSdkPool = gatherAgentSdkPool(telemetry)
 
     // Pick the largest monthly cap across projects as the headline MTD cap.
     const headlineCap = perProject.reduce<number | null>((max, p) => {
@@ -485,6 +539,7 @@ async function gatherReportData(): Promise<ReportData> {
         mtd_cap: headlineCap,
         per_project: perProject,
       },
+      agent_sdk_pool: agentSdkPool,
       kill_switch: killSwitch,
       paws,
       scheduled_tasks: tasks,

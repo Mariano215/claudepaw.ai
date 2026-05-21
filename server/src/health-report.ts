@@ -13,6 +13,8 @@
 import type Database from 'better-sqlite3'
 import { getDb, getBotDb, getTelemetryDb } from './db.js'
 import { getKillSwitch } from './system-state.js'
+import { computePoolGateStatus } from './cost-gate.js'
+import { logger } from './logger.js'
 
 // -----------------------------------------------------------------------------
 // Contract -- mirrors src/reports/types.ts on the bot side.
@@ -87,6 +89,20 @@ export interface ReportData {
     mtd_cap: number | null
     per_project: ProjectCost[]
   }
+  /**
+   * Anthropic Agent SDK Credit Pool — account-wide monthly budget metered by
+   * Anthropic starting June 15 2026. Null when the pool gate is unavailable
+   * (e.g. telemetry DB missing). See server/src/cost-gate.ts.
+   */
+  agent_sdk_pool: {
+    spend_usd: number
+    cap_usd: number
+    percent_of_pool: number
+    projected_eom_usd: number
+    action: 'allow' | 'override_to_ollama' | 'refuse'
+    override_threshold_pct: number
+    hardstop_threshold_pct: number
+  } | null
   kill_switch: KillSwitchState
   paws: {
     total: number
@@ -685,6 +701,25 @@ export function buildHealthReport(periodHours: number = 24): ReportData {
     return max === null ? p.cap_monthly : Math.max(max, p.cap_monthly)
   }, null)
 
+  // Pool gate (account-wide Anthropic Agent SDK Credit Pool, post-June-15 2026).
+  // Wrapped in try/catch so a pool-gate failure never breaks the entire usage
+  // page — degrades to `agent_sdk_pool: null` and the dashboard hides the card.
+  let agentSdkPool: ReportData['agent_sdk_pool'] = null
+  try {
+    const pool = computePoolGateStatus()
+    agentSdkPool = {
+      spend_usd: pool.spend_usd,
+      cap_usd: pool.cap_usd,
+      percent_of_pool: pool.percent_of_pool,
+      projected_eom_usd: pool.projected_eom_usd,
+      action: pool.action,
+      override_threshold_pct: pool.override_threshold_pct,
+      hardstop_threshold_pct: pool.hardstop_threshold_pct,
+    }
+  } catch (err) {
+    logger.warn({ err }, 'buildHealthReport: pool gate computation failed, omitting from report')
+  }
+
   const base = {
     generated_at: Date.now(),
     period: {
@@ -700,6 +735,7 @@ export function buildHealthReport(periodHours: number = 24): ReportData {
       mtd_cap: headlineCap,
       per_project: perProject,
     },
+    agent_sdk_pool: agentSdkPool,
     kill_switch: killSwitch,
     paws,
     scheduled_tasks: tasks,

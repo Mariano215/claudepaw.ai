@@ -120,6 +120,20 @@ describe('cost-gate flow integration', () => {
           json: async () => ({ active: true, reason: 'spike in billing', set_at: Date.now() }),
         }
       }
+      if (u.endsWith('/api/v1/cost-gate/pool')) {
+        return {
+          ok: true,
+          json: async () => ({
+            action: 'allow',
+            spend_usd: 0,
+            cap_usd: 200,
+            percent_of_pool: 0,
+            override_threshold_pct: 80,
+            hardstop_threshold_pct: 95,
+            projected_eom_usd: 0,
+          }),
+        }
+      }
       if (u.includes('/api/v1/cost-gate/')) {
         return {
           ok: true,
@@ -144,13 +158,27 @@ describe('cost-gate flow integration', () => {
   })
 
   it('Test B: monthly cost cap exceeded -- runAgent refuses with "cost cap"', async () => {
-    // Stub fetch: kill-switch returns inactive; cost-gate returns refuse (cap hit)
+    // Stub fetch: kill-switch returns inactive; pool gate allows; project gate refuses
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const u = String(url)
       if (u.includes('/api/v1/system-state/kill-switch')) {
         return {
           ok: true,
           json: async () => ({ active: false }),
+        }
+      }
+      if (u.endsWith('/api/v1/cost-gate/pool')) {
+        return {
+          ok: true,
+          json: async () => ({
+            action: 'allow',
+            spend_usd: 0,
+            cap_usd: 200,
+            percent_of_pool: 0,
+            override_threshold_pct: 80,
+            hardstop_threshold_pct: 95,
+            projected_eom_usd: 0,
+          }),
         }
       }
       if (u.includes('/api/v1/cost-gate/')) {

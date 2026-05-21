@@ -14331,6 +14331,7 @@ function renderUsagePage(data) {
   host.innerHTML = [
     usageKillSwitch(data),
     usageStatusBanner(data),
+    usageAgentSdkPoolCard(data),
     usageCostCard(data),
     usagePawsCard(data),
     usageTasksCard(data),
@@ -14443,6 +14444,59 @@ function usageKillSwitch(data) {
         ${data.kill_switch.reason ? 'Reason: ' + _usageEsc(data.kill_switch.reason) : ''}
         ${data.kill_switch.set_at ? ' &nbsp;•&nbsp; Tripped ' + _usageEsc(_usageTs(data.kill_switch.set_at)) : ''}
         ${data.kill_switch.set_by ? ' &nbsp;•&nbsp; by ' + _usageEsc(data.kill_switch.set_by) : ''}
+      </div>
+    </div>`;
+}
+
+// Agent SDK Credit Pool widget (post-June-15 2026). Account-wide $200/mo
+// Anthropic budget. Hides cleanly when data.agent_sdk_pool is null (pool gate
+// failed or telemetry DB unavailable).
+function usageAgentSdkPoolCard(data) {
+  const p = data.agent_sdk_pool;
+  if (!p) return '';
+  const pct = Math.max(0, Math.min(100, p.percent_of_pool));
+  const overrideAt = p.override_threshold_pct;
+  const stopAt = p.hardstop_threshold_pct;
+  const barColor =
+    p.action === 'refuse' ? 'var(--red,#ef4444)' :
+    p.action === 'override_to_ollama' ? 'var(--amber,#eab308)' :
+    'var(--green,#22c55e)';
+  const actionLabel =
+    p.action === 'refuse' ? 'HARD STOP — Anthropic runs refused' :
+    p.action === 'override_to_ollama' ? 'OVERRIDE — All Anthropic runs forced to Ollama' :
+    'OK — Anthropic runs allowed';
+  const actionColor =
+    p.action === 'refuse' ? 'var(--red,#ef4444)' :
+    p.action === 'override_to_ollama' ? 'var(--amber,#eab308)' :
+    'var(--text-muted)';
+  const projOverCap = p.projected_eom_usd > p.cap_usd;
+  return `
+    <div class="usage-card">
+      <div class="usage-card__head">Anthropic Agent SDK Pool</div>
+      <div class="usage-kpi-row">
+        <div class="usage-kpi">
+          <div class="usage-kpi__label">Month spend</div>
+          <div class="usage-kpi__value">${_usageMoney(p.spend_usd)}</div>
+          <div class="usage-kpi__delta">of ${_usageMoney(p.cap_usd)} cap</div>
+        </div>
+        <div class="usage-kpi">
+          <div class="usage-kpi__label">Pool used</div>
+          <div class="usage-kpi__value">${pct.toFixed(1)}%</div>
+          <div class="usage-kpi__delta">override at ${overrideAt}% / stop at ${stopAt}%</div>
+        </div>
+        <div class="usage-kpi">
+          <div class="usage-kpi__label">Projected EOM</div>
+          <div class="usage-kpi__value" style="${projOverCap ? 'color:var(--red);' : ''}">${_usageMoney(p.projected_eom_usd)}</div>
+          <div class="usage-kpi__delta">${projOverCap ? 'projected to exceed cap' : 'on track'}</div>
+        </div>
+      </div>
+      <div style="margin-top:14px;">
+        <div style="position:relative;height:10px;background:var(--border);border-radius:5px;overflow:hidden;">
+          <div style="position:absolute;left:0;top:0;height:100%;width:${pct}%;background:${barColor};transition:width 0.3s;"></div>
+          <div style="position:absolute;left:${overrideAt}%;top:-2px;bottom:-2px;width:1px;background:var(--amber,#eab308);" title="override at ${overrideAt}%"></div>
+          <div style="position:absolute;left:${stopAt}%;top:-2px;bottom:-2px;width:1px;background:var(--red,#ef4444);" title="hard stop at ${stopAt}%"></div>
+        </div>
+        <div style="font-size:12px;color:${actionColor};margin-top:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">${actionLabel}</div>
       </div>
     </div>`;
 }

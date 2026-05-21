@@ -70,6 +70,20 @@ export interface ReportData {
     mtd_cap: number | null
     per_project: ProjectCost[]
   }
+  /**
+   * Anthropic Agent SDK Credit Pool snapshot for the daily/weekly digest.
+   * Null when the pool gate is unavailable. Renderer hides the card cleanly
+   * when null. Source: server cost-gate.ts computePoolGateStatus.
+   */
+  agent_sdk_pool?: {
+    spend_usd: number
+    cap_usd: number
+    percent_of_pool: number
+    projected_eom_usd: number
+    action: 'allow' | 'override_to_ollama' | 'refuse'
+    override_threshold_pct: number
+    hardstop_threshold_pct: number
+  } | null
   kill_switch: KillSwitchState
   paws: {
     total: number

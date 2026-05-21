@@ -49,6 +49,7 @@ describe('newsletter editions', () => {
       articles_cyber: 5,
       articles_ai: 6,
       articles_research: 4,
+      articles_github: 0,
       hero_path: null,
       html_bytes: 45000,
       sent_at: Math.floor(Date.now() / 1000),

@@ -55,6 +55,7 @@ describe('renderNewsletter', () => {
 
     const html = renderNewsletter(template, {
       articles,
+      github: [],
       executiveInsight: 'Insight text here',
       executiveImplication: 'Implication text here',
       heroImageSrc: 'data:image/jpeg;base64,abc',

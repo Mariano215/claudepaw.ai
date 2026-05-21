@@ -101,6 +101,62 @@ function statusBanner(data: ReportData): string {
 </table>`
 }
 
+// Agent SDK Credit Pool card (post-June-15 2026). Hides cleanly when
+// data.agent_sdk_pool is null (pool gate unavailable).
+function agentSdkPoolCard(data: ReportData): string {
+  const p = (data as { agent_sdk_pool?: ReportData['agent_sdk_pool'] | null }).agent_sdk_pool
+  if (!p) return ''
+  const pct = Math.max(0, Math.min(100, p.percent_of_pool))
+  const barColor =
+    p.action === 'refuse' ? '#ef4444'
+    : p.action === 'override_to_ollama' ? '#eab308'
+    : '#22c55e'
+  const actionLabel =
+    p.action === 'refuse' ? 'HARD STOP — Anthropic runs refused'
+    : p.action === 'override_to_ollama' ? 'OVERRIDE — All runs forced to Ollama'
+    : 'OK — Anthropic runs allowed'
+  const actionColor =
+    p.action === 'refuse' ? '#ef4444'
+    : p.action === 'override_to_ollama' ? '#eab308'
+    : COLORS.textMuted
+  const projOverCap = p.projected_eom_usd > p.cap_usd
+  return `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${COLORS.bgCard};border:1px solid ${COLORS.border};border-radius:12px;margin-bottom:20px;">
+  <tr>
+    <td style="padding:18px 24px;border-bottom:1px solid ${COLORS.border};">
+      <div style="font-size:11px;letter-spacing:1.5px;color:${COLORS.textMuted};text-transform:uppercase;">Anthropic Agent SDK Pool</div>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:20px 24px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td width="33%" style="padding-right:12px;">
+            <div style="font-size:11px;color:${COLORS.textMuted};text-transform:uppercase;letter-spacing:1px;">Month spend</div>
+            <div style="font-size:26px;font-weight:700;color:${COLORS.text};">${fmtMoney(p.spend_usd)}</div>
+            <div style="font-size:12px;margin-top:4px;color:${COLORS.textMuted};">of ${fmtMoney(p.cap_usd)} cap</div>
+          </td>
+          <td width="33%" style="padding:0 12px;border-left:1px solid ${COLORS.border};">
+            <div style="font-size:11px;color:${COLORS.textMuted};text-transform:uppercase;letter-spacing:1px;">Pool used</div>
+            <div style="font-size:26px;font-weight:700;color:${COLORS.text};">${pct.toFixed(1)}%</div>
+            <div style="font-size:12px;margin-top:4px;color:${COLORS.textMuted};">override ${p.override_threshold_pct}% / stop ${p.hardstop_threshold_pct}%</div>
+          </td>
+          <td width="33%" style="padding-left:12px;border-left:1px solid ${COLORS.border};">
+            <div style="font-size:11px;color:${COLORS.textMuted};text-transform:uppercase;letter-spacing:1px;">Projected EOM</div>
+            <div style="font-size:26px;font-weight:700;color:${projOverCap ? '#ef4444' : COLORS.text};">${fmtMoney(p.projected_eom_usd)}</div>
+            <div style="font-size:12px;margin-top:4px;color:${COLORS.textMuted};">${projOverCap ? 'projected over cap' : 'on track'}</div>
+          </td>
+        </tr>
+      </table>
+      <div style="margin-top:14px;height:10px;background:${COLORS.border};border-radius:5px;overflow:hidden;">
+        <div style="height:100%;width:${pct}%;background:${barColor};"></div>
+      </div>
+      <div style="font-size:12px;color:${actionColor};margin-top:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">${actionLabel}</div>
+    </td>
+  </tr>
+</table>`
+}
+
 function costCard(data: ReportData): string {
   const { cost } = data
   const rows = cost.per_project.map(renderProjectCostRow).join('')
@@ -484,6 +540,7 @@ export function renderDailyHtml(data: ReportData): string {
 
   ${killSwitchCard(data)}
   ${statusBanner(data)}
+  ${agentSdkPoolCard(data)}
   ${costCard(data)}
   ${pawsCard(data)}
   ${tasksCard(data)}

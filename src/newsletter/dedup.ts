@@ -43,9 +43,32 @@ export function createNewsletterTables(database?: Database.Database): void {
       sent_at INTEGER,
       recipient TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS newsletter_seen_repos (
+      repo_full_name TEXT PRIMARY KEY,
+      last_shown_at INTEGER NOT NULL,
+      last_release_tag TEXT,
+      last_edition_date TEXT NOT NULL
+    );
   `)
 
+  // Idempotent column add: articles_github was introduced after newsletter_editions
+  // was first created. ALTER TABLE in SQLite requires checking schema first.
+  const cols = db
+    .prepare("PRAGMA table_info(newsletter_editions)")
+    .all() as Array<{ name: string }>
+  if (!cols.some((c) => c.name === 'articles_github')) {
+    db.exec(
+      'ALTER TABLE newsletter_editions ADD COLUMN articles_github INTEGER NOT NULL DEFAULT 0',
+    )
+  }
+
   logger.info('Newsletter database tables initialized')
+}
+
+// Internal accessor for the shared DB handle (used by github-dedup.ts).
+export function getNewsletterDb(): Database.Database {
+  return getDb()
 }
 
 export function isSeenUrl(url: string): boolean {
@@ -89,8 +112,8 @@ export function recordEdition(edition: EditionRow): void {
     .prepare(
       `INSERT OR REPLACE INTO newsletter_editions
        (id, date, lookback_days, articles_cyber, articles_ai, articles_research,
-        hero_path, html_bytes, sent_at, recipient)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        articles_github, hero_path, html_bytes, sent_at, recipient)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       edition.id,
@@ -99,6 +122,7 @@ export function recordEdition(edition: EditionRow): void {
       edition.articles_cyber,
       edition.articles_ai,
       edition.articles_research,
+      edition.articles_github,
       edition.hero_path,
       edition.html_bytes,
       edition.sent_at,

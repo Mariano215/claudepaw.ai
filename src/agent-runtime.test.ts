@@ -652,6 +652,61 @@ provider: openai_api
     expect(result.providerFallbackApplied).toBe(true)
     expect(result.text).toBe('secondary recovered')
   })
+
+  // --- Agent SDK Pool whitelist (post-June-15 2026) ---
+
+  it('rejects Opus on anthropic_api provider (pool-counting → whitelist enforced)', () => {
+    expect(() => resolveExecutionSettings({
+      executionOverride: { provider: 'anthropic_api', model: 'claude-opus-4-1' },
+    })).toThrow(/not allowed.*Opus is banned/)
+  })
+
+  it('allows Opus model id on claude_desktop (Anthropic Desktop ignores explicit model)', () => {
+    // claude_desktop doesn't honor the model field — Anthropic picks server-side.
+    // Whitelist is anthropic_api-only to avoid breaking historical agent configs.
+    const resolved = resolveExecutionSettings({
+      executionOverride: { provider: 'claude_desktop', modelPrimary: 'claude-opus-4' },
+    })
+    expect(resolved.provider).toBe('claude_desktop')
+  })
+
+  it('rejects Opus configured in secondary/fallback slots too', () => {
+    expect(() => resolveExecutionSettings({
+      executionOverride: {
+        provider: 'ollama',
+        fallbackProvider: 'anthropic_api',
+        modelFallback: 'claude-opus-4-5',
+      },
+    })).toThrow(/fallback model.*Opus is banned/)
+  })
+
+  it('allows Opus on non-pool-counting providers (openrouter, ollama bypass) since billing is separate', () => {
+    const resolved = resolveExecutionSettings({
+      executionOverride: { provider: 'openrouter_api', model: 'anthropic/claude-opus-4' },
+    })
+    // Not pool-counting → no whitelist enforcement (you pay openrouter, not Anthropic pool).
+    expect(resolved.provider).toBe('openrouter_api')
+  })
+
+  it('allows Sonnet 4.6 on claude_desktop (the canonical happy path)', () => {
+    const resolved = resolveExecutionSettings({
+      executionOverride: { provider: 'claude_desktop', model: 'claude-sonnet-4-6' },
+    })
+    expect(resolved.model).toBe('claude-sonnet-4-6')
+  })
+
+  it('allows Haiku 4.5 on anthropic_api', () => {
+    const resolved = resolveExecutionSettings({
+      executionOverride: { provider: 'anthropic_api', model: 'claude-haiku-4-5' },
+    })
+    expect(resolved.model).toBe('claude-haiku-4-5')
+  })
+
+  it('rejects unknown Anthropic family (e.g. retired Sonnet 4) on pool-counting providers', () => {
+    expect(() => resolveExecutionSettings({
+      executionOverride: { provider: 'anthropic_api', model: 'claude-sonnet-4-20250514' },
+    })).toThrow(/not allowed/)
+  })
 })
 
 function mockSpawnSuccess(

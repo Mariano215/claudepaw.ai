@@ -127,6 +127,7 @@ interface AnthropicResponse {
 
 function formatArticlesForPrompt(
   articles: Record<CategoryId, ScoredArticle[]>,
+  repoTitles?: string[],
 ): string {
   const sections: string[] = []
   for (const cat of ['cyber', 'ai', 'research'] as CategoryId[]) {
@@ -135,6 +136,12 @@ function formatArticlesForPrompt(
     for (const a of articles[cat].slice(0, 10)) {
       const summary = (a.summary || '').replace(/\s+/g, ' ').trim().slice(0, 400)
       sections.push(`- ${a.title} (${a.sourceDomain}): ${summary}`)
+    }
+  }
+  if (repoTitles && repoTitles.length > 0) {
+    sections.push('### GITHUB')
+    for (const line of repoTitles.slice(0, 6)) {
+      sections.push(`- ${line}`)
     }
   }
   return sections.join('\n')
@@ -168,10 +175,10 @@ async function callAnthropicForBrief(
 
   const themeLabels = topThemes.map((t) => TOPIC_LABELS[t]).join(', ')
   const systemPrompt =
-    "You are the editor of The Asymmetry, a senior-executive intelligence brief covering " +
-    "cybersecurity, AI, and research. Your audience is Test User, a CISO and AI/security " +
-    "builder. Write with authority, density, and sharp judgment. No filler. No AI cliches. " +
-    "No em dashes. Every sentence must advance the argument."
+    "You are the editor of The Signal, a senior-executive intelligence brief covering " +
+    "cybersecurity, AI, research, and notable GitHub projects. Your audience is Test User, " +
+    "a CISO and AI/security builder. Write with authority, density, and sharp judgment. " +
+    "No filler. No AI cliches. No em dashes. Every sentence must advance the argument."
 
   const userPrompt =
     `Below are the curated articles for this edition. Dominant themes detected: ${themeLabels}.\n\n` +
@@ -237,9 +244,10 @@ async function callAnthropicForBrief(
 
 export async function generateExecutiveBrief(
   articles: Record<CategoryId, ScoredArticle[]>,
+  repoTitles?: string[],
 ): Promise<ExecutiveBrief> {
   const topThemes = analyzeTopics(articles)
-  const articlesBlock = formatArticlesForPrompt(articles)
+  const articlesBlock = formatArticlesForPrompt(articles, repoTitles)
 
   const llm = await callAnthropicForBrief(articlesBlock, topThemes)
   if (llm) {

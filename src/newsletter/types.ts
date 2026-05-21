@@ -38,6 +38,7 @@ export interface NewsletterEdition {
     ai: ScoredArticle[]
     research: ScoredArticle[]
   }
+  github: ScoredRepo[]
   executiveInsight: string
   executiveImplication: string
   heroImagePath: string | null
@@ -54,6 +55,7 @@ export interface EditionRow {
   articles_cyber: number
   articles_ai: number
   articles_research: number
+  articles_github: number
   hero_path: string | null
   html_bytes: number | null
   sent_at: number | null
@@ -81,4 +83,38 @@ export interface NewsletterConfig {
   geminiApiKey: string
   templatePath: string
   maxHeroBytes: number
+}
+
+// ---------------------------------------------------------------------------
+// GitHub section types
+// ---------------------------------------------------------------------------
+
+export type RepoTag = 'agentic' | 'ai' | 'cyber'
+
+export interface RawRepo {
+  fullName: string                  // "owner/repo"
+  url: string                       // https://github.com/owner/repo
+  description: string
+  stars: number
+  language: string | null
+  pushedAt: Date
+  createdAt: Date
+  topics: string[]
+  latestReleaseTag: string | null
+  latestReleaseAt: Date | null
+  bucket: 'rising' | 'established'
+  matchedQuery: string              // which topic query found it (for tag inference)
+}
+
+export interface ScoredRepo extends RawRepo {
+  tag: RepoTag
+  score: number
+  whyItMatters: string              // LLM blurb (empty until curator fills it)
+}
+
+export interface SeenRepoRow {
+  repo_full_name: string
+  last_shown_at: number
+  last_release_tag: string | null
+  last_edition_date: string
 }

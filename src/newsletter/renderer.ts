@@ -1,4 +1,4 @@
-import type { ScoredArticle, CategoryId } from './types.js'
+import type { ScoredArticle, CategoryId, ScoredRepo, RepoTag } from './types.js'
 
 // ---------------------------------------------------------------------------
 // HTML escaping
@@ -51,6 +51,62 @@ function renderCategoryItems(articles: ScoredArticle[]): string {
   return articles.map(renderArticleItem).join('\n')
 }
 
+// ---------------------------------------------------------------------------
+// GitHub repo item rendering
+// ---------------------------------------------------------------------------
+
+const REPO_TAG_COLORS: Record<RepoTag, string> = {
+  agentic: '#6b21a8',
+  ai: '#1a73e8',
+  cyber: '#dc2626',
+}
+
+const REPO_TAG_LABELS: Record<RepoTag, string> = {
+  agentic: 'Agentic',
+  ai: 'AI',
+  cyber: 'Cyber',
+}
+
+function relativeTime(d: Date): string {
+  const ms = Date.now() - d.getTime()
+  const h = Math.floor(ms / 3_600_000)
+  if (h < 1) return 'just now'
+  if (h < 24) return `${h}h ago`
+  const days = Math.floor(h / 24)
+  return `${days}d ago`
+}
+
+function formatStars(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
+export function renderRepoItem(repo: ScoredRepo): string {
+  const name = escapeHtml(repo.fullName)
+  const url = escapeHtml(repo.url)
+  const blurb = escapeHtml(stripHtmlTags(repo.whyItMatters || ''))
+  const lang = escapeHtml(repo.language ?? 'multi')
+  const stars = formatStars(repo.stars)
+  const pushed = relativeTime(repo.pushedAt)
+  const tagColor = REPO_TAG_COLORS[repo.tag]
+  const tagLabel = REPO_TAG_LABELS[repo.tag]
+
+  return `
+    <div style="margin-bottom:16px;padding-left:12px;border-left:3px solid #6b21a8;">
+      <a href="${url}" target="_blank" style="color:#6b21a8;text-decoration:none;font-weight:600;font-size:14px;">${name}</a>
+      <span style="display:inline-block;margin-left:8px;padding:2px 6px;background:${tagColor};color:#ffffff;font-size:10px;font-weight:600;border-radius:3px;vertical-align:middle;">${tagLabel}</span>
+      <div style="color:#444;font-size:13px;margin-top:4px;line-height:1.5;">${blurb}</div>
+      <div style="color:#888;font-size:11px;margin-top:4px;">${stars}&#9733; &middot; ${lang} &middot; pushed ${pushed}</div>
+    </div>`
+}
+
+function renderRepoItems(repos: ScoredRepo[]): string {
+  if (repos.length === 0) {
+    return '<p style="color:#888;font-style:italic;margin:0;">No notable GitHub picks for this edition.</p>'
+  }
+  return repos.map(renderRepoItem).join('\n')
+}
+
 // Replace a {{#HERO}}...{{/HERO}} block in the template. Pass empty string
 // to strip the block entirely when there's no hero image to show.
 function replaceConditionalBlock(
@@ -95,6 +151,7 @@ function getWeekday(): string {
 
 export interface RenderOptions {
   articles: Record<CategoryId, ScoredArticle[]>
+  github: ScoredRepo[]
   executiveInsight: string
   executiveImplication: string
   heroImageSrc: string
@@ -106,6 +163,7 @@ export function renderNewsletter(template: string, opts: RenderOptions): string 
   const cyberHtml = renderCategoryItems(opts.articles.cyber)
   const aiHtml = renderCategoryItems(opts.articles.ai)
   const researchHtml = renderCategoryItems(opts.articles.research)
+  const githubHtml = renderRepoItems(opts.github)
   const reportWindow = computeReportWindow(opts.lookbackDays)
   const weekday = getWeekday()
 
@@ -119,6 +177,7 @@ export function renderNewsletter(template: string, opts: RenderOptions): string 
   html = html.replace(/\{\{CYBER_ITEMS\}\}/g, cyberHtml)
   html = html.replace(/\{\{AI_ITEMS\}\}/g, aiHtml)
   html = html.replace(/\{\{RESEARCH_ITEMS\}\}/g, researchHtml)
+  html = html.replace(/\{\{GITHUB_ITEMS\}\}/g, githubHtml)
   html = html.replace(/\{\{HERO_IMAGE_SRC\}\}/g, opts.heroImageSrc)
   html = html.replace(/\{\{HERO_ART_DIRECTION\}\}/g, escapeHtml(opts.heroArtDirection))
 

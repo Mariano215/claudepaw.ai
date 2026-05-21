@@ -1,8 +1,36 @@
 import path from 'node:path'
 import { PROJECT_ROOT, readEnvFile } from '../env.js'
-import type { CategoryId, TopicId, NewsletterConfig } from './types.js'
+import type { CategoryId, TopicId, NewsletterConfig, RepoTag } from './types.js'
 
 const env = readEnvFile()
+
+// ---------------------------------------------------------------------------
+// Newsletter branding (single source of truth for renames)
+// ---------------------------------------------------------------------------
+
+export const NEWSLETTER_NAME = 'The Signal'
+export const NEWSLETTER_NAME_UPPER = 'THE SIGNAL'
+export const NEWSLETTER_TAGLINE = 'ClaudePaw Intelligence Brief'
+export const NEWSLETTER_FOOTER = 'The ClaudePaw Newsletter'
+
+// LinkedIn Newsletter publication created manually in LinkedIn UI on 2026-05-18.
+// Used as the subscribe-CTA target in LinkedIn body footer.
+export const LINKEDIN_NEWSLETTER_URL =
+  'https://www.linkedin.com/newsletters/7462145988179251200/'
+
+// LinkedIn Newsletter publication NAME (matches LinkedIn UI title exactly).
+// Used by the publisher to select the right publication in the dropdown
+// when an account has multiple newsletters.
+export const LINKEDIN_NEWSLETTER_PUBLICATION_NAME = 'The Signal - by ClaudePaw'
+
+// ---------------------------------------------------------------------------
+// Author byline (env-driven so no personal names are hardcoded in source)
+// ---------------------------------------------------------------------------
+// When NEWSLETTER_BYLINE_NAME is empty, the body builder omits the byline
+// footer entirely. URL is optional; when absent the name renders as plain
+// text. Public/OSS deployments leave these unset to get a clean footer.
+export const NEWSLETTER_BYLINE_NAME: string = env.NEWSLETTER_BYLINE_NAME ?? ''
+export const NEWSLETTER_BYLINE_URL: string = env.NEWSLETTER_BYLINE_URL ?? ''
 
 // ---------------------------------------------------------------------------
 // Feed URLs grouped by category
@@ -73,6 +101,46 @@ export const RESEARCH_HINTS: string[] = [
   'dataset', 'benchmark', 'state-of-the-art', 'state of the art', 'sota',
   'novel approach', 'framework', 'architecture', 'preprint',
 ]
+
+// ---------------------------------------------------------------------------
+// GitHub section: topic queries and selection config
+// ---------------------------------------------------------------------------
+
+export const GITHUB_TOPIC_QUERIES: Array<{ q: string; tag: RepoTag }> = [
+  // Agentic
+  { q: 'topic:agentic-ai',          tag: 'agentic' },
+  { q: 'topic:ai-agents',           tag: 'agentic' },
+  { q: 'topic:llm-agents',          tag: 'agentic' },
+  { q: 'topic:autonomous-agents',   tag: 'agentic' },
+  { q: 'topic:agent-framework',     tag: 'agentic' },
+  // AI / LLM tooling
+  { q: 'topic:llm topic:tool',      tag: 'ai' },
+  { q: 'topic:rag',                 tag: 'ai' },
+  { q: 'topic:fine-tuning',         tag: 'ai' },
+  { q: 'topic:llmops',              tag: 'ai' },
+  // Cybersecurity
+  { q: 'topic:offensive-security',  tag: 'cyber' },
+  { q: 'topic:red-team',            tag: 'cyber' },
+  { q: 'topic:blue-team',           tag: 'cyber' },
+  { q: 'topic:llm-security',        tag: 'cyber' },
+  { q: 'topic:security-tools',      tag: 'cyber' },
+  { q: 'topic:threat-intelligence', tag: 'cyber' },
+]
+
+export const GITHUB_CONFIG = {
+  risingMinStars: 50,
+  risingMaxStars: 2000,
+  risingMaxAgeDays: 365,
+  establishedMinStars: 2000,
+  pushedWithinDays: 14,
+  releaseWithinDays: 14,
+  perQueryLimit: 10,        // GH API page size per topic query
+  maxCandidates: 30,        // shortlist cap fed to LLM curator
+  maxPicks: 6,              // final picks rendered
+  risingRatio: 0.6,         // 60% rising / 40% established
+  apiThrottleMs: 2200,      // stays under 30 req/min search limit
+  dedupWindowDays: 90,      // suppress repo for 90d unless new release tag
+} as const
 
 // ---------------------------------------------------------------------------
 // Block terms -- articles containing any of these are discarded

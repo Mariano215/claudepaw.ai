@@ -225,6 +225,19 @@ function isModelCompatibleWithProvider(provider: string, model: string): boolean
   return true
 }
 
+// Mirrors src/agent-runtime.ts. Anthropic-backed providers (which count against
+// the post-June-15 $200 Agent SDK Credit Pool) may only use Sonnet 4.6 / 4.5 or
+// Haiku 4.5. Opus is banned outright. See plan: sparkling-questing-wadler.md.
+const POOL_COUNTING_PROVIDERS = new Set(['claude_desktop', 'anthropic_api'])
+const ANTHROPIC_ALLOWED_FAMILIES = ['claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-haiku-4-5']
+
+function isAnthropicModelAllowed(model: string): boolean {
+  const normalized = model.trim().toLowerCase().replace(/^anthropic\//, '')
+  if (!normalized) return true
+  if (/opus/.test(normalized)) return false
+  return ANTHROPIC_ALLOWED_FAMILIES.some((fam) => normalized.includes(fam))
+}
+
 function normalizeFallbackPolicy(value: string | undefined): string | undefined {
   if (!value) return undefined
   if (value === 'disabled') return 'disabled'
@@ -2507,6 +2520,13 @@ router.put('/projects/:id/settings', requireProjectRole('editor'), (req: Request
       }
       if (stage.provider && stage.model && !isModelCompatibleWithProvider(stage.provider as any, stage.model)) {
         res.status(400).json({ error: `${stage.label} model "${stage.model}" is not compatible with ${stage.provider}` })
+        return
+      }
+      if (stage.provider && stage.model && POOL_COUNTING_PROVIDERS.has(stage.provider) && !isAnthropicModelAllowed(stage.model)) {
+        res.status(400).json({
+          error: `${stage.label} model "${stage.model}" is banned on ${stage.provider}. `
+            + `Allowed: ${ANTHROPIC_ALLOWED_FAMILIES.join(', ')}. Opus is blocked by the $200 Agent SDK Pool policy.`,
+        })
         return
       }
     }

@@ -558,6 +558,12 @@ export function getTelemetryDb(): Database.Database | null {
     // over a few months).
     telemetryDb.exec(`CREATE INDEX IF NOT EXISTS idx_agent_events_project_time ON agent_events(project_id, received_at)`)
 
+    // Index for the Anthropic Agent SDK Pool gate (post-June-15 2026):
+    //   SUM(total_cost_usd) WHERE received_at >= ? AND executed_provider IN ('claude_desktop', 'anthropic_api')
+    // Runs on every runAgent call. Without this index the query falls back to a
+    // table scan once project_id is no longer in the WHERE.
+    telemetryDb.exec(`CREATE INDEX IF NOT EXISTS idx_agent_events_provider_time ON agent_events(executed_provider, received_at)`)
+
     // Tool-invocation tracking (#17). The bot produces one row per Claude SDK
     // tool_use block and syncs them here alongside agent_events. Kept schema
     // parity with store/telemetry.db on the bot.

@@ -39,6 +39,15 @@ vi.mock('./cost/cost-gate.js', () => ({
     daily_cap_usd: null,
     triggering_cap: null,
   })),
+  getPoolGateStatus: vi.fn(async () => ({
+    action: 'allow',
+    spend_usd: 0,
+    cap_usd: 200,
+    percent_of_pool: 0,
+    override_threshold_pct: 80,
+    hardstop_threshold_pct: 95,
+    projected_eom_usd: 0,
+  })),
 }))
 
 // Mock agent-runtime --spy on the namespace object so vi.spyOn works
@@ -98,6 +107,107 @@ describe('runAgent gate enforcement', () => {
       daily_cap_usd: null,
       triggering_cap: null,
     })
+
+    // Default: pool gate allows
+    vi.mocked(costGateMod.getPoolGateStatus).mockResolvedValue({
+      action: 'allow',
+      spend_usd: 0,
+      cap_usd: 200,
+      percent_of_pool: 0,
+      override_threshold_pct: 80,
+      hardstop_threshold_pct: 95,
+      projected_eom_usd: 0,
+    })
+  })
+
+  // --- Pool gate (account-wide Anthropic Agent SDK Credit Pool) ---
+
+  it('pool gate refuse: returns refusal without calling runtime', async () => {
+    vi.mocked(costGateMod.getPoolGateStatus).mockResolvedValue({
+      action: 'refuse',
+      spend_usd: 191.42,
+      cap_usd: 200,
+      percent_of_pool: 95.7,
+      override_threshold_pct: 80,
+      hardstop_threshold_pct: 95,
+      projected_eom_usd: 240.0,
+    })
+
+    const result = await runAgent(
+      'do something',
+      undefined,
+      undefined,
+      false,
+      undefined,
+      { projectId: 'test-project', source: 'test' },
+    )
+
+    expect(result.text).toMatch(/agent sdk pool/i)
+    expect(result.text).toContain('$191.42')
+    expect(result.text).toContain('$200')
+    expect(result.emptyReason).toMatch(/agent sdk pool exceeded/i)
+    expect(runtime.runAgentWithResolvedExecution).not.toHaveBeenCalled()
+  })
+
+  it('pool gate override_to_ollama: runtime called with provider ollama', async () => {
+    vi.mocked(costGateMod.getPoolGateStatus).mockResolvedValue({
+      action: 'override_to_ollama',
+      spend_usd: 161.0,
+      cap_usd: 200,
+      percent_of_pool: 80.5,
+      override_threshold_pct: 80,
+      hardstop_threshold_pct: 95,
+      projected_eom_usd: 195.0,
+    })
+
+    await runAgent(
+      'do something',
+      undefined,
+      undefined,
+      false,
+      undefined,
+      { projectId: 'test-project', source: 'test' },
+    )
+
+    expect(runtime.runAgentWithResolvedExecution).toHaveBeenCalledOnce()
+    const callArgs = vi.mocked(runtime.runAgentWithResolvedExecution).mock.calls[0]
+    const runtimeCtx = callArgs[1] as any
+    expect(runtimeCtx?.executionOverride?.provider).toBe('ollama')
+  })
+
+  it('pool gate refuse runs BEFORE per-project gate (account exhaust beats project allowance)', async () => {
+    // Pool says refuse; project says allow — pool wins.
+    vi.mocked(costGateMod.getPoolGateStatus).mockResolvedValue({
+      action: 'refuse',
+      spend_usd: 195,
+      cap_usd: 200,
+      percent_of_pool: 97.5,
+      override_threshold_pct: 80,
+      hardstop_threshold_pct: 95,
+      projected_eom_usd: 240,
+    })
+    vi.mocked(costGateMod.getCostGateStatus).mockResolvedValue({
+      action: 'allow',
+      percent_of_cap: 10,
+      mtd_usd: 2,
+      today_usd: 0.1,
+      monthly_cap_usd: 50,
+      daily_cap_usd: null,
+      triggering_cap: null,
+    })
+
+    const result = await runAgent(
+      'do something',
+      undefined,
+      undefined,
+      false,
+      undefined,
+      { projectId: 'test-project', source: 'test' },
+    )
+
+    expect(result.text).toMatch(/agent sdk pool/i)
+    // Per-project gate was never consulted because pool refused first.
+    expect(runtime.runAgentWithResolvedExecution).not.toHaveBeenCalled()
   })
 
   it('kill switch active: returns refusal without calling runtime', async () => {

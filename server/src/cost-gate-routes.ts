@@ -14,10 +14,30 @@
 import { Router, type Request, type Response } from 'express'
 import { requireProjectRead, requireProjectRole } from './auth.js'
 import { getProjectSettingsById, upsertProjectSettingsInDb } from './db.js'
-import { computeCostGateStatus } from './cost-gate.js'
+import { computeCostGateStatus, computePoolGateStatus } from './cost-gate.js'
 import { logger } from './logger.js'
 
 const router = Router()
+
+// ---------------------------------------------------------------------------
+// GET /pool -- Anthropic Agent SDK Credit Pool status (account-wide, all projects)
+// MUST be declared BEFORE /:projectId so the literal route matches first.
+// Auth: any authenticated user can read pool status (account-level metric, no
+// per-project secrets leaked).
+// ---------------------------------------------------------------------------
+
+router.get(
+  '/pool',
+  (_req: Request, res: Response): void => {
+    try {
+      const status = computePoolGateStatus()
+      res.json(status)
+    } catch (err) {
+      logger.warn({ err }, 'cost-gate /pool GET failed')
+      res.status(500).json({ error: 'Failed to compute pool gate status' })
+    }
+  },
+)
 
 // ---------------------------------------------------------------------------
 // GET /:projectId -- return current CostGateStatus
