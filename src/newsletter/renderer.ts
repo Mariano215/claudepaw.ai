@@ -18,6 +18,7 @@ function stripHtmlTags(text: string): string {
   return text
     .replace(/<[^>]*>/g, ' ')
     .replace(/&nbsp;/g, ' ')
+    .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{1FA00}-\u{1FAFF}]/gu, '')
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -36,7 +37,6 @@ export function renderArticleItem(article: ScoredArticle): string {
     <div style="margin-bottom:16px;padding-left:12px;border-left:3px solid #1a73e8;">
       <a href="${url}" target="_blank" style="color:#1a73e8;text-decoration:none;font-weight:600;font-size:14px;">${title}</a>
       <div style="color:#444;font-size:13px;margin-top:4px;line-height:1.5;">${summary}</div>
-      <div style="color:#888;font-size:11px;margin-top:4px;">${domain}</div>
     </div>`
 }
 

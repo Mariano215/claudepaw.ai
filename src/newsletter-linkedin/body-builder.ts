@@ -32,6 +32,7 @@ function stripHtml(text: string): string {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{1FA00}-\u{1FAFF}]/gu, '')
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -120,7 +121,6 @@ function appendArticleSection(
     b.bullet(() => {
       b.text(title, { bold: true, link: a.url })
       if (summary) b.text(' — ').text(summary)
-      b.text(` (${a.sourceDomain})`, { italic: true })
     })
   }
   b.newline()
@@ -250,7 +250,7 @@ export function buildBodyMarkdown(input: BuildLinkedinBodyInput): string {
     for (const a of arts.slice(0, 6)) {
       const title = clamp(stripHtml(a.title), 200)
       const summary = clamp(stripHtml(a.summary), 240)
-      lines.push(`- [**${title}**](${a.url}) — ${summary} _(${a.sourceDomain})_`)
+      lines.push(`- [**${title}**](${a.url}) — ${summary}`)
     }
     lines.push('')
   }
