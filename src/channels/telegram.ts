@@ -71,9 +71,11 @@ export class TelegramChannel implements Channel {
     this.startPollingWithRetry()
   }
 
-  private startPollingWithRetry(attempt = 1): void {
+  private startPollingWithRetry(attempt = 1, recoveryRound = 1): void {
     const maxAttempts = 5
-    const baseDelay = 3000 // 3 seconds
+    const maxRecoveryRounds = 3   // after 3 rounds (~15 min total), give up permanently
+    const baseDelay = 3000        // 3 seconds between fast retries
+    const recoveryDelay = 5 * 60 * 1000  // 5 min between recovery rounds
 
     this.bot.start({
       onStart: (botInfo) => {
@@ -92,13 +94,25 @@ export class TelegramChannel implements Channel {
           delay,
           ...conflictDetails,
         }, 'Telegram polling conflict: another process is already calling getUpdates for this bot token. Most likely cause: another ClaudePaw instance or the Claude Desktop Telegram plugin. Stop the duplicate poller and restart this channel.')
-        setTimeout(() => this.startPollingWithRetry(attempt + 1), delay)
+        setTimeout(() => this.startPollingWithRetry(attempt + 1, recoveryRound), delay)
+      } else if (is409 && recoveryRound < maxRecoveryRounds) {
+        // Fast retries exhausted but still 409 — the duplicate poller may time out.
+        // Wait 5 minutes and try reclaiming the slot before giving up permanently.
+        logger.warn({
+          channelId: this.id,
+          recoveryRound,
+          maxRecoveryRounds,
+          recoveryDelayMs: recoveryDelay,
+          ...conflictDetails,
+        }, 'Telegram 409 persists after retries. Scheduling recovery attempt in 5 min.')
+        setTimeout(() => this.startPollingWithRetry(1, recoveryRound + 1), recoveryDelay)
       } else {
         this._running = false
         logger.error({
           channelId: this.id,
           err,
           attempt,
+          recoveryRound,
           ...conflictDetails,
         }, is409
           ? 'Telegram polling failed permanently due to a token conflict. Another process is still polling this bot. Stop the duplicate poller, then restart ClaudePaw.'
