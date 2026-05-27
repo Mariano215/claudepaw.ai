@@ -97,7 +97,10 @@ fi
 echo "  - skipping DB sync (remote production state is authoritative)"
 
 ssh -o ConnectTimeout=10 "$DASHBOARD_HOST" \
-  "cd $DASHBOARD_DIR && npm install 2>/dev/null && npx tsc 2>/dev/null && fuser -k 3000/tcp 2>/dev/null; sleep 1; pm2 startOrRestart ecosystem.config.cjs 2>/dev/null; pm2 save 2>/dev/null" 2>/dev/null \
+  "cd $DASHBOARD_DIR && npm install 2>/dev/null && npx tsc 2>/dev/null; \
+   pm2 delete claudepaw-server 2>/dev/null; \
+   for i in 1 2 3 4 5; do kill -9 \$(lsof -ti:3000) 2>/dev/null; sleep 1; lsof -ti:3000 >/dev/null 2>&1 || break; done; \
+   pm2 start ecosystem.config.cjs 2>/dev/null; pm2 save 2>/dev/null" 2>/dev/null \
   && echo "  ✓ server restarted" \
   || echo "  ⚠ server restart failed"
 

@@ -95,9 +95,15 @@ fi
 # Rebuild + restart on server
 # IMPORTANT: Must use PM2 in fork mode (not cluster) -- cluster mode breaks WebSocket upgrades.
 # Fork mode is pinned in ecosystem.config.cjs at repo root; we sync it above and invoke
-# `pm2 startOrRestart ecosystem.config.cjs` so the flags never drift out of version control.
+# `pm2 start ecosystem.config.cjs` so the flags never drift out of version control.
+# Clean slate every deploy: delete from PM2, free port 3000 in a verify loop
+# (kills any orphan that would otherwise leave PM2 stuck in EADDRINUSE), then
+# start one fresh fork-mode process.
 ssh -o ConnectTimeout=10 "$DASHBOARD_HOST" \
-  "cd $DASHBOARD_DIR && npm install 2>/dev/null && npx tsc 2>/dev/null && fuser -k 3000/tcp 2>/dev/null; sleep 1; pm2 startOrRestart ecosystem.config.cjs 2>/dev/null; pm2 save 2>/dev/null"
+  "cd $DASHBOARD_DIR && npm install 2>/dev/null && npx tsc 2>/dev/null; \
+   pm2 delete claudepaw-server 2>/dev/null; \
+   for i in 1 2 3 4 5; do kill -9 \$(lsof -ti:3000) 2>/dev/null; sleep 1; lsof -ti:3000 >/dev/null 2>&1 || break; done; \
+   pm2 start ecosystem.config.cjs 2>/dev/null; pm2 save 2>/dev/null"
 echo "✓ Server rebuilt and restarted"
 
 echo ""

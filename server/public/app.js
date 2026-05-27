@@ -3156,6 +3156,7 @@ function navigateToPage(pageId, pushState = true) {
   if (pageId === 'page-logging') initLoggingPage();
   if (pageId === 'page-sops') fetchSOPs();
   if (pageId === 'page-paws') fetchPaws();
+  if (pageId === 'page-how-it-works') initHowItWorksPage();
   if (pageId === 'page-deals') initDealsPage();
   if (pageId === 'page-portfolio') initPortfolioPage();
   if (pageId === 'page-rehab') initRehabPage();
@@ -3229,6 +3230,7 @@ function initNavigation() {
       'research': 'page-research',
       'sops': 'page-sops',
       'paws': 'page-paws',
+      'how-it-works': 'page-how-it-works',
       'plugins': 'page-plugins',
       'webhooks': 'page-webhooks',
       'graph': 'page-graph',
@@ -13672,12 +13674,12 @@ initAuthGate();
 // stay hidden everywhere except the broker project. Conversely, the broker
 // pipeline + map + analytics surfaces.
 const PAGE_DEFAULTS = {
-  'default':         { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
-  'default':  { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
-  'example-company':     { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
-  'example-company': { paws: false, knowledge: false, deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
-  'claudepaw':       { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
-  'broker':          { board: false, research: false, knowledge: false },
+  'default':         { 'how-it-works': false, deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
+  'default':  { 'how-it-works': false, deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
+  'example-company':     { 'how-it-works': false, deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
+  'example-company': { 'how-it-works': false, paws: false, knowledge: false, deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
+  'claudepaw':       { 'how-it-works': false, deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
+  'broker':          { board: false, research: false, knowledge: false, 'how-it-works': false },
 };
 
 // Pages shown in the sidebar (order matches sidebar HTML)
@@ -13692,6 +13694,7 @@ const SIDEBAR_PAGES = [
   { id: 'logging',       label: '📝 Logging' },
   { id: 'sops',          label: '⏰ Cron Jobs' },
   { id: 'paws',          label: '🐾 Paws Mode' },
+  { id: 'how-it-works',  label: '📖 How It Works' },
   { id: 'deals',         label: '🏠 Deals' },
   { id: 'portfolio',     label: '🗺️ Portfolio' },
   { id: 'rehab',         label: '🔨 Rehab' },

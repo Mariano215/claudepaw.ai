@@ -5876,7 +5876,7 @@ body:not(.sidebar-expanded) .sidebar-link { justify-content: center; padding: 6p
 }
 
 .agent-detail-stat {
-  background: var(--bg-card);
+  background: var(--bg-raised);
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
   padding: 14px 16px;
@@ -5909,7 +5909,7 @@ body:not(.sidebar-expanded) .sidebar-link { justify-content: center; padding: 6p
 }
 
 .agent-detail-section {
-  background: var(--bg-card);
+  background: var(--bg-raised);
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
   padding: 16px;
