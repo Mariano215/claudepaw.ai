@@ -2822,23 +2822,12 @@ router.patch('/plugins/:id', requireAdmin, (req: Request, res: Response) => {
 
 // --- Webhooks ---
 
-function isInternalUrl(urlStr: string): boolean {
-  try {
-    const u = new URL(urlStr)
-    const host = u.hostname.toLowerCase()
-    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0') return true
-    if (host === '169.254.169.254') return true  // cloud metadata
-    if (host.endsWith('.internal') || host.endsWith('.local')) return true
-    // Check RFC 1918 ranges
-    const parts = host.split('.').map(Number)
-    if (parts.length === 4 && !parts.some(isNaN)) {
-      if (parts[0] === 10) return true
-      if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true
-      if (parts[0] === 192 && parts[1] === 168) return true
-    }
-    return false
-  } catch { return true }
-}
+// SSRF-safe URL validation + delivery live in ./ssrf-guard.ts. The old
+// string-only isInternalUrl() check was replaced: it never resolved DNS (so a
+// public hostname rebinding to a private IP slipped through), missed 127/8,
+// 100.64/10 (Tailscale CGNAT) and most IPv6 ranges, and the delivery paths
+// followed redirects without re-validating each hop.
+import { assertPublicUrl, safeFetch } from './ssrf-guard.js'
 
 const WEBHOOK_EVENT_TYPES = [
   'agent_completed', 'security_finding', 'task_completed', 'guard_blocked',
@@ -2875,14 +2864,9 @@ router.post('/webhooks', requireProjectRole('editor'), (req: Request, res: Respo
   }
 
   try {
-    new URL(target_url)
-  } catch {
-    res.status(400).json({ error: 'target_url must be a valid URL' })
-    return
-  }
-
-  if (isInternalUrl(target_url)) {
-    res.status(400).json({ error: 'Webhook URLs cannot target internal/private addresses' })
+    assertPublicUrl(target_url)
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'target_url must be a valid public URL' })
     return
   }
 
@@ -2967,8 +2951,10 @@ router.post(
     return
   }
 
-  if (isInternalUrl(wh.target_url)) {
-    res.status(400).json({ error: 'Webhook URLs cannot target internal/private addresses' })
+  try {
+    assertPublicUrl(wh.target_url)
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Webhook URL not allowed' })
     return
   }
 
@@ -2993,7 +2979,7 @@ router.post(
   try {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 10_000)
-    const resp = await fetch(wh.target_url, {
+    const resp = await safeFetch(wh.target_url, {
       method: 'POST', headers, body: payload, signal: controller.signal,
     })
     clearTimeout(timeout)

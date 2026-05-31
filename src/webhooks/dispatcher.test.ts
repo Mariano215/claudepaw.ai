@@ -14,6 +14,14 @@ vi.mock('../logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }))
 
+// Delivery goes through safeFetch (SSRF guard) instead of global fetch. Route it
+// back to the stubbed global fetch so these tests exercise dispatcher logic
+// (signing, delivery recording, timeout/abort) unchanged. globalThis.fetch is
+// read lazily so each test's vi.stubGlobal('fetch', ...) takes effect.
+vi.mock('./ssrf-guard.js', () => ({
+  safeFetch: (url: string, init?: RequestInit) => (globalThis.fetch as typeof fetch)(url, init),
+}))
+
 import { WebhookEvent } from './types.js'
 import {
   fireWebhook,
@@ -158,10 +166,15 @@ describe('webhook dispatcher', () => {
       vi.useRealTimers()
     }
 
-    expect(deliveries).toHaveLength(1)
-    const d = deliveries[0]
-    expect(d.status_code).toBeNull()
-    expect(d.error).toMatch(/abort/i)
+    // Assert on this test's own delivery rather than the total count: fireWebhook
+    // is fire-and-forget, so a slow earlier test's detached delivery promise can
+    // land in the shared `deliveries` array during this test's fake-timer flush
+    // (flaky on slower CI runners, never locally). Filtering by webhook_id is
+    // deterministic regardless of timing.
+    const d = deliveries.find((x) => x.webhook_id === 'wh-timeout')
+    expect(d).toBeDefined()
+    expect(d!.status_code).toBeNull()
+    expect(d!.error).toMatch(/abort/i)
   })
 
   it('boot-state DB failure logs a warning (not silent)', async () => {

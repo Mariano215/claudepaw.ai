@@ -8,6 +8,7 @@ import {
   recordDelivery,
   pruneDeliveries,
 } from './db.js'
+import { safeFetch } from './ssrf-guard.js'
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -106,7 +107,7 @@ export async function fireWebhook(
       const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS)
 
       try {
-        const resp = await fetch(wh.target_url, {
+        const resp = await safeFetch(wh.target_url, {
           method: 'POST',
           headers,
           body,
