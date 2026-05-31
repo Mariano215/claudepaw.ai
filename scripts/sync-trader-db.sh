@@ -11,11 +11,17 @@
 #   INSERTs rows missing on the server, keyed by primary key, and never touches
 #   any table not listed below.
 #
-# Tables synced (local -> server, INSERT OR IGNORE): trader_strategies,
-# trader_signals, trader_decisions. trader_approvals is deliberately excluded.
+# Tables synced (local -> server, UPSERT by primary key): trader_strategies,
+# trader_signals, trader_decisions. New rows are inserted; existing rows have
+# their mutable fields (status, engine_order_id, sizing) reconciled to local --
+# local is the source of truth for signals/decisions. trader_approvals is
+# deliberately excluded (server-owned: created on the dashboard).
+#
+# Idempotent + safe to run on a schedule: re-running closes both new-row drift
+# and status drift (e.g. a signal that went pending -> executed locally).
 #
 # Usage:
-#   bash scripts/sync-trader-db.sh --dry-run   # show rows that would be added
+#   bash scripts/sync-trader-db.sh --dry-run   # show new rows + status drift
 #   bash scripts/sync-trader-db.sh             # apply
 set -euo pipefail
 
@@ -56,6 +62,8 @@ if [ "$DRY_RUN" = "1" ]; then
     SELECT 'signals_to_add:    ' || COUNT(*) FROM src.trader_signals    WHERE id NOT IN (SELECT id FROM trader_signals);
     SELECT 'decisions_to_add:  ' || COUNT(*) FROM src.trader_decisions  WHERE id NOT IN (SELECT id FROM trader_decisions);
     SELECT 'executed_to_add:   ' || COUNT(*) FROM src.trader_decisions  WHERE status='executed' AND id NOT IN (SELECT id FROM trader_decisions);
+    SELECT 'signal_status_drift:   ' || COUNT(*) FROM src.trader_signals s   JOIN trader_signals d   ON d.id=s.id WHERE d.status IS NOT s.status;
+    SELECT 'decision_status_drift: ' || COUNT(*) FROM src.trader_decisions s JOIN trader_decisions d ON d.id=s.id WHERE d.status IS NOT s.status;
     DETACH src;\"; rm -f '$REMOTE_SNAP'"
   echo "(no changes written)"
   exit 0
@@ -71,16 +79,18 @@ ssh -o ConnectTimeout=20 "$DASHBOARD_HOST" "
     sqlite3 '$REMOTE_DB' 'ALTER TABLE trader_decisions ADD COLUMN engine_order_id TEXT;'
   fi
   echo '  before:' \$(sqlite3 '$REMOTE_DB' \"SELECT 'signals='||(SELECT COUNT(*) FROM trader_signals)||' decisions='||(SELECT COUNT(*) FROM trader_decisions)||' approvals='||(SELECT COUNT(*) FROM trader_approvals);\")
-  sqlite3 '$REMOTE_DB' \"
-    .timeout 8000
+  sqlite3 -cmd '.timeout 8000' '$REMOTE_DB' \"
     ATTACH '$REMOTE_SNAP' AS src;
     BEGIN;
-    INSERT OR IGNORE INTO trader_strategies ($STR_COLS) SELECT $STR_COLS FROM src.trader_strategies;
-    INSERT OR IGNORE INTO trader_signals    ($SIG_COLS) SELECT $SIG_COLS FROM src.trader_signals;
-    INSERT OR IGNORE INTO trader_decisions  ($DEC_COLS) SELECT $DEC_COLS FROM src.trader_decisions;
+    INSERT INTO trader_strategies ($STR_COLS) SELECT $STR_COLS FROM src.trader_strategies WHERE true
+      ON CONFLICT(id) DO UPDATE SET status=excluded.status, params_json=excluded.params_json, updated_at=excluded.updated_at, max_size_usd=excluded.max_size_usd;
+    INSERT INTO trader_signals ($SIG_COLS) SELECT $SIG_COLS FROM src.trader_signals WHERE true
+      ON CONFLICT(id) DO UPDATE SET status=excluded.status, enrichment_json=excluded.enrichment_json;
+    INSERT INTO trader_decisions ($DEC_COLS) SELECT $DEC_COLS FROM src.trader_decisions WHERE true
+      ON CONFLICT(id) DO UPDATE SET status=excluded.status, engine_order_id=excluded.engine_order_id, size_usd=excluded.size_usd, entry_price=excluded.entry_price, stop_loss=excluded.stop_loss, take_profit=excluded.take_profit;
     COMMIT;
     DETACH src;\"
   echo '  after: ' \$(sqlite3 '$REMOTE_DB' \"SELECT 'signals='||(SELECT COUNT(*) FROM trader_signals)||' decisions='||(SELECT COUNT(*) FROM trader_decisions)||' approvals='||(SELECT COUNT(*) FROM trader_approvals);\")
   rm -f '$REMOTE_SNAP'
 "
-echo "Trader DB sync complete (additive; approvals untouched)."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Trader DB sync complete (upsert; approvals untouched)."
