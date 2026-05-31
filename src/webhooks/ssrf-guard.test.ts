@@ -63,6 +63,13 @@ describe('isBlockedIp - IPv6', () => {
     '::ffff:127.0.0.1',            // IPv4-mapped loopback
     '::ffff:10.0.0.1',             // IPv4-mapped private
     '::ffff:169.254.169.254',      // IPv4-mapped metadata
+    'fe80::1%eth0',                // link-local with zone id (zone stripped, still blocked)
+    // Malformed expansions -> treated as unsafe (expandV6 returns null):
+    '2001:db8:0:0:0:0:0',          // only 7 hextets, no "::"
+    '2001::db8::1',                // two "::" runs
+    '1:2:3:4:5:6:7:8::',           // full address + redundant "::"
+    '12345::1',                    // hextet > 4 hex digits
+    '::ffff:1.2.3',                // embedded v4 tail is not a valid IPv4
   ]
   for (const ip of blocked) {
     it(`blocks ${ip}`, () => expect(isBlockedIp(ip)).toBe(true))
@@ -72,6 +79,7 @@ describe('isBlockedIp - IPv6', () => {
     '2606:4700:4700::1111',        // Cloudflare
     '2001:4860:4860::8888',        // Google
     '::ffff:8.8.8.8',              // IPv4-mapped public
+    '2001:0db8:0000:0000:0000:0000:0000:0001', // full 8-hextet form, no "::"
   ]
   for (const ip of allowed) {
     it(`allows ${ip}`, () => expect(isBlockedIp(ip)).toBe(false))
