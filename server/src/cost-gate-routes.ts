@@ -28,7 +28,7 @@ const router = Router()
 
 router.get(
   '/pool',
-  (_req: Request, res: Response): void => {
+  (req: Request, res: Response): void => {
     try {
       const status = computePoolGateStatus()
       res.json(status)

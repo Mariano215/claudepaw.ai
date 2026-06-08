@@ -164,19 +164,11 @@ export function computeCostGateStatus(
  * Compute Anthropic Agent SDK Credit Pool status. Aggregates
  * agent_events.total_cost_usd across ALL projects for the current calendar
  * month where executed_provider counts against the pool.
- *
- * Thresholds (env-tunable):
- *   AGENT_SDK_POOL_CAP_USD          default 200   (Max 20x tier)
- *   AGENT_SDK_POOL_OVERRIDE_PCT     default 0.80  ($160 → switch to Ollama)
- *   AGENT_SDK_POOL_HARDSTOP_PCT     default 0.95  ($190 → refuse all runs)
- *
- * Projected end-of-month: linear extrapolation of MTD spend against elapsed
- * fraction of the month. Used by the dashboard widget; not a gate input.
  */
 export function computePoolGateStatus(): PoolGateStatus {
   const capUsd = Number(process.env.AGENT_SDK_POOL_CAP_USD ?? 200)
   const overridePct = Number(process.env.AGENT_SDK_POOL_OVERRIDE_PCT ?? 0.80)
-  const hardstopPct = Number(process.env.AGENT_SDK_POOL_HARDSTOP_PCT ?? 0.95)
+  const overrideUsd = capUsd * overridePct
 
   const db = getTelemetryDb()
   if (!db) {
@@ -186,7 +178,7 @@ export function computePoolGateStatus(): PoolGateStatus {
       cap_usd: capUsd,
       percent_of_pool: 0,
       override_threshold_pct: overridePct * 100,
-      hardstop_threshold_pct: hardstopPct * 100,
+      hardstop_threshold_pct: 100,
       projected_eom_usd: 0,
     }
   }
@@ -199,11 +191,12 @@ export function computePoolGateStatus(): PoolGateStatus {
       WHERE received_at >= ? AND executed_provider IN (${placeholders})`,
   ).get(ms, ...POOL_COUNTING_PROVIDERS) as { total: number }
 
-  const spendUsd = row.total ?? 0
-  const percent = capUsd > 0 ? Math.min((spendUsd / capUsd) * 100, 10000) : 0
+  const total = row.total ?? 0
 
-  // Linear EOM projection: spend / fraction_of_month_elapsed.
-  // Floor at the actual spend (never project lower than what's already burned).
+  let action: PoolGateStatus['action'] = 'allow'
+  if (total >= capUsd) action = 'refuse'
+  else if (total >= overrideUsd) action = 'override_to_ollama'
+
   const now = Date.now()
   const monthEnd = (() => {
     const d = new Date()
@@ -213,20 +206,17 @@ export function computePoolGateStatus(): PoolGateStatus {
   })()
   const elapsed = now - ms
   const monthLen = monthEnd - ms
-  const fraction = monthLen > 0 ? Math.max(elapsed / monthLen, 1 / 1000) : 1 // avoid /0 on day 1
-  const projectedEom = Math.max(spendUsd, spendUsd / fraction)
-
-  let action: PoolGateStatus['action'] = 'allow'
-  if (percent >= hardstopPct * 100) action = 'refuse'
-  else if (percent >= overridePct * 100) action = 'override_to_ollama'
+  const fraction = monthLen > 0 ? Math.max(elapsed / monthLen, 1 / 1000) : 1
+  const projectedEom = Math.max(total, total / fraction)
+  const percent = capUsd > 0 ? Math.min((total / capUsd) * 100, 10000) : 0
 
   return {
     action,
-    spend_usd: Math.round(spendUsd * 100) / 100,
+    spend_usd: Math.round(total * 100) / 100,
     cap_usd: capUsd,
     percent_of_pool: Math.round(percent * 10) / 10,
     override_threshold_pct: overridePct * 100,
-    hardstop_threshold_pct: hardstopPct * 100,
+    hardstop_threshold_pct: 100,
     projected_eom_usd: Math.round(projectedEom * 100) / 100,
   }
 }

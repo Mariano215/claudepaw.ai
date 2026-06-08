@@ -142,10 +142,10 @@ describe('runAgent gate enforcement', () => {
       { projectId: 'test-project', source: 'test' },
     )
 
-    expect(result.text).toMatch(/agent sdk pool/i)
+    expect(result.text).toMatch(/pool hard-stop reached/i)
     expect(result.text).toContain('$191.42')
     expect(result.text).toContain('$200')
-    expect(result.emptyReason).toMatch(/agent sdk pool exceeded/i)
+    expect(result.emptyReason).toMatch(/agent sdk pool .*hard-stop/i)
     expect(runtime.runAgentWithResolvedExecution).not.toHaveBeenCalled()
   })
 
@@ -174,6 +174,7 @@ describe('runAgent gate enforcement', () => {
     const runtimeCtx = callArgs[1] as any
     expect(runtimeCtx?.executionOverride?.provider).toBe('ollama')
   })
+
 
   it('pool gate refuse runs BEFORE per-project gate (account exhaust beats project allowance)', async () => {
     // Pool says refuse; project says allow — pool wins.
@@ -205,7 +206,7 @@ describe('runAgent gate enforcement', () => {
       { projectId: 'test-project', source: 'test' },
     )
 
-    expect(result.text).toMatch(/agent sdk pool/i)
+    expect(result.text).toMatch(/pool hard-stop reached/i)
     // Per-project gate was never consulted because pool refused first.
     expect(runtime.runAgentWithResolvedExecution).not.toHaveBeenCalled()
   })

@@ -133,17 +133,34 @@ const POOL_TTL_MS = 60_000
 
 /**
  * Fetches account-wide Anthropic Agent SDK Credit Pool status from the
- * dashboard. Cached 60s. Fails open on network errors (returns 0% spend,
- * action='allow') so a dashboard outage never blocks agent execution — the
- * per-project cost gate downstream remains the safety net.
+ * dashboard. Cached 60s. Fails open on network errors so a dashboard outage
+ * never blocks agent execution.
  */
-export async function getPoolGateStatus(): Promise<PoolGateStatus> {
+export async function getPoolGateStatus(
+  projectId?: string,
+  callerTag?: string,
+): Promise<PoolGateStatus> {
   const now = Date.now()
-  if (poolCache && now - poolCache.at < POOL_TTL_MS) return poolCache.value
+  const key = `${projectId ?? ''}|${callerTag ?? ''}`
+  const cached = poolCache.get(key)
+  if (cached && now - cached.at < POOL_TTL_MS) return cached.value
+
+  // Opportunistic eviction to keep the map bounded.
+  if (poolCache.size >= POOL_MAX_CACHE_ENTRIES) {
+    for (const [k, e] of poolCache) if (now - e.at >= POOL_TTL_MS) poolCache.delete(k)
+    if (poolCache.size >= POOL_MAX_CACHE_ENTRIES) {
+      const oldest = poolCache.keys().next().value
+      if (oldest !== undefined) poolCache.delete(oldest)
+    }
+  }
 
   const baseUrl = DASHBOARD_URL || 'http://127.0.0.1:3000'
   const token = BOT_API_TOKEN
-  const url = `${baseUrl}/api/v1/cost-gate/pool`
+  const params = new URLSearchParams()
+  if (projectId) params.set('projectId', projectId)
+  if (callerTag) params.set('callerTag', callerTag)
+  const qs = params.toString()
+  const url = `${baseUrl}/api/v1/cost-gate/pool${qs ? `?${qs}` : ''}`
 
   try {
     const res = await fetch(url, {
@@ -159,10 +176,10 @@ export async function getPoolGateStatus(): Promise<PoolGateStatus> {
       cap_usd: body.cap_usd ?? 200,
       percent_of_pool: body.percent_of_pool ?? 0,
       override_threshold_pct: body.override_threshold_pct ?? 80,
-      hardstop_threshold_pct: body.hardstop_threshold_pct ?? 95,
+      hardstop_threshold_pct: body.hardstop_threshold_pct ?? 100,
       projected_eom_usd: body.projected_eom_usd ?? 0,
     }
-    poolCache = { at: Date.now(), value }
+    poolCache = { at: now, value }
     return value
   } catch (err) {
     logger.warn({ err }, 'pool-gate-client: fetch failed, returning fail-open')

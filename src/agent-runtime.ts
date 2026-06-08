@@ -405,7 +405,11 @@ const claudeDesktopAdapter: AgentExecutionAdapter = {
       options: {
         abortController,
         cwd: CLAUDE_CWD,
-        maxTurns: 50,
+        // Caps the agentic loop per run. Lowered from 50 to bound worst-case
+        // per-run credit cost once headless runs bill the $200 pool (June 15
+        // 2026). Env-tunable so it can be raised without a deploy if a legit
+        // multi-step paw needs more turns.
+        maxTurns: Number(process.env.AGENT_SDK_MAX_TURNS ?? 15),
         permissionMode: 'bypassPermissions',
         settingSources: ['project', 'user'],
         ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),

@@ -65,6 +65,7 @@ function hasColumn(dbh: Database.Database, table: string, column: string): boole
   return cols.some(col => col.name === column)
 }
 
+
 export function ensureActionItemsResearchLink(dbh: Database.Database): void {
   if (!hasColumn(dbh, 'action_items', 'research_item_id')) {
     dbh.exec(`ALTER TABLE action_items ADD COLUMN research_item_id TEXT DEFAULT NULL`)

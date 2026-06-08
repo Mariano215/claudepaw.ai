@@ -120,7 +120,7 @@ describe('cost-gate flow integration', () => {
           json: async () => ({ active: true, reason: 'spike in billing', set_at: Date.now() }),
         }
       }
-      if (u.endsWith('/api/v1/cost-gate/pool')) {
+      if (u.includes('/api/v1/cost-gate/pool')) {
         return {
           ok: true,
           json: async () => ({
@@ -167,7 +167,7 @@ describe('cost-gate flow integration', () => {
           json: async () => ({ active: false }),
         }
       }
-      if (u.endsWith('/api/v1/cost-gate/pool')) {
+      if (u.includes('/api/v1/cost-gate/pool')) {
         return {
           ok: true,
           json: async () => ({
