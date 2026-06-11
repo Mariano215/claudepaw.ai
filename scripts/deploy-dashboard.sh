@@ -27,6 +27,18 @@ fi
 
 echo "Deploying dashboard to Hostinger..."
 
+# Refresh the generated trader-schema copy so the server build never imports
+# across the repo boundary (../../src does not exist on Hostinger -- caused
+# the Jun 8 2026 boot crash). Single source of truth stays src/trader/schema.ts.
+{
+  echo "// GENERATED FILE -- do not edit."
+  echo "// Source of truth: src/trader/schema.ts (repo root)."
+  echo "// Refreshed by scripts/deploy-dashboard.sh on every deploy so the server"
+  echo "// build never imports across the repo boundary (rootDir=src; /opt has no ../../src)."
+  cat src/trader/schema.ts
+} > server/src/trader-schema.gen.ts
+echo "✓ trader-schema.gen.ts refreshed"
+
 rsync -az --delete \
   server/public/ \
   "$DASHBOARD_HOST:$DASHBOARD_DIR/public/"
@@ -99,12 +111,31 @@ fi
 # Clean slate every deploy: delete from PM2, free port 3000 in a verify loop
 # (kills any orphan that would otherwise leave PM2 stuck in EADDRINUSE), then
 # start one fresh fork-mode process.
+# Build FIRST and fail the deploy on any compile error. The old version piped
+# tsc errors to /dev/null and restarted regardless, which shipped a broken
+# dist and took the dashboard down for 3 days (Jun 8-11 2026). Never silence
+# the remote build.
+if ! ssh -o ConnectTimeout=10 "$DASHBOARD_HOST" \
+  "cd $DASHBOARD_DIR && npm install --no-audit --no-fund >/dev/null && npx tsc"; then
+  echo "ABORT: remote TypeScript build FAILED -- server NOT restarted (old process left running)"
+  exit 1
+fi
+echo "✓ remote build OK"
+
 ssh -o ConnectTimeout=10 "$DASHBOARD_HOST" \
-  "cd $DASHBOARD_DIR && npm install 2>/dev/null && npx tsc 2>/dev/null; \
-   pm2 delete claudepaw-server 2>/dev/null; \
+  "cd $DASHBOARD_DIR && pm2 delete claudepaw-server 2>/dev/null; \
    for i in 1 2 3 4 5; do kill -9 \$(lsof -ti:3000) 2>/dev/null; sleep 1; lsof -ti:3000 >/dev/null 2>&1 || break; done; \
    pm2 start ecosystem.config.cjs 2>/dev/null; pm2 save 2>/dev/null"
-echo "✓ Server rebuilt and restarted"
+
+# Verify the server actually came up and is listening. PM2 'online' is not
+# proof of life (a module-load crash can leave a zombie): require an HTTP 200.
+sleep 4
+if ! ssh -o ConnectTimeout=10 "$DASHBOARD_HOST" \
+  "curl -s -o /dev/null -w '%{http_code}' -m 8 http://127.0.0.1:3000/api/v1/system-state/kill-switch -H \"x-dashboard-token: \$(grep '^DASHBOARD_API_TOKEN=' $DASHBOARD_DIR/.env | cut -d= -f2)\" | grep -q 200"; then
+  echo "ABORT: server restarted but kill-switch endpoint is NOT answering -- check pm2 logs claudepaw-server"
+  exit 1
+fi
+echo "✓ Server rebuilt, restarted, and answering"
 
 echo ""
 echo "✓ Dashboard deploy complete"

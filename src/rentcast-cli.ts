@@ -195,6 +195,17 @@ async function callRentcast(
   const text = await res.text()
   logCall(endpoint, query, res.status, Buffer.byteLength(text, 'utf8'))
 
+  if (res.status === 429 || res.status === 402) {
+    // RentCast plan quota exhausted on their side. Treat as budget_exhausted so
+    // collectors skip gracefully instead of crashing the paw cycle.
+    process.stderr.write(`rentcast-cli: quota exhausted on RentCast side (HTTP ${res.status} on ${endpoint})\n`)
+    return {
+      body: { budget_exhausted: true, calls_this_month: callsThisMonth, cap: MONTHLY_CAP },
+      fromCache: false,
+      budgetExhausted: true,
+      callsThisMonth,
+    }
+  }
   if (!res.ok) {
     throw new Error(`Rentcast ${endpoint} HTTP ${res.status}: ${text.slice(0, 200)}`)
   }
