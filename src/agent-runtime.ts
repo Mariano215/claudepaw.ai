@@ -593,9 +593,9 @@ function defaultModelForProvider(provider: ExecutionProvider, tier: ModelTier): 
     return 'openai/gpt-4o'
   }
   if (provider === 'ollama') {
-    // No universal default — user must configure a model.
-    // llama3.2 is a reasonable fallback for a locally-run Ollama instance.
-    return 'llama3.2'
+    // Default to a model actually installed on the localhost Ollama box
+    // (localhost:11434). Per-project execution_model overrides this.
+    return 'gemma4-8b-32k:latest'
   }
   if (provider === 'lm_studio') {
     // LM Studio serves whatever model is loaded; user should configure explicitly.
