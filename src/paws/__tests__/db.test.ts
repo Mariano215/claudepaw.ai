@@ -137,4 +137,31 @@ describe('paw_cycles table', () => {
     expect(cycle!.phase).toBe('failed')
     expect(cycle!.error).toBe('approval timeout — user did not respond')
   })
+
+  it('measures the approval timeout from card-send time, not cycle start', () => {
+    createPaw(db, {
+      id: 'p1',
+      project_id: 'default',
+      name: 'P1',
+      agent_id: 'a',
+      cron: '0 9 * * *',
+      config: testConfig, // approval_timeout_sec = 300
+    })
+
+    const cycleId = createCycle(db, 'p1')
+    updatePawStatus(db, 'p1', 'waiting_approval')
+    updateCycle(db, cycleId, { phase: 'decide' })
+    // Cycle started 10 min ago (a slow OBSERVE/ANALYZE/DECIDE run) ...
+    db.prepare('UPDATE paw_cycles SET started_at = ? WHERE id = ?').run(Date.now() - 10 * 60 * 1000, cycleId)
+    // ... but the approval card was sent just now, so the user still has the full window.
+    updateCycle(db, cycleId, {
+      state: { ...emptyCycleState, approval_requested: true, approval_requested_at: Date.now() },
+    })
+
+    const reaped = reapStalePawCycles(db)
+
+    expect(reaped.pawsUnstuck).toBe(0)
+    expect(getPaw(db, 'p1')!.status).toBe('waiting_approval')
+    expect(getCycle(db, cycleId)!.phase).toBe('decide')
+  })
 })

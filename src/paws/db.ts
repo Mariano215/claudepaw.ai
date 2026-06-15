@@ -226,17 +226,19 @@ export function reapStalePawCycles(
   //      Paw's configured approval_timeout_sec — treat the silent user as an
   //      implicit skip so the Paw can resume its normal schedule.
   const stuck = db.prepare(`
-    SELECT p.id, p.config, p.cron, p.next_run, c.id as cycle_id, c.phase as cycle_phase, c.started_at as cycle_started_at
+    SELECT p.id, p.config, p.cron, p.next_run, c.id as cycle_id, c.phase as cycle_phase,
+           c.started_at as cycle_started_at,
+           json_extract(c.state, '$.approval_requested_at') as approval_requested_at
       FROM paws p
       LEFT JOIN (
-        SELECT paw_id, id, phase, started_at
+        SELECT paw_id, id, phase, started_at, state
           FROM paw_cycles
          WHERE (paw_id, started_at) IN (
            SELECT paw_id, MAX(started_at) FROM paw_cycles GROUP BY paw_id
          )
       ) c ON c.paw_id = p.id
      WHERE p.status = 'waiting_approval'
-  `).all() as Array<{ id: string; config: string; cron: string; next_run: number; cycle_id: string | null; cycle_phase: string | null; cycle_started_at: number | null }>
+  `).all() as Array<{ id: string; config: string; cron: string; next_run: number; cycle_id: string | null; cycle_phase: string | null; cycle_started_at: number | null; approval_requested_at: number | null }>
 
   let pawsUnstuck = 0
   const now = Date.now()
@@ -262,7 +264,13 @@ export function reapStalePawCycles(
         const timeoutSec = typeof cfg?.approval_timeout_sec === 'number' && cfg.approval_timeout_sec > 0
           ? cfg.approval_timeout_sec
           : 3600 // default: 1h
-        if (now - row.cycle_started_at > timeoutSec * 1000) {
+        // Anchor the response window to when the approval card was sent, not to
+        // cycle start, so a slow cycle does not eat the user's time to respond.
+        // Fall back to cycle start for cycles written before this field existed.
+        const anchor = typeof row.approval_requested_at === 'number' && row.approval_requested_at > 0
+          ? row.approval_requested_at
+          : row.cycle_started_at
+        if (now - anchor > timeoutSec * 1000) {
           timeoutCycle.run(now, row.cycle_id)
           approvalTimedOut = true
         }

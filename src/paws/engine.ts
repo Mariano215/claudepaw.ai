@@ -146,6 +146,10 @@ export async function runPawCycle(
 
     if (actionFindings.length > 0) {
       state.approval_requested = true
+      // Stamp when the approval card is sent so the reaper measures the user's
+      // response window from card delivery, not from cycle start. Without this a
+      // slow OBSERVE/ANALYZE/DECIDE run silently consumes the whole timeout.
+      state.approval_requested_at = Date.now()
       updateCycle(db, cycleId, { state })
 
       // Mark paw as waiting_approval so the scheduler skips it until resolved

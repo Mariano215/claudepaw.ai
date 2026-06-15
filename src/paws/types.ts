@@ -70,6 +70,7 @@ export interface PawCycleState {
   analysis: string | null
   decisions: PawDecision[] | null
   approval_requested: boolean
+  approval_requested_at?: number | null
   approval_granted: boolean | null
   act_result: string | null
 }
