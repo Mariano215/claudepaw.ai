@@ -96,7 +96,7 @@ export function renderRepoItem(repo: ScoredRepo): string {
       <a href="${url}" target="_blank" style="color:#6b21a8;text-decoration:none;font-weight:600;font-size:14px;">${name}</a>
       <span style="display:inline-block;margin-left:8px;padding:2px 6px;background:${tagColor};color:#ffffff;font-size:10px;font-weight:600;border-radius:3px;vertical-align:middle;">${tagLabel}</span>
       <div style="color:#444;font-size:13px;margin-top:4px;line-height:1.5;">${blurb}</div>
-      <div style="color:#888;font-size:11px;margin-top:4px;">${stars}&#9733; &middot; ${lang} &middot; pushed ${pushed}</div>
+      <div style="color:#888;font-size:11px;margin-top:4px;">${stars} stars &middot; ${lang} &middot; pushed ${pushed}</div>
     </div>`
 }
 
@@ -152,7 +152,7 @@ function renderLinkedinSection(post: string): string {
           <tr>
             <td style="padding:10px 32px 6px 32px;">
               <h2 style="margin:0;font-size:18px;font-weight:700;color:#0a66c2;">
-                &#x1F4E3; LinkedIn post (copy &amp; paste)
+                LinkedIn post (copy and paste)
               </h2>
             </td>
           </tr>
