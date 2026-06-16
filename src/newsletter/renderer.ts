@@ -145,6 +145,24 @@ function getWeekday(): string {
   return new Date().toLocaleDateString('en-US', { weekday: 'long' })
 }
 
+// Last section of the email: a copy-paste-ready LinkedIn post. The email only
+// goes to the operator, so this gives a one-tap social draft per edition.
+function renderLinkedinSection(post: string): string {
+  return `
+          <tr>
+            <td style="padding:10px 32px 6px 32px;">
+              <h2 style="margin:0;font-size:18px;font-weight:700;color:#0a66c2;">
+                &#x1F4E3; LinkedIn post (copy &amp; paste)
+              </h2>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:10px 32px 24px 32px;">
+              <pre style="white-space:pre-wrap;word-wrap:break-word;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#1a1a1a;background:#f3f6f8;border:1px solid #d0d7de;border-radius:8px;padding:16px;margin:0;">${escapeHtml(post)}</pre>
+            </td>
+          </tr>`
+}
+
 // ---------------------------------------------------------------------------
 // Full newsletter renderer
 // ---------------------------------------------------------------------------
@@ -157,6 +175,7 @@ export interface RenderOptions {
   heroImageSrc: string
   heroArtDirection: string
   lookbackDays: number
+  linkedinPost?: string
 }
 
 export function renderNewsletter(template: string, opts: RenderOptions): string {
@@ -180,6 +199,7 @@ export function renderNewsletter(template: string, opts: RenderOptions): string 
   html = html.replace(/\{\{GITHUB_ITEMS\}\}/g, githubHtml)
   html = html.replace(/\{\{HERO_IMAGE_SRC\}\}/g, opts.heroImageSrc)
   html = html.replace(/\{\{HERO_ART_DIRECTION\}\}/g, escapeHtml(opts.heroArtDirection))
+  html = html.replace(/\{\{LINKEDIN_POST\}\}/g, opts.linkedinPost ? renderLinkedinSection(opts.linkedinPost) : '')
 
   return html
 }

@@ -567,7 +567,7 @@ async function runSingleScheduledTask(task: ScheduledTask, send: Sender): Promis
     }
 
     // ── Newsletter bypass: run deterministic code, no LLM ──
-    if (task.id === 'newsletter-monday' || task.id === 'newsletter-thursday') {
+    if (task.id === 'the-signal-monday' || task.id === 'the-signal-thursday') {
       // Advance next_run IMMEDIATELY to prevent re-execution on crash/restart
       // nextRun already computed above
       updateTaskAfterRun(task.id, 'running...', nextRun)
@@ -778,7 +778,7 @@ export async function runTaskNow(task: ScheduledTask, send: Sender): Promise<voi
     reportFeedItem(agentId, 'Task started (manual)', preview, task.project_id)
 
     // ── Newsletter bypass: same as cron path — run deterministic code, no LLM ──
-    if (task.id === 'newsletter-monday' || task.id === 'newsletter-thursday') {
+    if (task.id === 'the-signal-monday' || task.id === 'the-signal-thursday') {
       const result = await generateAndSendNewsletter(task.chat_id, psend)
       updateTaskAfterRun(task.id, result.slice(0, 2000), nextRun)
       reportAgentStatus(agentId, 'idle')

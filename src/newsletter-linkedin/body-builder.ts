@@ -283,3 +283,20 @@ export function buildBodyMarkdown(input: BuildLinkedinBodyInput): string {
   }
   return lines.join('\n')
 }
+
+/**
+ * LinkedIn-ready plain text for copy-paste out of the email. LinkedIn renders
+ * no markdown, so this strips the markers buildBodyMarkdown emits and leaves
+ * URLs naked (LinkedIn auto-links them). Dashes normalized to hyphens per
+ * house style.
+ */
+export function buildLinkedinPostPlain(input: BuildLinkedinBodyInput): string {
+  return buildBodyMarkdown(input)
+    .replace(/^#{1,6}\s+/gm, '')                  // headings -> plain lines
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 $2') // [text](url) -> text url
+    .replace(/\*\*([^*]+)\*\*/g, '$1')            // bold -> plain
+    .replace(/_([^_]+)_/g, '$1')                  // italic -> plain
+    .replace(/[—–]/g, '-')                        // em/en dash -> hyphen
+    .replace(/\n{3,}/g, '\n\n')                   // collapse blank runs
+    .trim()
+}

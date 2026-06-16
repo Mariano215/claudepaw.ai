@@ -26,7 +26,7 @@ import { sendEmail } from '../google/gmail.js'
 import { collectRepoCandidates, shortlistRepos } from './github-collector.js'
 import { curateRepos } from './github-curator.js'
 import { markReposSeen } from './github-dedup.js'
-import { buildLinkedinBody } from '../newsletter-linkedin/body-builder.js'
+import { buildLinkedinBody, buildLinkedinPostPlain } from '../newsletter-linkedin/body-builder.js'
 import { publishToLinkedin } from '../newsletter-linkedin/publisher.js'
 import {
   saveEditionSnapshot,
@@ -245,6 +245,16 @@ export async function generateAndSendNewsletter(
   }
   const template = readFileSync(templatePath, 'utf-8')
 
+  const linkedinPost = buildLinkedinPostPlain({
+    brief,
+    articles: accessibleByCategory,
+    github: githubPicks,
+    subscribeUrl: LINKEDIN_NEWSLETTER_URL,
+    byline: NEWSLETTER_BYLINE_NAME
+      ? { name: NEWSLETTER_BYLINE_NAME, url: NEWSLETTER_BYLINE_URL || undefined }
+      : undefined,
+  })
+
   const html = renderNewsletter(template, {
     articles: accessibleByCategory,
     github: githubPicks,
@@ -253,6 +263,7 @@ export async function generateAndSendNewsletter(
     heroImageSrc,
     heroArtDirection: artDirection,
     lookbackDays,
+    linkedinPost,
   })
 
   // 10. Send email (skip on republish flows)

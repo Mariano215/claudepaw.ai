@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700;800;900&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20260529">
+  <link rel="stylesheet" href="style.css?v=20260616">
   <!-- Leaflet OSS map library -- used by the Paw Broker Portfolio page (server/public/app.js initPortfolioPage). -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous">
   <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
@@ -1396,6 +1396,21 @@
         <div class="settings-section" id="settings-execution-section">
           <h3 class="settings-section-title">Execution Defaults</h3>
           <p class="settings-section-desc">Set the project-default execution waterfall. Changes save immediately. If a model is blank, the selected tier decides the provider default.</p>
+          <div class="settings-bulk-exec" id="settings-bulk-exec" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0 14px;padding:10px 12px;border:1px solid var(--border,#333);border-radius:8px;">
+            <span class="settings-bulk-exec__title" style="font-weight:600;">Bulk apply provider</span>
+            <select class="input" id="bulk-execution-provider" style="max-width:180px;">
+              <option value="claude_desktop">Claude Desktop</option>
+              <option value="codex_local">Codex Local</option>
+              <option value="anthropic_api">Anthropic API</option>
+              <option value="openai_api">OpenAI API</option>
+              <option value="openrouter_api">OpenRouter</option>
+              <option value="ollama">Ollama</option>
+              <option value="lm_studio">LM Studio</option>
+            </select>
+            <button class="btn-secondary" id="bulk-execution-apply">Apply to all non-pinned</button>
+            <label style="display:inline-flex;align-items:center;gap:4px;font-size:0.85em;"><input type="checkbox" id="bulk-execution-include-pinned" /> include pinned</label>
+            <span class="settings-status" id="bulk-execution-status"></span>
+          </div>
           <div class="settings-exec-waterfall" id="settings-execution-grid">
             <div class="settings-exec-stage">
               <div class="settings-exec-stage__label">1. Primary</div>
@@ -1482,6 +1497,7 @@
           </div>
           <p class="settings-section-note">Execution runs top to bottom. Secondary and fallback stages are only tried when the selected fallback policy allows automatic retry.</p>
           <div class="settings-actions" id="settings-actions">
+            <label class="settings-pin" style="display:inline-flex;align-items:center;gap:5px;margin-right:auto;font-size:0.9em;"><input type="checkbox" id="settings-execution-pinned" /> Pin (exclude from bulk)</label>
             <span class="settings-status" id="settings-status">Saved</span>
             <button class="btn-secondary" id="settings-reset-btn">Reset Project Defaults</button>
           </div>
@@ -1753,6 +1769,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20260529"></script>
+  <script src="app.js?v=20260616"></script>
 </body>
 </html>

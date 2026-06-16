@@ -10820,6 +10820,11 @@ function initSettingsPage() {
       });
     });
 
+    const bulkApplyBtn = document.getElementById('bulk-execution-apply');
+    if (bulkApplyBtn) bulkApplyBtn.addEventListener('click', applyBulkExecutionProvider);
+    const settingsPinBox = document.getElementById('settings-execution-pinned');
+    if (settingsPinBox) settingsPinBox.addEventListener('change', toggleProjectPin);
+
     _initKillSwitchDelegation();
   }
   populateExecutionSettingsLabels();
@@ -10840,6 +10845,7 @@ function getSettingsExecutionState(project) {
     model_fallback: project?.execution_model_fallback || EXECUTION_DEFAULTS.model_fallback,
     fallback_policy: normalizeFallbackPolicy(project?.fallback_policy) || EXECUTION_DEFAULTS.fallback_policy,
     model_tier: project?.model_tier || EXECUTION_DEFAULTS.model_tier,
+    pinned: Number(project?.execution_pinned) === 1,
   };
 }
 
@@ -11227,8 +11233,65 @@ function renderExecutionDefaults() {
   if (modelFallback) modelFallback.value = state.model_fallback;
   if (fallback) fallback.value = normalizeFallbackPolicy(state.fallback_policy);
   if (tier) tier.value = state.model_tier;
+  const pinnedBox = document.getElementById('settings-execution-pinned');
+  if (pinnedBox) pinnedBox.checked = state.pinned;
   setSettingsStatus('', 'Saved');
   syncSettingsExecutionModelUi();
+}
+
+async function applyBulkExecutionProvider() {
+  const sel = document.getElementById('bulk-execution-provider');
+  const statusEl = document.getElementById('bulk-execution-status');
+  if (!sel) return;
+  const provider = sel.value;
+  const includePinned = document.getElementById('bulk-execution-include-pinned')?.checked === true;
+  if (statusEl) { statusEl.dataset.state = 'saving'; statusEl.textContent = 'Applying...'; }
+  const result = await fetchFromAPI('/api/v1/projects/execution-provider/bulk', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, include_pinned: includePinned }),
+    credentials: 'include',
+  });
+  if (!result) {
+    if (statusEl) { statusEl.dataset.state = 'error'; statusEl.textContent = 'Apply failed'; }
+    return;
+  }
+  const applied = result.applied || [];
+  const skippedPinned = result.skipped_pinned || [];
+  applied.forEach((id) => {
+    const p = allProjects.find((x) => x.id === id);
+    if (p) {
+      p.execution_provider = provider;
+      if (provider === 'claude_desktop') { p.execution_model = null; p.execution_model_primary = null; }
+    }
+  });
+  if (settingsProject && applied.includes(settingsProject.id)) {
+    settingsProject.execution_provider = provider;
+    if (provider === 'claude_desktop') { settingsProject.execution_model = null; settingsProject.execution_model_primary = null; }
+    renderExecutionDefaults();
+  }
+  if (statusEl) {
+    statusEl.dataset.state = '';
+    statusEl.textContent = 'Set ' + provider + ' on ' + applied.length + ' project(s)'
+      + (skippedPinned.length ? (', skipped ' + skippedPinned.length + ' pinned') : '');
+  }
+}
+
+async function toggleProjectPin() {
+  if (!settingsProject) return;
+  const box = document.getElementById('settings-execution-pinned');
+  if (!box) return;
+  const pinned = box.checked;
+  const result = await fetchFromAPI('/api/v1/projects/' + encodeURIComponent(settingsProject.id) + '/pin', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pinned }),
+    credentials: 'include',
+  });
+  if (!result) { box.checked = !pinned; return; }
+  settingsProject.execution_pinned = result.execution_pinned;
+  const idx = allProjects.findIndex((p) => p.id === settingsProject.id);
+  if (idx >= 0) allProjects[idx].execution_pinned = result.execution_pinned;
 }
 
 function saveProjectSettings() {

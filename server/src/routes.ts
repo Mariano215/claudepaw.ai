@@ -49,6 +49,7 @@ import {
   listProjectCredentials, listAllProjectCredentials, setProjectCredential, deleteProjectCredentialKey, deleteProjectCredentialService,
   insertChatEvent,
 } from './db.js'
+import { selectBulkTargets } from './bulk-provider.js'
 import { notifyAgentMessage, broadcastFeedUpdate, broadcastToMac, getConnectedClients, getBotHealthSnapshots, broadcastTestUpdate, broadcastActionItemUpdate, broadcastActionItemChatResult, broadcastChatResponse, broadcastResearchChatResult, broadcastResearchInvestigationComplete, getBotGitHash } from './ws.js'
 import { logger } from './logger.js'
 import { getUpdateStatus, type UpdateStatus } from './system-update.js'
@@ -2579,6 +2580,87 @@ router.put('/projects/:id/settings', requireProjectRole('editor'), (req: Request
     })
     const saved = getProjectSettingsById(id)
     res.json({ ...(saved ?? {}), page_overrides: saved?.page_overrides ? JSON.parse(saved.page_overrides) : null })
+  } catch (err: any) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+// Bulk-set the execution provider across projects. Admin-only: a cross-project
+// system change. Pinned projects are skipped unless include_pinned is set.
+// Each applied project is synced to the bot over WS so execution changes live.
+router.post('/projects/execution-provider/bulk', requireAdmin, (req: Request, res: Response) => {
+  try {
+    const body = req.body as Record<string, unknown>
+    const provider = body.provider ? String(body.provider) : ''
+    if (!EXECUTION_PROVIDERS.has(provider)) {
+      res.status(400).json({ error: `provider must be one of: ${Array.from(EXECUTION_PROVIDERS).join(', ')}` })
+      return
+    }
+    const includePinned = body.include_pinned === true
+    const projectIds = Array.isArray(body.project_ids) ? body.project_ids.map((v) => String(v)) : null
+
+    const all = getAllProjectsWithSettings()
+    const selection = selectBulkTargets(
+      all.map((p) => ({ id: p.id, execution_pinned: (p as Partial<{ execution_pinned: number | null }>).execution_pinned })),
+      { projectIds, includePinned },
+    )
+
+    // claude_desktop ignores per-call models and the settings validator rejects
+    // claude_desktop + a model, so clear any stale local model on the way over.
+    const clearModel = provider === 'claude_desktop'
+    for (const id of selection.applied) {
+      upsertProjectSettingsInDb({
+        project_id: id,
+        execution_provider: provider,
+        ...(clearModel ? { execution_model: '', execution_model_primary: '' } : {}),
+      })
+      const saved = getProjectSettingsById(id)
+      broadcastToMac({
+        type: 'project_settings_sync',
+        project_id: id,
+        settings: {
+          theme_id: saved?.theme_id ?? null,
+          primary_color: saved?.primary_color ?? null,
+          accent_color: saved?.accent_color ?? null,
+          sidebar_color: saved?.sidebar_color ?? null,
+          logo_path: saved?.logo_path ?? null,
+          execution_provider: saved?.execution_provider ?? null,
+          execution_provider_secondary: saved?.execution_provider_secondary ?? null,
+          execution_provider_fallback: saved?.execution_provider_fallback ?? null,
+          execution_model: saved?.execution_model ?? null,
+          execution_model_primary: saved?.execution_model_primary ?? null,
+          execution_model_secondary: saved?.execution_model_secondary ?? null,
+          execution_model_fallback: saved?.execution_model_fallback ?? null,
+          fallback_policy: saved?.fallback_policy ?? null,
+          model_tier: saved?.model_tier ?? null,
+        },
+      })
+    }
+
+    res.json({
+      provider,
+      applied: selection.applied,
+      skipped_pinned: selection.skippedPinned,
+      skipped_unknown: selection.skippedUnknown,
+    })
+  } catch (err: any) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+// Pin/unpin a project so bulk provider changes skip it. Admin-only. Server-side
+// metadata: not synced to the bot (the bot never runs bulk changes).
+router.patch('/projects/:id/pin', requireAdmin, (req: Request, res: Response) => {
+  const id = param(req, 'id')
+  if (!getProjectById(id)) {
+    res.status(404).json({ error: 'project not found' })
+    return
+  }
+  const body = req.body as Record<string, unknown>
+  const pinned = body.pinned === true || body.pinned === 1 || body.pinned === '1'
+  try {
+    upsertProjectSettingsInDb({ project_id: id, execution_pinned: pinned ? 1 : 0 })
+    res.json({ project_id: id, execution_pinned: pinned ? 1 : 0 })
   } catch (err: any) {
     res.status(400).json({ error: err.message })
   }

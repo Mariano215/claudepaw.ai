@@ -72,4 +72,28 @@ describe('renderNewsletter', () => {
     expect(html).toContain('Test Zero-Day Discovery')
     expect(html).toContain('data:image/jpeg;base64,abc')
   })
+
+  it('renders the LinkedIn post as the copy-paste section, HTML-escaped', () => {
+    const base = {
+      articles: { cyber: [makeArticle()], ai: [makeArticle({ category: 'ai' })], research: [makeArticle({ category: 'research' })] } as Record<CategoryId, ScoredArticle[]>,
+      github: [],
+      executiveInsight: 'i',
+      executiveImplication: 'm',
+      heroImageSrc: 'x',
+      heroArtDirection: 'y',
+      lookbackDays: 3,
+    }
+
+    const withPost = renderNewsletter('{{LINKEDIN_POST}}', {
+      ...base,
+      linkedinPost: 'Hot take on AI & security\nhttps://example.com',
+    })
+    expect(withPost).not.toContain('{{LINKEDIN_POST}}')
+    expect(withPost).toContain('LinkedIn post (copy')
+    expect(withPost).toContain('Hot take on AI &amp; security') // escaped
+    expect(withPost).toContain('https://example.com')
+
+    // No post -> placeholder removed, no empty section left behind
+    expect(renderNewsletter('A{{LINKEDIN_POST}}B', base)).toBe('AB')
+  })
 })
