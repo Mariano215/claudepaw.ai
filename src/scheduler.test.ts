@@ -290,14 +290,14 @@ describe('tracker lifecycle', () => {
     expect(vi.mocked(startRequest)).not.toHaveBeenCalled()
   })
 
-  it('bypass path (newsletter-monday): startRequest is NOT called', async () => {
+  it('bypass path (the-signal-monday): startRequest is NOT called', async () => {
     const { startRequest } = await import('./telemetry.js')
     const { generateAndSendNewsletter } = await import('./newsletter/index.js')
     vi.mocked(generateAndSendNewsletter).mockResolvedValueOnce('newsletter sent')
 
     const { getDueTasks } = await import('./db.js')
     vi.mocked(getDueTasks).mockReturnValueOnce([
-      makeTask({ id: 'newsletter-monday', prompt: 'send newsletter' }),
+      makeTask({ id: 'the-signal-monday', prompt: 'send newsletter' }),
     ])
 
     const send = vi.fn(async () => {})

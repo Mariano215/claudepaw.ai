@@ -23,8 +23,12 @@ const EXPECTED_SUFFIXES: Record<string, string[]> = {
   'linkedin':  ['followers', 'impressions', 'engagement'],
   'website':   ['sessions', 'users', 'bounce'],
   'github':    ['stars', 'forks', 'issues'],
-  'meta':      ['likes', 'reach', 'engagement'],
-  'instagram': ['followers', 'reach', 'engagement'],
+  // reach/engagement dropped: Meta removed page insight metrics in Graph v22
+  // and IG insights need instagram_manage_insights (Meta App Review). They are
+  // still emitted as unavailable placeholders below, just not "expected" so they
+  // no longer drive a permanent degraded/escalated status.
+  'meta':      ['likes', 'followers'],
+  'instagram': ['followers', 'media'],
   'shopify':   ['orders', 'revenue', 'visitors'],
   'tiktok':    ['followers', 'views', 'likes'],
 }
@@ -282,33 +286,13 @@ async function collectMeta(pageToken: string, pageId: string, prefix: string): P
       { key: `${prefix}-followers`, value: data.followers_count ?? 0 },
     ]
 
-    // Try page insights for reach + engagement (requires page_read_engagement scope)
-    try {
-      const insightsUrl = `https://graph.facebook.com/v22.0/${pageId}/insights?metric=page_impressions_unique,page_post_engagements&period=day`
-      const insRes = await quotaFetch('meta', insightsUrl, { endpoint: '/page/insights', headers: { 'Authorization': `Bearer ${pageToken}` } })
-      if (insRes.ok) {
-        const insData = await insRes.json() as { data?: { name?: string; values?: { value: number }[] }[] }
-        const series = insData.data ?? []
-        const reachSeries = series.find(s => s.name === 'page_impressions_unique')?.values
-        const engSeries   = series.find(s => s.name === 'page_post_engagements')?.values
-        const reach = reachSeries && reachSeries.length > 0 ? reachSeries[reachSeries.length - 1].value : null
-        const eng   = engSeries   && engSeries.length   > 0 ? engSeries[engSeries.length - 1].value     : null
-        entries.push(reach !== null
-          ? { key: `${prefix}-reach`, value: reach }
-          : unavailableEntry(prefix, 'reach', 'Meta page_impressions_unique unavailable'))
-        entries.push(eng !== null
-          ? { key: `${prefix}-engagement`, value: eng }
-          : unavailableEntry(prefix, 'engagement', 'Meta page_post_engagements unavailable'))
-      } else {
-        const reason = `Meta insights ${insRes.status} - need page_read_engagement scope`
-        entries.push(unavailableEntry(prefix, 'reach',      reason))
-        entries.push(unavailableEntry(prefix, 'engagement', reason))
-      }
-    } catch (insErr) {
-      logger.warn({ insErr, prefix }, 'Meta page insights unavailable')
-      entries.push(unavailableEntry(prefix, 'reach',      'Meta insights API error'))
-      entries.push(unavailableEntry(prefix, 'engagement', 'Meta insights API error'))
-    }
+    // Reach/engagement: Meta removed page_impressions_unique / page_post_engagements
+    // in Graph v22 (returns #100 invalid metric). No scope brings them back, so we
+    // emit static unavailable placeholders instead of burning a call every cycle.
+    // ponytail: re-add a live insights call if Meta ships replacement page metrics.
+    const metaReason = 'Meta removed page reach/engagement metrics in Graph v22'
+    entries.push(unavailableEntry(prefix, 'reach',      metaReason))
+    entries.push(unavailableEntry(prefix, 'engagement', metaReason))
 
     clearError(prefix)
     return entries
@@ -335,31 +319,14 @@ async function collectInstagram(igUserId: string, accessToken: string, prefix: s
       { key: `${prefix}-media`,     value: data.media_count ?? 0 },
     ]
 
-    // Try insights for reach + engagement (accounts/total_interactions)
-    try {
-      const insightsUrl = `https://graph.facebook.com/v22.0/${igUserId}/insights?metric=reach,accounts_engaged&period=day&metric_type=total_value`
-      const insRes = await quotaFetch('instagram', insightsUrl, { endpoint: '/ig/insights', headers: { 'Authorization': `Bearer ${accessToken}` } })
-      if (insRes.ok) {
-        const insData = await insRes.json() as { data?: { name?: string; total_value?: { value: number } }[] }
-        const series = insData.data ?? []
-        const reach = series.find(s => s.name === 'reach')?.total_value?.value ?? null
-        const eng   = series.find(s => s.name === 'accounts_engaged')?.total_value?.value ?? null
-        entries.push(reach !== null
-          ? { key: `${prefix}-reach`, value: reach }
-          : unavailableEntry(prefix, 'reach', 'Instagram reach unavailable'))
-        entries.push(eng !== null
-          ? { key: `${prefix}-engagement`, value: eng }
-          : unavailableEntry(prefix, 'engagement', 'Instagram accounts_engaged unavailable'))
-      } else {
-        const reason = `Instagram insights ${insRes.status} - check permissions`
-        entries.push(unavailableEntry(prefix, 'reach',      reason))
-        entries.push(unavailableEntry(prefix, 'engagement', reason))
-      }
-    } catch (insErr) {
-      logger.warn({ insErr, prefix }, 'Instagram insights unavailable')
-      entries.push(unavailableEntry(prefix, 'reach',      'Instagram insights API error'))
-      entries.push(unavailableEntry(prefix, 'engagement', 'Instagram insights API error'))
-    }
+    // Reach/engagement: IG insights (reach, accounts_engaged) require the
+    // instagram_manage_insights permission, which is gated behind Meta App Review
+    // (Advanced Access). Until that is approved the call returns #10, so we emit
+    // static unavailable placeholders instead of calling every cycle.
+    // ponytail: drop these placeholders and restore the live call once App Review grants the scope.
+    const igReason = 'IG reach/engagement need instagram_manage_insights (Meta App Review)'
+    entries.push(unavailableEntry(prefix, 'reach',      igReason))
+    entries.push(unavailableEntry(prefix, 'engagement', igReason))
 
     clearError(prefix)
     return entries
