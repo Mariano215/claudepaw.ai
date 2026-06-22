@@ -136,31 +136,13 @@ const POOL_TTL_MS = 60_000
  * dashboard. Cached 60s. Fails open on network errors so a dashboard outage
  * never blocks agent execution.
  */
-export async function getPoolGateStatus(
-  projectId?: string,
-  callerTag?: string,
-): Promise<PoolGateStatus> {
+export async function getPoolGateStatus(): Promise<PoolGateStatus> {
   const now = Date.now()
-  const key = `${projectId ?? ''}|${callerTag ?? ''}`
-  const cached = poolCache.get(key)
-  if (cached && now - cached.at < POOL_TTL_MS) return cached.value
-
-  // Opportunistic eviction to keep the map bounded.
-  if (poolCache.size >= POOL_MAX_CACHE_ENTRIES) {
-    for (const [k, e] of poolCache) if (now - e.at >= POOL_TTL_MS) poolCache.delete(k)
-    if (poolCache.size >= POOL_MAX_CACHE_ENTRIES) {
-      const oldest = poolCache.keys().next().value
-      if (oldest !== undefined) poolCache.delete(oldest)
-    }
-  }
+  if (poolCache && now - poolCache.at < POOL_TTL_MS) return poolCache.value
 
   const baseUrl = DASHBOARD_URL || 'http://127.0.0.1:3000'
   const token = BOT_API_TOKEN
-  const params = new URLSearchParams()
-  if (projectId) params.set('projectId', projectId)
-  if (callerTag) params.set('callerTag', callerTag)
-  const qs = params.toString()
-  const url = `${baseUrl}/api/v1/cost-gate/pool${qs ? `?${qs}` : ''}`
+  const url = `${baseUrl}/api/v1/cost-gate/pool`
 
   try {
     const res = await fetch(url, {
