@@ -145,7 +145,7 @@ describe('runAgent gate enforcement', () => {
     expect(result.text).toMatch(/pool hard-stop reached/i)
     expect(result.text).toContain('$191.42')
     expect(result.text).toContain('$200')
-    expect(result.emptyReason).toMatch(/agent sdk pool .*hard-stop/i)
+    expect(result.emptyReason).toMatch(/agent sdk pool exceeded/i)
     expect(runtime.runAgentWithResolvedExecution).not.toHaveBeenCalled()
   })
 
