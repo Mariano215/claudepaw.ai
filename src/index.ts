@@ -319,6 +319,16 @@ async function main(): Promise<void> {
   runDecaySweep()
   setInterval(runDecaySweep, 24 * 60 * 60 * 1000)
 
+  // 4-a2. Example Company social analytics ingest (deterministic, no LLM). Appends a
+  //       daily follower/engagement snapshot to the Social_Media_Data sheet so the
+  //       weekly social report stops drifting. Disable with FOP_SOCIAL_INGEST_ENABLED=false.
+  try {
+    const { startSocialIngestSchedule } = await import('./social/meta-insights-ingest.js')
+    startSocialIngestSchedule()
+  } catch (err) {
+    logger.error({ err }, '[fop-social-ingest] Failed to start -- continuing')
+  }
+
   // 4a. Remediations engine -- auto-fixes for common issues. Every 5 min.
   //     See src/remediations/ for registered remediations.
   try {

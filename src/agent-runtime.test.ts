@@ -657,7 +657,9 @@ provider: openai_api
 
   it('rejects Opus on anthropic_api provider (pool-counting → whitelist enforced)', () => {
     expect(() => resolveExecutionSettings({
-      executionOverride: { provider: 'anthropic_api', model: 'claude-opus-4-1' },
+      // Use neutral fixture matching line 711 pattern; opus-4-1 retires Aug 5 2026.
+      // Whitelist rejects all Opus on anthropic_api regardless of dated id.
+      executionOverride: { provider: 'anthropic_api', model: 'claude-opus-4-retired' },
     })).toThrow(/not allowed.*Opus is banned/)
   })
 
@@ -665,7 +667,7 @@ provider: openai_api
     // claude_desktop doesn't honor the model field — Anthropic picks server-side.
     // Whitelist is anthropic_api-only to avoid breaking historical agent configs.
     const resolved = resolveExecutionSettings({
-      executionOverride: { provider: 'claude_desktop', modelPrimary: 'claude-opus-4' },
+      executionOverride: { provider: 'claude_desktop', modelPrimary: 'claude-opus-4-8' },
     })
     expect(resolved.provider).toBe('claude_desktop')
   })
@@ -682,7 +684,7 @@ provider: openai_api
 
   it('allows Opus on non-pool-counting providers (openrouter, ollama bypass) since billing is separate', () => {
     const resolved = resolveExecutionSettings({
-      executionOverride: { provider: 'openrouter_api', model: 'anthropic/claude-opus-4' },
+      executionOverride: { provider: 'openrouter_api', model: 'anthropic/claude-opus-4-8' },
     })
     // Not pool-counting → no whitelist enforcement (you pay openrouter, not Anthropic pool).
     expect(resolved.provider).toBe('openrouter_api')
@@ -703,8 +705,12 @@ provider: openai_api
   })
 
   it('rejects unknown Anthropic family (e.g. retired Sonnet 4) on pool-counting providers', () => {
+    // Fixture is a deliberately non-whitelisted id (no allowed family substring) so the
+    // rejection path fires. Not a real model — keep it off any active id to avoid an
+    // accidental green when the whitelist changes, and off dated retired ids so the
+    // platform-tracker scanner stops flagging test fixtures as live deprecations.
     expect(() => resolveExecutionSettings({
-      executionOverride: { provider: 'anthropic_api', model: 'claude-sonnet-4-20250514' },
+      executionOverride: { provider: 'anthropic_api', model: 'claude-sonnet-4-retired' },
     })).toThrow(/not allowed/)
   })
 })
