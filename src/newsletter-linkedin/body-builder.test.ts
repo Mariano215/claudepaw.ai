@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildLinkedinBody, buildBodyMarkdown } from './body-builder.js'
+import { buildLinkedinBody, buildBodyMarkdown, buildLinkedinPostPlain } from './body-builder.js'
 import type {
   ScoredArticle,
   ScoredRepo,
@@ -270,5 +270,53 @@ describe('buildBodyMarkdown', () => {
     expect(md).toContain('## Executive insight')
     expect(md).not.toContain('## Cybersecurity this week')
     expect(md).not.toContain('## GitHub picks')
+  })
+})
+
+describe('buildLinkedinPostPlain', () => {
+  it('is a short teaser, not a full newsletter dump', () => {
+    const post = buildLinkedinPostPlain(makeInput())
+    expect(post.length).toBeLessThan(1300)
+    expect(post).toContain('The Signal')
+    // does not serialize the whole brief / recommended action
+    expect(post).not.toContain('Recommended action')
+    expect(post).not.toContain('GitHub picks worth')
+  })
+
+  it('includes the fixed hashtag set', () => {
+    const post = buildLinkedinPostPlain(makeInput())
+    expect(post).toContain('#Cybersecurity')
+    expect(post).toContain('#AI')
+    expect(post).toContain('#ThreatIntel')
+  })
+
+  it('drives subscriptions when a subscribe URL is provided', () => {
+    const url = 'https://example.com/subscribe'
+    const post = buildLinkedinPostPlain(makeInput({ subscribeUrl: url }))
+    expect(post).toContain(`Subscribe for the next edition: ${url}`)
+  })
+
+  it('emits plain text with no markdown markers or dashes', () => {
+    const post = buildLinkedinPostPlain(
+      makeInput({ brief: makeBrief({ insight: 'AI risk is rising - fast.' }) }),
+    )
+    expect(post).not.toMatch(/\*\*|__|\[.+\]\(/) // no bold/italic/md links
+    expect(post).not.toMatch(/[—–]/)             // no em/en dashes
+  })
+
+  it('only advertises categories that have articles', () => {
+    const post = buildLinkedinPostPlain(
+      makeInput({
+        articles: {
+          cyber: [makeArticle({ title: 'Cyber A', url: 'https://c.example/a' })],
+          ai: [],
+          research: [],
+        },
+        github: [],
+      }),
+    )
+    expect(post).toContain('cybersecurity')
+    expect(post).not.toContain(', and research')
+    expect(post).not.toContain('GitHub projects')
   })
 })

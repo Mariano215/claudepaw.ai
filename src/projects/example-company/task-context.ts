@@ -137,6 +137,27 @@ async function buildContentPlanContext(): Promise<string> {
   ].join('\n')
 }
 
+async function buildBlogDraftContext(): Promise<string> {
+  const auth = await withGoogleAuth()
+  const sheets = new SheetsModule()
+
+  const strategyNow = await sheets.read(auth, STRATEGY_SHEET, 'NOW!A1:H20')
+  // Blog prompt requires festival rows verified against the tracker before
+  // calling anything "selected"/"screening", so pre-fetch them too.
+  const festivalRows = await sheets.read(auth, EVELYN_FESTIVAL_SHEET, 'Example Film Festival List!A1:J20')
+
+  return [
+    '## Structured Google Context',
+    '### Strategy NOW Sheet Sample (pick the topic from the P0 priority here)',
+    formatTable(strategyNow),
+    '',
+    '### Example Film Festival Tracker Sample (column G = Submission status)',
+    formatTable(festivalRows, 12),
+    '',
+    'Use the structured context above as the source of truth for the strategy NOW tab and festival statuses. Do not rerun CLI commands for sheet access.',
+  ].join('\n')
+}
+
 async function buildFestivalScanContext(): Promise<string> {
   const auth = await withGoogleAuth()
   const sheets = new SheetsModule()
@@ -157,5 +178,6 @@ export async function buildExampleCompanyTaskContext(taskId: string): Promise<st
   if (taskId === 'fop-weekly-briefing') return await buildBriefingContext()
   if (taskId === 'fop-weekly-content-plan') return await buildContentPlanContext()
   if (taskId === 'fop-weekly-festival-scan') return await buildFestivalScanContext()
+  if (taskId === 'fop-weekly-blog-draft') return await buildBlogDraftContext()
   return null
 }

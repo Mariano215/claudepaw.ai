@@ -284,19 +284,50 @@ export function buildBodyMarkdown(input: BuildLinkedinBodyInput): string {
   return lines.join('\n')
 }
 
+/** Fixed hashtag set for The Signal. Plain LinkedIn post, no markdown. */
+const SIGNAL_HASHTAGS = '#Cybersecurity #AI #InfoSec #ArtificialIntelligence #ThreatIntel'
+
+/** First sentence of a block of prose, stripped of HTML and dashes. */
+function firstSentence(text: string): string {
+  const clean = stripHtml(text).replace(/[—–]/g, '-')
+  return clean.split(/(?<=[.!?])\s/)[0] || clean
+}
+
 /**
- * LinkedIn-ready plain text for copy-paste out of the email. LinkedIn renders
- * no markdown, so this strips the markers buildBodyMarkdown emits and leaves
- * URLs naked (LinkedIn auto-links them). Dashes normalized to hyphens per
- * house style.
+ * Short, copy-paste LinkedIn teaser for the email footer. Promotes the current
+ * edition and drives subscriptions: it does NOT dump the whole newsletter.
+ * LinkedIn renders no markdown, so output is plain text with a naked URL
+ * (LinkedIn auto-links it). Dashes normalized to hyphens per house style.
+ * Stays well under LinkedIn's 3000-char post limit.
+ *
+ * Builds a topics line from whichever categories actually have articles so the
+ * teaser never advertises an empty section.
  */
 export function buildLinkedinPostPlain(input: BuildLinkedinBodyInput): string {
-  return buildBodyMarkdown(input)
-    .replace(/^#{1,6}\s+/gm, '')                  // headings -> plain lines
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 $2') // [text](url) -> text url
-    .replace(/\*\*([^*]+)\*\*/g, '$1')            // bold -> plain
-    .replace(/_([^_]+)_/g, '$1')                  // italic -> plain
-    .replace(/[—–]/g, '-')                        // em/en dash -> hyphen
-    .replace(/\n{3,}/g, '\n\n')                   // collapse blank runs
-    .trim()
+  const hook = clamp(firstSentence(input.brief.insight), 280)
+
+  const topics: string[] = []
+  if (input.articles.cyber.length) topics.push('cybersecurity')
+  if (input.articles.ai.length) topics.push('AI')
+  if (input.articles.research.length) topics.push('research')
+  // Oxford-style join: "a, b, and c"
+  const topicList =
+    topics.length <= 1
+      ? topics[0] ?? 'cybersecurity and AI'
+      : `${topics.slice(0, -1).join(', ')}, and ${topics[topics.length - 1]}`
+  const reposNote = input.github.length ? ', plus GitHub projects worth a look' : ''
+
+  const lines: string[] = [
+    "This week's edition of The Signal is out.",
+    '',
+    hook,
+    '',
+    `Inside: the week in ${topicList}${reposNote}.`,
+  ]
+  if (input.subscribeUrl) {
+    lines.push('', `Subscribe for the next edition: ${input.subscribeUrl}`)
+  }
+  lines.push('', SIGNAL_HASHTAGS)
+
+  return lines.join('\n').trim()
 }
