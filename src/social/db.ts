@@ -219,6 +219,15 @@ export function approvePost(id: string): boolean {
   return info.changes > 0
 }
 
+// Auto-publish path: flip a draft straight to approved + set scheduled_at so the
+// scheduler's publishDueSocialPosts() tick posts it. The tick gap is the pull-back window.
+export function markApprovedScheduled(id: string, scheduledAt: number): boolean {
+  const info = getDb()
+    .prepare("UPDATE social_posts SET status = 'approved', scheduled_at = ? WHERE id = ? AND status = 'draft'")
+    .run(scheduledAt, id)
+  return info.changes > 0
+}
+
 export function rejectPost(id: string): boolean {
   const info = getDb()
     .prepare("UPDATE social_posts SET status = 'rejected' WHERE id = ? AND status IN ('draft', 'approved')")

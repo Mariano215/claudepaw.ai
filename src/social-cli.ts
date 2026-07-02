@@ -14,7 +14,7 @@
 
 import { initDatabase } from './db.js'
 import { initCredentialStore } from './credentials.js'
-import { initSocial, draft, getPost, listDrafts, listPosts, getPostStats, approveAndPublish, reject } from './social/index.js'
+import { initSocial, draft, getPost, listDrafts, listPosts, getPostStats, approveAndPublish, autoApproveAndSchedule, reject } from './social/index.js'
 import type { Platform, PostStatus } from './social/types.js'
 import { BOT_TOKEN } from './config.js'
 
@@ -46,8 +46,15 @@ async function sendTelegramDraftNotification(postId: string, chatId: string): Pr
   const platformLabel = post.platform === 'twitter' ? 'X (Twitter)' : post.platform === 'youtube' ? 'YouTube' : 'LinkedIn'
   const preview = post.content.length > 280 ? post.content.slice(0, 277) + '...' : post.content
 
+  // Auto-approve + queue for the scheduler tick. No human tap. The tick gap
+  // (up to ~60s) is a pull-back window: reply or use the dashboard to pull it.
+  const { queued } = autoApproveAndSchedule(post.id)
+  const header = queued
+    ? `Auto-approved and queued: ${platformLabel} post [${post.id}]. Posts on the next scheduler tick. Reply or use the dashboard to pull it first.`
+    : `${platformLabel} post [${post.id}] (status: ${getPost(post.id)?.status ?? 'unknown'}) -- already handled, no action taken.`
+
   // Plain text only -- no HTML, no markdown, no entity codes.
-  let text = `${platformLabel} Draft [${post.id}]\n\n${preview}`
+  let text = `${header}\n\n${preview}`
 
   if (post.platform === 'youtube') {
     // For YouTube, CTA holds JSON metadata (title, tags, visibility, etc.)
@@ -62,23 +69,13 @@ async function sendTelegramDraftNotification(postId: string, chatId: string): Pr
   }
   if (post.suggested_time) text += `\nTime: ${post.suggested_time}`
 
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: '\u2705 Approve & Post', callback_data: `social:approve:${post.id}` },
-        { text: '\u274c Reject', callback_data: `social:reject:${post.id}` },
-      ],
-    ],
-  }
-
   const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       chat_id: chatId,
       text,
-      // No parse_mode -- plain text only.
-      reply_markup: keyboard,
+      // No parse_mode -- plain text only. Informational notice, no buttons.
     }),
   })
 
@@ -88,7 +85,7 @@ async function sendTelegramDraftNotification(postId: string, chatId: string): Pr
     process.exit(1)
   }
 
-  console.log(`Draft ${postId} sent to chat ${chatId} for approval`)
+  console.log(`Draft ${postId} auto-queued; informational notice sent to chat ${chatId}`)
 }
 
 async function main(): Promise<void> {
@@ -126,7 +123,7 @@ async function main(): Promise<void> {
       console.log(`Content: ${post.content}`)
       if (post.cta) console.log(`CTA: ${post.cta}`)
       if (post.suggested_time) console.log(`Time: ${post.suggested_time}`)
-      console.log(`\nTo send for approval: tsx src/social-cli.ts notify ${post.id} <chat_id>`)
+      console.log(`\nTo auto-queue + notify: tsx src/social-cli.ts notify ${post.id} <chat_id>`)
       break
     }
 
@@ -206,7 +203,7 @@ Commands:
   approve <id>
   reject <id>
   stats
-  notify <id> [chat_id]  - Send draft to Telegram with approve/reject buttons`)
+  notify <id> [chat_id]  - Auto-approve + queue the draft, send a plain informational notice`)
       break
   }
 }

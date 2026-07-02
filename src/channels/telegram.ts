@@ -561,7 +561,6 @@ export class TelegramChannel implements Channel {
         return
       }
 
-
       // --- Paw finding actions: pf:fix:{id} | pf:dash:{id} | pf:dismiss:{id} | pf:dismiss-all:{pawId} | pf:dash-all:{pawId} ---
       if (data.startsWith('pf:')) {
         const parts = data.split(':')

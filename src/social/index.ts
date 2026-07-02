@@ -7,6 +7,7 @@ import {
   createDraft,
   getPost,
   approvePost,
+  markApprovedScheduled,
   rejectPost,
   markPublished,
   markFailed,
@@ -44,14 +45,35 @@ export async function approveAndPublish(postId: string): Promise<{
   if (!post) {
     return { post: { id: postId } as SocialPost, published: false, error: 'Post not found' }
   }
-  if (post.status !== 'draft') {
+  // Idempotent for manual/dashboard taps on already-approved (auto-queued) posts.
+  if (post.status !== 'draft' && post.status !== 'approved') {
     return { post, published: false, error: `Post is ${post.status}, not draft` }
   }
-  approvePost(postId)
+  if (post.status === 'draft') approvePost(postId)
   reportFeedItem('social', 'Post approved', `[${post.platform}] ${post.id}`)
   const result = await publish(postId)
   const updatedPost = getPost(postId)!
   return { post: updatedPost, published: result, error: updatedPost.error ?? undefined }
+}
+
+/**
+ * Auto-publish entrypoint: mark a fresh draft approved and queue it for the
+ * scheduler's publishDueSocialPosts() tick. No human tap. Returns the (updated)
+ * post plus whether the transition happened (false if the row was not a draft).
+ */
+export function autoApproveAndSchedule(
+  postId: string,
+  scheduledAt: number = Date.now(),
+): { queued: boolean; post?: SocialPost } {
+  const post = getPost(postId)
+  if (!post) return { queued: false }
+  if (post.status !== 'draft') return { queued: false, post }
+  const queued = markApprovedScheduled(postId, scheduledAt)
+  if (queued) {
+    reportFeedItem('social', 'Post auto-approved + queued', `[${post.platform}] ${post.id}`)
+    reportMetric('social', 'posts_auto_queued', 1)
+  }
+  return { queued, post: getPost(postId) }
 }
 
 export async function publish(postId: string): Promise<boolean> {
