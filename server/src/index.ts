@@ -63,6 +63,13 @@ app.use(helmet({
     }
   }
 }))
+// 8mb parser ONLY for bot-internal ingest (a per-tick sync payload with
+// hundreds of rows plus nested detail objects exceeded 1mb, so every sync
+// 500ed and the dashboard sync tables silently drifted). Scoped to
+// /api/v1/internal so unauthenticated requests to everything else never
+// buffer more than the 1mb global limit; the global parser skips bodies
+// the scoped one already read.
+app.use('/api/v1/internal', express.json({ limit: '8mb' }))
 app.use(express.json({ limit: '1mb' }))
 
 // Rate limiting for /api/v1. Two tiers:
