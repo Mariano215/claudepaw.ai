@@ -48,13 +48,17 @@ async function runViaCli(prompt: string, model: string, timeoutMs: number): Prom
     let stdout = ''
     let stderr = ''
     let settled = false
+    // Strip ANTHROPIC_API_KEY from the child env: if present, the CLI auths
+    // via metered API key instead of subscription OAuth, silently billing
+    // the paid API on every "successful" call (2026-07-15 $22.64/day bug).
+    const { ANTHROPIC_API_KEY: _unused, ...childEnv } = process.env
     const child = spawn(CLAUDE_BINARY, [
       '--print',
       '--model', model,
       '--tools', '',
       '--disable-slash-commands',
       '--no-session-persistence',
-    ], { stdio: ['pipe', 'pipe', 'pipe'] })
+    ], { stdio: ['pipe', 'pipe', 'pipe'], env: childEnv })
 
     const timer = setTimeout(() => {
       if (settled) return
