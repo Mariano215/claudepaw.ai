@@ -61,14 +61,21 @@ export function resolveGoogleNewsUrl(url: string): string {
 // ---------------------------------------------------------------------------
 
 function stripHtml(html: string): string {
-  return html
-    .replace(/<[^>]+>/g, '')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#039;/g, "'")
-    .replace(/&apos;/g, "'")
+  // Google News descriptions are entity-encoded HTML (e.g. `&lt;a href=...&gt;`),
+  // so tags must be decoded to literal `<>` before they can be stripped. Decoding
+  // first, then stripping, then decoding once more catches any tag revealed by
+  // the first pass (double-encoded entities) and any leftover &nbsp; etc.
+  const decode = (s: string) =>
+    s
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#0?39;/g, "'")
+      .replace(/&apos;/g, "'")
+      .replace(/&nbsp;/g, ' ')
+
+  return decode(decode(html).replace(/<[^>]+>/g, ''))
     .replace(/\s+/g, ' ')
     .trim()
 }

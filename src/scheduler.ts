@@ -375,8 +375,14 @@ export async function runDueTasks(send: Sender): Promise<void> {
       }
     }
   }
-  maybeRunAutoArchive()
-  maybeRunAutoPurge()
+  // Housekeeping only. A failure here must never stop due tasks from running,
+  // so it is caught the same way the reaper below is.
+  try {
+    maybeRunAutoArchive()
+    maybeRunAutoPurge()
+  } catch (err) {
+    logger.warn({ err }, 'auto-archive/purge failed (non-fatal)')
+  }
 
   // Also run the reaper here (not just at startup) so an approval Paw whose
   // user never responds gets unstuck within one tick of hitting its configured
