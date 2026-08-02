@@ -433,6 +433,7 @@ async function main(): Promise<void> {
 
 
 
+
   // Register weekly skill synthesis task if not already present
   const existingSynthTask = getTask('learning-weekly-synthesis')
   if (!existingSynthTask) {
