@@ -3293,8 +3293,16 @@ export function getMetricHealthForProject(projectId?: string, allowedProjectIds?
 }
 
 export function getDegradedMetricHealth(): MetricHealth[] {
+  // Join project_integrations so a paused integration (enabled = 0) drops out.
+  // Without it the collector stops updating the row but the last failing state
+  // sticks forever, and the healer keeps reporting a ghost it cannot fix.
   return db
-    .prepare("SELECT * FROM metric_health WHERE status IN ('degraded','failing') ORDER BY attempts DESC, last_check ASC")
+    .prepare(`
+      SELECT mh.* FROM metric_health mh
+        JOIN project_integrations pi ON pi.id = mh.integration_id
+       WHERE mh.status IN ('degraded','failing') AND pi.enabled = 1
+       ORDER BY mh.attempts DESC, mh.last_check ASC
+    `)
     .all() as MetricHealth[]
 }
 

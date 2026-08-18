@@ -5,16 +5,17 @@ emoji: 🩺
 role: Self-healing for integration metrics
 mode: active
 # `provider:` sets the FALLBACK provider, not the primary (see resolveExecutionSettings).
-# Chain becomes claude_desktop -> openai_api -> ollama, so an OpenAI credit
-# exhaustion (429 credit_balance_exhausted) degrades to local instead of failing the task.
-# ponytail: ollama has no tool access, so the fallback stage cannot actually GET
-# /api/v1/metric-health/degraded and will only reason over the prompt. Treat its
-# output as "the routine survived", not as a real health report. Upgrade path:
-# wire a deterministic collector that fetches the health JSON before the LLM call,
-# same pattern as the Paws observe collectors.
+# Fallback is DISABLED here on purpose. 2026-08-18: the claude_desktop run hit the
+# 600s timeout, fell through to openai_api, and that stage has no tool access -- so
+# it never fetched /metric-health/degraded and emitted "All integrations healthy"
+# while 8 rows were failing. A fabricated all-clear from a health reporter is worse
+# than a missed run, so a timeout now surfaces as a task failure.
+# ponytail: re-enable only once a deterministic collector fetches the health JSON
+# before the LLM call (same pattern as the Paws observe collectors); then the
+# no-tool stages have real data to summarize instead of guessing.
 provider: ollama
 model_fallback: gemma4-8b-64k:latest
-fallback_policy: enabled
+fallback_policy: disabled
 keywords:
   - heal
   - healer
