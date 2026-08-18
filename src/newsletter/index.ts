@@ -21,6 +21,7 @@ import {
 import { probeArticles } from './prober.js'
 import { generateExecutiveBrief } from './brief.js'
 import { generateHeroImage, optimizeForEmail } from './hero.js'
+import type { HeroFallbackReason } from './hero.js'
 import { renderNewsletter } from './renderer.js'
 import { sendEmail } from '../google/gmail.js'
 import { collectRepoCandidates, shortlistRepos } from './github-collector.js'
@@ -81,6 +82,20 @@ export function initNewsletter(): void {
   logger.info('Newsletter system initialized')
 }
 
+/**
+ * Hero status for the run summary. heroImageSrc is the single source of truth:
+ * empty means the email shipped with no banner, whatever failed upstream
+ * (generation, missing fallback asset, or optimize). The reason is appended
+ * when we have one.
+ */
+export function heroStatusLabel(
+  heroImageSrc: string,
+  reason?: HeroFallbackReason,
+): string {
+  if (heroImageSrc) return 'OK'
+  return `MISSING${reason ? ` (${reason})` : ''}`
+}
+
 // ---------------------------------------------------------------------------
 // Main orchestrator
 // ---------------------------------------------------------------------------
@@ -103,6 +118,7 @@ export async function generateAndSendNewsletter(
   let brief: ExecutiveBrief
   let imagePath: string
   let artDirection: string
+  let heroFallbackReason: HeroFallbackReason | undefined
 
   if (opts.loadSnapshotPath) {
     // Replay path: skip phases 1-7, load fully-composed edition from disk.
@@ -213,6 +229,13 @@ export async function generateAndSendNewsletter(
     const heroOut = await generateHeroImage(brief.topThemes, dateStr)
     imagePath = heroOut.imagePath
     artDirection = heroOut.artDirection
+    heroFallbackReason = heroOut.fallbackReason
+    if (heroFallbackReason) {
+      logger.error(
+        { reason: heroFallbackReason },
+        'Hero image unavailable -- edition will send without a banner',
+      )
+    }
 
     // Save snapshot for future replay (skip on snapshot-load runs to avoid overwriting source)
     if (opts.saveSnapshot) {
@@ -360,11 +383,12 @@ export async function generateAndSendNewsletter(
         : `OK${linkedinResult.publishedUrl ? ` ${linkedinResult.publishedUrl}` : ''}`
       : `FAILED${linkedinResult?.errorMessage ? ` (${linkedinResult.errorMessage})` : ''}`
     : 'OFF'
+  const heroStatus = heroStatusLabel(heroImageSrc, heroFallbackReason)
   const summary =
     `The Signal ${dateStr}: ${accessibleByCategory.cyber.length} cyber, ` +
     `${accessibleByCategory.ai.length} AI, ${accessibleByCategory.research.length} research, ` +
     `${githubPicks.length} repos. ` +
-    `Gmail: ${gmailStatus}. LinkedIn: ${linkedinStatus}.`
+    `Hero: ${heroStatus}. Gmail: ${gmailStatus}. LinkedIn: ${linkedinStatus}.`
 
   reportFeedItem('scout', 'newsletter-sent', summary)
 

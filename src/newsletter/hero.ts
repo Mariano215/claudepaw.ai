@@ -153,6 +153,7 @@ function getFallbackHeader(): string {
     'newsletter-header.png',
   )
   if (existsSync(fallback)) return fallback
+  logger.warn({ fallback }, 'Fallback header asset missing -- no hero image at all')
   return ''
 }
 

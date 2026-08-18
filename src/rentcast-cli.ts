@@ -6,9 +6,10 @@
 //   - Serves cached responses when they're still fresh (listings 24h,
 //     markets 30d; Rentcast listings don't change hour-to-hour and market
 //     rent stats are slow-moving).
-//   - Counts real API calls for the current calendar month and refuses
-//     once the cap is hit, returning {"budget_exhausted": true, ...} so
-//     the paw prompt can branch to web-only fallback.
+//   - Counts real API calls for the current RentCast BILLING PERIOD (anchor
+//     day to anchor day, not calendar month) and refuses once the cap is hit,
+//     returning {"budget_exhausted": true, ...} so the paw prompt can branch
+//     to web-only fallback.
 //   - Pulls the API key from the credential store (same `default/rentcast`
 //     entry the old inline-curl approach used).
 //
@@ -32,7 +33,12 @@ import { getCredential, initCredentialStore } from './credentials.js'
 // Developer tier's 50/month so on-demand analyzer calls don't tip us over).
 const MONTHLY_CAP = Number(process.env.RENTCAST_MONTHLY_CAP) || 45
 
-// Alert when usage crosses this fraction of the cap exactly once per month.
+// Day of month RentCast's billing period rolls over. The plan bills 13th to
+// 13th, NOT calendar months -- see billingPeriodStartMs for why that matters.
+// Change this if the plan's anchor day ever moves.
+const BILLING_ANCHOR_DAY = Number(process.env.RENTCAST_BILLING_ANCHOR_DAY) || 13
+
+// Alert when usage crosses this fraction of the cap exactly once per period.
 // 0.8 of 45 = 36 calls. Disable by setting RENTCAST_ALERT_PCT=0.
 const ALERT_PCT = Number(process.env.RENTCAST_ALERT_PCT ?? 0.8)
 
@@ -64,13 +70,41 @@ function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string>
   return { cmd, flags }
 }
 
-function firstOfMonthMs(now: number = Date.now()): number {
+/**
+ * Start of the current RentCast *billing* period, not the calendar month.
+ *
+ * RentCast bills on an anchor day (the plan's signup day of month), e.g. the
+ * 13th, so a period runs the 13th to the 13th. Counting calendar months
+ * silently under-counts across the boundary: through 2026-08 the cap of 45
+ * was never breached in any calendar month (Apr-Jul all sat at exactly 45),
+ * while the Jul 13 - Aug 13 billing window took 66 calls and blew the plan's
+ * 50-call quota. Same cap, wrong window.
+ *
+ * Anchor days past the end of a short month clamp to that month's last day,
+ * so an anchor of 31 lands on Feb 28/29 rather than rolling into March.
+ */
+export function billingPeriodStartMs(now: number = Date.now(), anchorDay: number = BILLING_ANCHOR_DAY): number {
   const d = new Date(now)
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 0, 0, 0, 0)
+  const year = d.getUTCFullYear()
+  const month = d.getUTCMonth()
+
+  const clampToMonth = (y: number, m: number): number => {
+    const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate()
+    return Math.min(anchorDay, lastDay)
+  }
+
+  // On or after this month's anchor, the period started this month.
+  // Before it, the period started at the previous month's anchor.
+  if (d.getUTCDate() >= clampToMonth(year, month)) {
+    return Date.UTC(year, month, clampToMonth(year, month), 0, 0, 0, 0)
+  }
+  const prevYear = month === 0 ? year - 1 : year
+  const prevMonth = month === 0 ? 11 : month - 1
+  return Date.UTC(prevYear, prevMonth, clampToMonth(prevYear, prevMonth), 0, 0, 0, 0)
 }
 
-function countCallsThisMonth(): number {
-  const since = firstOfMonthMs()
+function countCallsThisPeriod(): number {
+  const since = billingPeriodStartMs()
   const row = getDb()
     .prepare('SELECT COUNT(*) as n FROM rentcast_call_log WHERE called_at >= ?')
     .get(since) as { n: number }
@@ -111,28 +145,31 @@ function logCall(endpoint: string, query: string, statusCode: number, bytes: num
     .run(endpoint, query, Date.now(), statusCode, bytes)
 }
 
-// Fire a single Telegram alert when monthly usage first crosses the
-// configured threshold. Uses an INSERT OR IGNORE on (month_key, threshold)
-// so we never double-fire within the same calendar month. The shell-out
-// to notify.sh is fire-and-forget; failures here must never break the
-// CLI's primary contract (returning the Rentcast response).
-function maybeFireThresholdAlert(callsThisMonth: number): void {
+// Fire a single Telegram alert when usage first crosses the configured
+// threshold. Uses an INSERT OR IGNORE on (month_key, threshold) so we never
+// double-fire within the same billing period. The column is still named
+// month_key for schema compatibility, but it now holds the period start date
+// (YYYY-MM-DD) rather than YYYY-MM: two billing periods can start in the same
+// calendar month view otherwise, and a truncated key would swallow the second
+// period's alert. The shell-out to notify.sh is fire-and-forget; failures here
+// must never break the CLI's primary contract (returning the Rentcast response).
+function maybeFireThresholdAlert(callsThisPeriod: number): void {
   if (!ALERT_PCT || ALERT_PCT <= 0) return
   const threshold = Math.ceil(MONTHLY_CAP * ALERT_PCT)
-  if (callsThisMonth < threshold) return
+  if (callsThisPeriod < threshold) return
 
-  const monthKey = new Date(firstOfMonthMs()).toISOString().slice(0, 7) // YYYY-MM
+  const periodKey = new Date(billingPeriodStartMs()).toISOString().slice(0, 10) // YYYY-MM-DD
   const result = getDb()
     .prepare(
       `INSERT OR IGNORE INTO rentcast_alerts (month_key, threshold, sent_at, calls_at_send)
        VALUES (?, ?, ?, ?)`,
     )
-    .run(monthKey, threshold, Date.now(), callsThisMonth)
-  if (result.changes === 0) return // already alerted this month at this threshold
+    .run(periodKey, threshold, Date.now(), callsThisPeriod)
+  if (result.changes === 0) return // already alerted this period at this threshold
 
   const notifyScript = path.resolve(process.cwd(), 'scripts/notify.sh')
-  const remaining = Math.max(0, MONTHLY_CAP - callsThisMonth)
-  const msg = `Rentcast: ${callsThisMonth}/${MONTHLY_CAP} calls this month (>= ${threshold}, ${Math.round(ALERT_PCT * 100)}% cap). ${remaining} remaining before refusal.`
+  const remaining = Math.max(0, MONTHLY_CAP - callsThisPeriod)
+  const msg = `Rentcast: ${callsThisPeriod}/${MONTHLY_CAP} calls this billing period (since ${periodKey}, >= ${threshold} = ${Math.round(ALERT_PCT * 100)}% cap). ${remaining} remaining before refusal.`
   // Detach -- never block the CLI on an alert send.
   try {
     execFile('/bin/bash', [notifyScript, msg], { timeout: 10_000 }, () => {
@@ -165,11 +202,11 @@ async function callRentcast(
   // 1. Cache hit — never touches the API
   const cached = getCache(cacheKey)
   if (cached !== null) {
-    return { body: cached, fromCache: true, callsThisMonth: countCallsThisMonth() }
+    return { body: cached, fromCache: true, callsThisMonth: countCallsThisPeriod() }
   }
 
   // 2. Budget gate
-  const callsThisMonth = countCallsThisMonth()
+  const callsThisMonth = countCallsThisPeriod()
   if (callsThisMonth >= MONTHLY_CAP) {
     return {
       body: { budget_exhausted: true, calls_this_month: callsThisMonth, cap: MONTHLY_CAP },
@@ -265,10 +302,15 @@ function emit(result: { body: unknown; fromCache: boolean; budgetExhausted?: boo
 }
 
 function cmdBudget(): void {
-  const calls = countCallsThisMonth()
+  const calls = countCallsThisPeriod()
+  const periodStart = billingPeriodStartMs()
   process.stdout.write(
     JSON.stringify({
-      month_start_ms: firstOfMonthMs(),
+      // month_start_ms / calls_this_month keep their names because the broker
+      // collectors already parse them; both now describe the billing period.
+      month_start_ms: periodStart,
+      period_start: new Date(periodStart).toISOString().slice(0, 10),
+      billing_anchor_day: BILLING_ANCHOR_DAY,
       calls_this_month: calls,
       cap: MONTHLY_CAP,
       remaining: Math.max(0, MONTHLY_CAP - calls),
@@ -313,7 +355,15 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  process.stderr.write(`rentcast-cli error: ${err instanceof Error ? err.message : String(err)}\n`)
-  process.exit(2)
-})
+// Only run when invoked as a script. Without this guard, importing anything
+// from this module (e.g. billingPeriodStartMs in a test) would execute main(),
+// open the production DB and call process.exit.
+const invokedDirectly =
+  process.argv[1] !== undefined && /rentcast-cli(\.[cm]?[jt]s)?$/.test(process.argv[1])
+
+if (invokedDirectly) {
+  main().catch((err) => {
+    process.stderr.write(`rentcast-cli error: ${err instanceof Error ? err.message : String(err)}\n`)
+    process.exit(2)
+  })
+}

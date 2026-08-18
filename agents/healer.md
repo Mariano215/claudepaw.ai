@@ -4,6 +4,17 @@ name: Metric Healer
 emoji: 🩺
 role: Self-healing for integration metrics
 mode: active
+# `provider:` sets the FALLBACK provider, not the primary (see resolveExecutionSettings).
+# Chain becomes claude_desktop -> openai_api -> ollama, so an OpenAI credit
+# exhaustion (429 credit_balance_exhausted) degrades to local instead of failing the task.
+# ponytail: ollama has no tool access, so the fallback stage cannot actually GET
+# /api/v1/metric-health/degraded and will only reason over the prompt. Treat its
+# output as "the routine survived", not as a real health report. Upgrade path:
+# wire a deterministic collector that fetches the health JSON before the LLM call,
+# same pattern as the Paws observe collectors.
+provider: ollama
+model_fallback: gemma4-8b-64k:latest
+fallback_policy: enabled
 keywords:
   - heal
   - healer
@@ -31,7 +42,11 @@ The server tracks integration health in `metric_health` rows. Each row has:
 - `reason` -- short string explaining the latest failure
 - `missing_keys` -- JSON array of metric keys that should exist but don't
 
-Pull the current state from `http://localhost:3000/api/v1/metric-health/degraded` (or use the `metric-health` endpoint with `?project_id=...`). Process the failing/degraded rows in order: highest `attempts` first.
+Pull the current state from `$DASHBOARD_URL/api/v1/metric-health/degraded` (or use the `metric-health` endpoint with `?project_id=...`). The API requires auth and you cannot read `.env`; the token is in your environment as `$BOT_API_TOKEN` and the base URL as `$DASHBOARD_URL` (the dashboard is remote, NOT localhost:3000 -- that port is other dev servers on this Mac):
+
+`curl -s -H "x-dashboard-token: $BOT_API_TOKEN" "$DASHBOARD_URL/api/v1/metric-health/degraded"`
+
+If `$BOT_API_TOKEN` is empty, stop and report that the scheduled task is missing the token instead of retrying. Process the failing/degraded rows in order: highest `attempts` first.
 
 Every degraded row already includes the owning `project_id`. Treat that as authoritative. If you need to propose an action item, create it directly for that project with the CLI:
 
@@ -58,7 +73,7 @@ Do not rely on the markdown `## Action Items` block for cross-project healer wor
 
    Record the actual error response so the user sees the truth, not just "failing".
 
-3. **Trigger a fresh collection.** After making any change (rotating a token, updating an integration handle, fixing a credential), call `POST http://localhost:3000/api/v1/metrics/collect` and re-read `metric-health` to confirm the status flipped to `healthy`.
+3. **Trigger a fresh collection.** After making any change (rotating a token, updating an integration handle, fixing a credential), call `POST $DASHBOARD_URL/api/v1/metrics/collect` with the same `x-dashboard-token` header and re-read `metric-health` to confirm the status flipped to `healthy`.
 
 4. **Report once per cycle.** Send a single Telegram message to the operator with one block per project that has degraded integrations. Format:
 

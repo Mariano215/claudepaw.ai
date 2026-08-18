@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { execFile as execFileCb, spawn } from 'node:child_process'
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
-import { CLAUDE_CWD, PROJECT_ROOT } from './config.js'
+import { CLAUDE_CWD, PROJECT_ROOT, BOT_API_TOKEN, DASHBOARD_URL } from './config.js'
 import { loadProjectMcpServers } from './mcp-loader.js'
 import { readEnvFile } from './env.js'
 import { getProject, getProjectSettings } from './db.js'
@@ -412,6 +412,15 @@ const claudeDesktopAdapter: AgentExecutionAdapter = {
         maxTurns: Number(process.env.AGENT_SDK_MAX_TURNS ?? 15),
         permissionMode: 'bypassPermissions',
         settingSources: ['project', 'user'],
+        // Agents cannot read .env (Claude Code denies it), so the dashboard
+        // credentials only reach them through the subprocess env. Scoped to the
+        // healer: every other agent (chat sessions included) runs without a
+        // dashboard token, so a prompt-injected run cannot reach the API.
+        // ponytail: hardcoded agent id, move to agent frontmatter if a second
+        // agent ever needs API credentials.
+        env: settings.agentId === 'healer'
+          ? { ...process.env, BOT_API_TOKEN, DASHBOARD_URL }
+          : process.env,
         ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
         ...(input.sessionId ? { resume: input.sessionId } : {}),
       },

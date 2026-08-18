@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
+import { billingPeriodStartMs } from './rentcast-cli.js'
 
 // We don't import the CLI itself because main() sets up its own DB. Instead
 // we replicate the in-DB state the CLI depends on via a synthetic schema
@@ -122,5 +123,49 @@ describe('rentcast cache + budget gate', () => {
     const a = buildQuery({ zipCode: '19081', status: 'Active', maxPrice: '310000' })
     const b = buildQuery({ maxPrice: '310000', zipCode: '19081', status: 'Active' })
     expect(a).toBe(b)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Billing-period window.
+//
+// Regression guard for the 2026-08-10 quota blowout: the cap counted calendar
+// months while RentCast bills 13th-to-13th. Every calendar month sat at
+// exactly 45/45 while the Jul 13 - Aug 13 billing window took 66 calls and
+// exhausted the plan's 50-call quota.
+// ---------------------------------------------------------------------------
+
+describe('billingPeriodStartMs', () => {
+  const ANCHOR = 13
+  const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10)
+
+  it('anchors to this month once the anchor day has passed', () => {
+    const now = Date.UTC(2026, 7, 10) // Aug 10 -- before the 13th
+    expect(iso(billingPeriodStartMs(now, ANCHOR))).toBe('2026-07-13')
+  })
+
+  it('rolls forward on the anchor day itself', () => {
+    const now = Date.UTC(2026, 7, 13) // Aug 13
+    expect(iso(billingPeriodStartMs(now, ANCHOR))).toBe('2026-08-13')
+  })
+
+  it('rolls back across a year boundary', () => {
+    const now = Date.UTC(2026, 0, 5) // Jan 5
+    expect(iso(billingPeriodStartMs(now, ANCHOR))).toBe('2025-12-13')
+  })
+
+  it('clamps an anchor past the end of a short month', () => {
+    // Anchor 31 in March, before the 31st, must land on Feb 28 (2026 is not a
+    // leap year), never roll into an invalid Feb 31.
+    const now = Date.UTC(2026, 2, 5) // Mar 5
+    expect(iso(billingPeriodStartMs(now, 31))).toBe('2026-02-28')
+  })
+
+  it('spans the boundary the calendar-month window missed', () => {
+    // The actual failure: counting from Aug 1 sees 35 calls and passes a cap
+    // of 45. Counting from Jul 13 sees the full 66 and refuses.
+    const augustFirst = Date.UTC(2026, 7, 1)
+    const periodStart = billingPeriodStartMs(Date.UTC(2026, 7, 10), ANCHOR)
+    expect(periodStart).toBeLessThan(augustFirst)
   })
 })

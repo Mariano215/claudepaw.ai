@@ -20,6 +20,8 @@ vi.mock('./config.js', () => {
   return {
     PROJECT_ROOT: dir,
     CLAUDE_CWD: dir,
+    BOT_API_TOKEN: 'test-bot-token',
+    DASHBOARD_URL: 'http://dashboard.test',
   }
 })
 

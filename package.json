@@ -72,7 +72,7 @@
     "pino": "^9.0.0",
     "pino-pretty": "^11.0.0",
     "rebrowser-playwright": "^1.52.0",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.3",
     "sqlite-vec": "^0.1.9",
     "undici": "^6.24.1",
     "ws": "^8.20.0"

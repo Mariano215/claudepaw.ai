@@ -3254,7 +3254,7 @@ router.get('/metric-health', (req: Request, res: Response) => {
   res.json(getMetricHealthForProject(requestedProjectId ?? undefined, allowedProjectIds))
 })
 
-router.get('/metric-health/degraded', requireAdmin, (_req: Request, res: Response) => {
+router.get('/metric-health/degraded', requireBotOrAdmin, (_req: Request, res: Response) => {
   res.json(getDegradedMetricHealth())
 })
 

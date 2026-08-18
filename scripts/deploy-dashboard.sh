@@ -67,8 +67,11 @@ rsync -az --delete \
   "$DASHBOARD_HOST:$DASHBOARD_DIR/integrations/"
 echo "✓ integrations/"
 
+# package-lock.json ships too: without it the remote `npm install` resolves
+# transitive deps against its own stale tree, so security fixes verified here
+# never reach production. Keep the lock and package.json together.
 rsync -az \
-  server/package.json server/tsconfig.json \
+  server/package.json server/package-lock.json server/tsconfig.json \
   "$DASHBOARD_HOST:$DASHBOARD_DIR/"
 echo "✓ config files"
 
