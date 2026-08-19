@@ -459,10 +459,11 @@ const claudeDesktopAdapter: AgentExecutionAdapter = {
       const aborted = abortController.signal.aborted
       const abortReason = abortController.signal.reason
       if (aborted) {
+        const baseMessage = abortReason instanceof Error
+          ? abortReason.message
+          : `Claude Desktop execution timed out after ${timeoutMs}ms`
         throw new Error(
-          abortReason instanceof Error
-            ? abortReason.message
-            : `Claude Desktop execution timed out after ${timeoutMs}ms`,
+          `${baseMessage} (eventCount=${eventCount}, assistantTurns=${assistantTurns}, toolUses=${toolUses}, lastEventType=${lastEventType ?? 'none'})`,
         )
       }
       throw err

@@ -17,6 +17,7 @@ import { extractAndLogFindings } from './research.js'
 import { parseActionItemsFromAgentOutput, ingestParsedItems } from './action-items.js'
 import { buildExampleCompanyTaskContext } from './projects/example-company/task-context.js'
 import { buildDefaultTaskContext } from './projects/default/task-context.js'
+import { buildMetricHealthContext, METRIC_HEALER_TASK_ID } from './metric-health-context.js'
 import { getDuePaws, triggerPaw } from './paws/index.js'
 import { publishDueSocialPosts } from './social/index.js'
 import { checkAndUpgrade } from './system-update.js'
@@ -109,7 +110,11 @@ async function augmentTaskPrompt(
   let context: string | null = null
 
   try {
-    if (task.project_id === 'example-company') {
+    if (task.id === METRIC_HEALER_TASK_ID) {
+      // Pre-fetch the health rows so the agent analyzes instead of collecting.
+      // Keyed on task id, not project: the healer lives in `default`.
+      context = await buildMetricHealthContext()
+    } else if (task.project_id === 'example-company') {
       context = await buildExampleCompanyTaskContext(task.id)
     } else if (task.project_id === 'default') {
       context = await buildDefaultTaskContext(task.id)

@@ -43,17 +43,25 @@ The server tracks integration health in `metric_health` rows. Each row has:
 - `reason` -- short string explaining the latest failure
 - `missing_keys` -- JSON array of metric keys that should exist but don't
 
-Pull the current state from `$DASHBOARD_URL/api/v1/metric-health/degraded` (or use the `metric-health` endpoint with `?project_id=...`). The API requires auth and you cannot read `.env`; the token is in your environment as `$BOT_API_TOKEN` and the base URL as `$DASHBOARD_URL` (the dashboard is remote, NOT localhost:3000 -- that port is other dev servers on this Mac):
+The degraded rows are **pre-fetched for you** and appear in your prompt under `PRE-FETCHED METRIC HEALTH` (see `src/metric-health-context.ts`). Treat that block as the current state and do not spend turns re-fetching it. Paused integrations are already filtered out.
 
-`curl -s -H "x-dashboard-token: $BOT_API_TOKEN" "$DASHBOARD_URL/api/v1/metric-health/degraded"`
+If the block is absent and the prompt instead says pre-fetched context was unavailable, say so in your report. Do NOT claim anything is healthy that you could not actually read: a false all-clear is worse than a missed run.
 
-If `$BOT_API_TOKEN` is empty, stop and report that the scheduled task is missing the token instead of retrying. Process the failing/degraded rows in order: highest `attempts` first.
+For a follow-up query the block does not cover, the token is in your environment as `$BOT_API_TOKEN` and the base URL as `$DASHBOARD_URL` (the dashboard is remote, NOT localhost:3000 -- that port is other dev servers on this Mac):
+
+`curl -s -H "x-dashboard-token: $BOT_API_TOKEN" "$DASHBOARD_URL/api/v1/metric-health?project_id=<id>"` Process the failing/degraded rows in order: highest `attempts` first.
 
 Every degraded row already includes the owning `project_id`. Treat that as authoritative. If you need to propose an action item, create it directly for that project with the CLI:
 
 `node dist/action-cli.js create --project <project_id> --title "..." --priority high --agent healer`
 
 Do not rely on the markdown `## Action Items` block for cross-project healer work. That markdown block lands items in the healer task's own project and can misfile work under `default`.
+
+## Budget
+
+You have a hard 600s ceiling and the run is killed at it, producing nothing. Write the
+report FIRST from the pre-fetched block, then spend whatever budget is left on optional
+probes. A delivered report with an unverified reason beats a timeout with no report.
 
 ## Workflow per broken integration
 
@@ -64,17 +72,21 @@ Do not rely on the markdown `## Action Items` block for cross-project healer wor
    - "404" or "401" from a specific platform -- credential probably rotated or revoked.
    - "platform did not return this metric" -- the platform changed its response shape. Read the API docs via find-docs to learn the new field name and report it as a code-change recommendation, not a credential issue.
 
-2. **Verify with a manual probe.** For each platform, run the same API call the collector runs:
-   - YouTube: `curl 'https://www.googleapis.com/youtube/v3/channels?part=statistics&id=<CHANNEL_ID>&key=<API_KEY>'`
-   - Twitter/X: there's no manual curl path for OAuth1; check `dist/server/src/metrics-collector.js` for the request and assess whether the credentials decrypt.
-   - LinkedIn: `curl -H 'Authorization: Bearer <TOKEN>' https://api.linkedin.com/v2/me`
-   - Meta: `curl 'https://graph.facebook.com/v22.0/<PAGE_ID>?fields=fan_count,followers_count&access_token=<PAGE_TOKEN>'`
-   - GitHub: `curl https://api.github.com/repos/<owner>/<repo>` (no auth needed for public repos)
-   - Shopify: hit `/admin/api/2024-01/orders/count.json` with the access token header
+2. **Do NOT re-probe by default.** The pre-fetched `reason` is the collector's own error text, so it already IS the diagnosis: `401`/`EXPIRED` means a dead credential, `invalid_grant` means a revoked refresh token, `missing X` means the credential row was never written. Report that directly.
 
-   Record the actual error response so the user sees the truth, not just "failing".
+   Probe manually ONLY when the reason is ambiguous or absent, and then probe just that one integration. Every probe MUST include `--max-time 15`: a probe against a stalled endpoint (connection accepted, no response) hangs forever otherwise, with nothing to stop it except the 600s run-level kill, which then eats the whole budget and produces zero report.
+   - YouTube: `curl --max-time 15 'https://www.googleapis.com/youtube/v3/channels?part=statistics&id=<CHANNEL_ID>&key=<API_KEY>'`
+   - LinkedIn: `curl --max-time 15 -H 'Authorization: Bearer <TOKEN>' https://api.linkedin.com/v2/me`
+   - Meta: `curl --max-time 15 'https://graph.facebook.com/v22.0/<PAGE_ID>?fields=fan_count,followers_count&access_token=<PAGE_TOKEN>'`
+   - GitHub: `curl --max-time 15 https://api.github.com/repos/<owner>/<repo>` (no auth needed for public repos)
+   - Shopify: `/admin/api/2024-01/orders/count.json` with the access token header, `--max-time 15`
+   - Twitter/X: no manual curl path for OAuth1; check `dist/server/src/metrics-collector.js`
 
-3. **Trigger a fresh collection.** After making any change (rotating a token, updating an integration handle, fixing a credential), call `POST $DASHBOARD_URL/api/v1/metrics/collect` with the same `x-dashboard-token` header and re-read `metric-health` to confirm the status flipped to `healthy`.
+   If a probe hits the 15s cap, treat it as its own diagnosis ("endpoint unreachable/stalled") and move on. Do not retry.
+
+   Quote the reason text verbatim in the report so the user sees the truth, not just "failing".
+
+3. **Trigger a fresh collection ONLY if you actually changed something.** You usually change nothing: dead credentials need a human. If and only if you rotated a token or fixed a credential, call `POST $DASHBOARD_URL/api/v1/metrics/collect` with the same `x-dashboard-token` header and re-read `metric-health` to confirm the status flipped to `healthy`.
 
 4. **Report once per cycle.** Send a single Telegram message to the operator with one block per project that has degraded integrations. Format:
 
