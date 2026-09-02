@@ -320,6 +320,7 @@ function handleServerMessage(msg: Record<string, unknown>): void {
         execution_model_fallback: settings.execution_model_fallback as string | null | undefined,
         fallback_policy: settings.fallback_policy as string | null | undefined,
         model_tier: settings.model_tier as string | null | undefined,
+        ...('knobs' in settings ? { knobs: settings.knobs == null ? null : JSON.stringify(settings.knobs) } : {}),
       })
       logger.info({ projectId }, 'Project settings synced from dashboard server')
     } catch (err) {

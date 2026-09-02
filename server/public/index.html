@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700;800;900&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20260902">
+  <link rel="stylesheet" href="style.css?v=20260902b">
   <!-- Leaflet OSS map library -- used by the Paw Broker Portfolio page (server/public/app.js initPortfolioPage). -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous">
   <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
@@ -1392,6 +1392,13 @@
           <div class="color-overrides-grid" id="color-overrides-grid"></div>
         </div>
 
+        <div class="settings-section" id="settings-knobs-section" hidden>
+          <h3 class="settings-section-title">Knobs</h3>
+          <p class="settings-section-desc">Operator settings that used to live in .env. Changes reach the bot within a minute, no restart.</p>
+          <div id="settings-knobs-grid" class="settings-knobs-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;"></div>
+          <p class="settings-section-note" id="settings-knobs-status"></p>
+        </div>
+
         <div class="settings-section" id="settings-execution-section">
           <h3 class="settings-section-title">Execution Defaults</h3>
           <p class="settings-section-desc">Set the project-default execution waterfall. Changes save immediately. If a model is blank, the selected tier decides the provider default.</p>
@@ -1768,6 +1775,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20260902"></script>
+  <script src="app.js?v=20260902b"></script>
 </body>
 </html>

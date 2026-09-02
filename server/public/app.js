@@ -10903,6 +10903,7 @@ function renderSettingsProjectBar() {
       renderExecutionDefaults();
       loadCostGate(proj.id);
       renderSidebarPagesSettings(proj);
+      renderKnobsSettings(proj);
     }
   });
 
@@ -10916,6 +10917,7 @@ function renderSettingsProjectBar() {
     renderColorOverrides();
     renderExecutionDefaults();
     loadCostGate(initial.id);
+    renderKnobsSettings(initial);
     renderSidebarPagesSettings(initial);
   }
 }
@@ -13736,14 +13738,96 @@ initAuthGate();
 // Broker-only pages (deals, portfolio, rehab, tax, participation, investments)
 // stay hidden everywhere except the broker project. Conversely, the broker
 // pipeline + map + analytics surfaces.
+// Simplification pass 2026-09-02: every project starts from a short sidebar
+// (Agents, Action Plan, Chat, Logging, Cron Jobs, Paws) plus its own pages.
+// Anything hidden here can be turned back on per project in Settings > Sidebar Pages.
 const PAGE_DEFAULTS = {
-  'default':         { 'how-it-works': false, deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
-  'default':  { 'how-it-works': false, deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
-  'example-company':     { 'how-it-works': false, deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
-  'example-company': { 'how-it-works': false, paws: false, knowledge: false, deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
-  'claudepaw':       { 'how-it-works': false, deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false },
-  'broker':          { board: false, research: false, knowledge: false, 'how-it-works': false },
+  '':                { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false, 'how-it-works': false },
+  'default':         { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false, 'how-it-works': false, board: false, research: false, pipeline: false, comms: false, knowledge: false },
+  'default':  { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false, 'how-it-works': false, board: false, research: true, pipeline: true, comms: false, knowledge: false },
+  'example-company':     { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false, 'how-it-works': false, board: true, research: true, pipeline: false, comms: false, knowledge: false },
+  'example-company': { paws: false, deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false, 'how-it-works': false, board: false, research: false, pipeline: false, comms: false, knowledge: false },
+  'claudepaw':       { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false, 'how-it-works': false, board: false, research: false, pipeline: false, comms: false, knowledge: false },
+  'broker':          { 'how-it-works': false, board: false, research: false, pipeline: false, comms: false, knowledge: false },
 };
+
+// Operator knobs per project slug. Values live in project_settings.knobs
+// (JSON) and reach the bot through project_settings_sync. Env vars are the
+// fallback when a knob is blank.
+const KNOB_SCHEMA = {
+  'default': [
+    { key: 'quiet_hours', label: 'Quiet hours (ET)', type: 'text', placeholder: '21-8', hint: 'Routine Telegram messages are held in this window and released as one batch. "off" disables.' },
+  ],
+    { key: 'nav_drop_pct', label: 'NAV drop halt (%)', type: 'number', placeholder: '5', hint: 'Halt trading when NAV falls this much over 7 days.' },
+    { key: 'daily_trade_cap', label: 'Daily trade cap', type: 'number', placeholder: '20', hint: 'Max new decisions per day.' },
+    { key: 'symbol_cooldown_days', label: 'Symbol cooldown (days)', type: 'number', placeholder: '10', hint: 'Bench a symbol this long after a losing exit.' },
+    { key: 'alert_on_reject', label: 'Alert on engine reject', type: 'select', options: ['', 'true', 'false'], hint: 'Send a message when the engine rejects an order.' },
+  ],
+};
+
+function renderKnobsSettings(proj) {
+  const section = document.getElementById('settings-knobs-section');
+  const grid = document.getElementById('settings-knobs-grid');
+  if (!section || !grid) return;
+  const schema = proj && KNOB_SCHEMA[proj.slug];
+  while (grid.firstChild) grid.removeChild(grid.firstChild);
+  if (!schema) { section.hidden = true; return; }
+  section.hidden = false;
+  const raw = proj.knobs || (proj.settings && proj.settings.knobs) || null;
+  const current = typeof raw === 'string' ? (JSON.parse(raw) || {}) : (raw || {});
+  schema.forEach(function(k) {
+    const wrap = document.createElement('label');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:4px;font-size:13px;';
+    const title = document.createElement('span');
+    title.textContent = k.label;
+    wrap.appendChild(title);
+    let input;
+    if (k.type === 'select') {
+      input = document.createElement('select');
+      input.className = 'input';
+      k.options.forEach(function(o) {
+        const opt = document.createElement('option');
+        opt.value = o; opt.textContent = o === '' ? 'default' : o;
+        input.appendChild(opt);
+      });
+      input.value = current[k.key] != null ? String(current[k.key]) : '';
+    } else {
+      input = document.createElement('input');
+      input.className = 'input';
+      input.type = k.type;
+      input.placeholder = k.placeholder || '';
+      input.value = current[k.key] != null ? String(current[k.key]) : '';
+    }
+    input.dataset.knob = k.key;
+    input.title = k.hint || '';
+    input.addEventListener('change', function() { saveKnob(proj, k.key, input.value.trim()); });
+    wrap.appendChild(input);
+    const hint = document.createElement('span');
+    hint.style.cssText = 'color:var(--text-muted);font-size:11px;';
+    hint.textContent = k.hint || '';
+    wrap.appendChild(hint);
+    grid.appendChild(wrap);
+  });
+}
+
+function saveKnob(proj, key, value) {
+  const status = document.getElementById('settings-knobs-status');
+  const body = { knobs: {} };
+  body.knobs[key] = value === '' ? null : value;
+  if (status) status.textContent = 'Saving...';
+  fetch(API + '/projects/' + encodeURIComponent(proj.id) + '/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(function(r) { return r.json(); }).then(function(saved) {
+    if (saved && saved.error) throw new Error(saved.error);
+    proj.knobs = saved.knobs || null;
+    if (proj.settings) proj.settings.knobs = saved.knobs || null;
+    if (status) status.textContent = 'Saved. The bot picks it up within a minute.';
+  }).catch(function(err) {
+    if (status) status.textContent = 'Save failed: ' + err.message;
+  });
+}
 
 // Pages shown in the sidebar (order matches sidebar HTML)
 const SIDEBAR_PAGES = [

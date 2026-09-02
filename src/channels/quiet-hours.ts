@@ -5,14 +5,14 @@
 // once. Inside it, anything that is not urgent is held in notify_quiet_buffer
 // and flushed as one message per chat when the window ends.
 //
-// Window lives in kv_settings under `notify.quiet_hours` as "START-END" in
-// 24h local (America/New_York) hours, e.g. "21-8". Empty or "off" disables.
-import { getDb, getKvSetting, setKvSetting } from '../db.js'
+// Window is the `quiet_hours` knob on the default project (dashboard Settings
+// page) as "START-END" in 24h local (America/New_York) hours, e.g. "21-8".
+// "off" disables.
+import { getDb, getKnob, getKvSetting, setKvSetting } from '../db.js'
 import { getTelemetryDb } from '../telemetry-db.js'
 import { ALLOWED_CHAT_ID, DASHBOARD_URL } from '../config.js'
 import { logger } from '../logger.js'
 
-export const QUIET_KV_KEY = 'notify.quiet_hours'
 const DEFAULT_WINDOW = '21-8'
 const TZ = process.env.CRON_TZ || 'America/New_York'
 /** Messages that must wake the operator regardless of the hour. */
@@ -34,9 +34,10 @@ export function parseWindow(raw: string | null): { start: number; end: number } 
   return { start, end }
 }
 
-export function isQuietNow(now = new Date(), raw: string | null = getKvSetting(QUIET_KV_KEY)): boolean {
-  // Unit tests run at any hour; never hold messages there unless a window is given explicitly.
-  if (raw === null && process.env.VITEST) return false
+// Unit tests run at any hour; never hold messages there unless a window is given explicitly.
+const configuredWindow = (): string => (process.env.VITEST ? 'off' : getKnob('default', 'quiet_hours', DEFAULT_WINDOW))
+
+export function isQuietNow(now = new Date(), raw: string | null = configuredWindow()): boolean {
   const w = parseWindow(raw)
   if (!w) return false
   const h = localHour(now)

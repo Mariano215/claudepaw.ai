@@ -103,6 +103,8 @@ export interface ProjectSettings {
   model_tier: string | null
   monthly_cost_cap_usd: number | null
   daily_cost_cap_usd: number | null
+  /** JSON object of per-project operator knobs (quiet_hours, risk thresholds). */
+  knobs: string | null
 }
 
 export type ActionItemStatus =
@@ -1162,6 +1164,9 @@ export function initDatabase(): Database.Database {
   if (!hasColumn(db, 'project_settings', 'execution_provider')) {
     db.exec(`ALTER TABLE project_settings ADD COLUMN execution_provider TEXT`)
   }
+  if (!hasColumn(db, 'project_settings', 'knobs')) {
+    db.exec(`ALTER TABLE project_settings ADD COLUMN knobs TEXT`)
+  }
   if (!hasColumn(db, 'project_settings', 'execution_provider_secondary')) {
     db.exec(`ALTER TABLE project_settings ADD COLUMN execution_provider_secondary TEXT`)
   }
@@ -2088,6 +2093,25 @@ export function getProjectSettings(projectId: string): ProjectSettings | undefin
     .get(projectId) as ProjectSettings | undefined
 }
 
+/**
+ * Read one operator knob for a project. Knobs are edited on the dashboard
+ * Settings page and reach the bot through project_settings_sync. Missing DB,
+ * missing row, or a malformed JSON blob all return the fallback.
+ */
+export function getKnob<T extends string | number | boolean>(projectId: string, key: string, fallback: T): T {
+  try {
+    const raw = getProjectSettings(projectId)?.knobs
+    if (!raw) return fallback
+    const v = (JSON.parse(raw) as Record<string, unknown>)[key]
+    if (v === undefined || v === null || v === '') return fallback
+    if (typeof fallback === 'number') { const n = Number(v); return (Number.isFinite(n) ? n : fallback) as T }
+    if (typeof fallback === 'boolean') return (v === true || v === 'true') as T
+    return String(v) as T
+  } catch {
+    return fallback
+  }
+}
+
 export function upsertProjectSettings(input: {
   project_id: string
   theme_id?: string | null
@@ -2106,6 +2130,7 @@ export function upsertProjectSettings(input: {
   model_tier?: string | null
   monthly_cost_cap_usd?: number | null
   daily_cost_cap_usd?: number | null
+  knobs?: string | null
 }): void {
   const dbh = getDb()
   const keys = Object.keys(input).filter((key) => key !== 'project_id')

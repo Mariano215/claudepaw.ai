@@ -2465,7 +2465,7 @@ router.get('/projects/:id/settings', requireProjectRead('id'), (req: Request, re
   const id = param(req, 'id')
   const settings = getProjectSettingsById(id)
   if (!settings) { res.json({}); return }
-  res.json({ ...settings, page_overrides: settings.page_overrides ? JSON.parse(settings.page_overrides) : null })
+  res.json({ ...settings, page_overrides: settings.page_overrides ? JSON.parse(settings.page_overrides) : null, knobs: settings.knobs ? JSON.parse(settings.knobs) : null })
 })
 
 router.put('/projects/:id/settings', requireProjectRole('editor'), (req: Request, res: Response) => {
@@ -2540,6 +2540,19 @@ router.put('/projects/:id/settings', requireProjectRole('editor'), (req: Request
     const page_overrides = 'page_overrides' in body
       ? (body.page_overrides !== null ? JSON.stringify(body.page_overrides) : null)
       : undefined
+    // Knobs merge: a PUT with { knobs: { quiet_hours: 'off' } } keeps the other keys.
+    let knobsJson: string | null | undefined
+    let knobsObj: Record<string, unknown> | null | undefined
+    if ('knobs' in body) {
+      if (body.knobs === null) { knobsJson = null; knobsObj = null }
+      else if (typeof body.knobs === 'object') {
+        const prevRaw = getProjectSettingsById(id)?.knobs
+        const prev = prevRaw ? (JSON.parse(prevRaw) as Record<string, unknown>) : {}
+        knobsObj = { ...prev, ...(body.knobs as Record<string, unknown>) }
+        for (const k of Object.keys(knobsObj)) if (knobsObj[k] === null || knobsObj[k] === '') delete knobsObj[k]
+        knobsJson = JSON.stringify(knobsObj)
+      } else { res.status(400).json({ error: 'knobs must be an object or null' }); return }
+    }
     upsertProjectSettingsInDb({
       project_id: id,
       theme_id,
@@ -2557,6 +2570,7 @@ router.put('/projects/:id/settings', requireProjectRole('editor'), (req: Request
       fallback_policy,
       model_tier,
       ...(page_overrides !== undefined ? { page_overrides } : {}),
+      ...(knobsJson !== undefined ? { knobs: knobsJson } : {}),
     })
     broadcastToMac({
       type: 'project_settings_sync',
@@ -2576,10 +2590,11 @@ router.put('/projects/:id/settings', requireProjectRole('editor'), (req: Request
         execution_model_fallback: execution_model_fallback ?? null,
         fallback_policy: fallback_policy ?? null,
         model_tier: model_tier ?? null,
+        ...(knobsObj !== undefined ? { knobs: knobsObj } : {}),
       },
     })
     const saved = getProjectSettingsById(id)
-    res.json({ ...(saved ?? {}), page_overrides: saved?.page_overrides ? JSON.parse(saved.page_overrides) : null })
+    res.json({ ...(saved ?? {}), page_overrides: saved?.page_overrides ? JSON.parse(saved.page_overrides) : null, knobs: saved?.knobs ? JSON.parse(saved.knobs) : null })
   } catch (err: any) {
     res.status(400).json({ error: err.message })
   }

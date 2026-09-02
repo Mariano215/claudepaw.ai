@@ -17,17 +17,16 @@ import {
   EMBEDDING_DIMENSIONS,
   DASHBOARD_URL,
 } from './config.js'
-import { initDatabase, getDb, initVecTable, getTask, createTask, checkpointAndCloseDatabase } from './db.js'
+import { initDatabase, getDb, initVecTable, checkpointAndCloseDatabase } from './db.js'
 import { initTelemetryDatabase, seedDefaultProject, checkpointAndCloseTelemetryDb } from './telemetry-db.js'
 import { recordSystemHealth } from './telemetry.js'
 import os from 'node:os'
 import { runDecaySweep } from './memory.js'
 import { cleanupOldUploads } from './media.js'
-import { initScheduler, computeNextRun, stopScheduler } from './scheduler.js'
+import { initScheduler, stopScheduler } from './scheduler.js'
 import { connectDashboard, disconnectDashboard, reportFeedItem, reportBotHealth, reportPlugins, setDashboardSendFn } from './dashboard.js'
 import { initSecurity } from './security/index.js'
 import { initWebhookDb, startPruneTimer } from './webhooks/index.js'
-import { initBuilder } from './builder/index.js'
 import { initSocial } from './social/index.js'
 import { initNewsletter } from './newsletter/index.js'
 import { logger } from './logger.js'
@@ -273,8 +272,6 @@ async function main(): Promise<void> {
   // 3c. Init security scanner system
   initSecurity()
 
-  // 3d. Init builder memory
-  initBuilder()
 
   // 3e. Init social posting
   initSocial(db)
@@ -435,20 +432,6 @@ async function main(): Promise<void> {
 
 
 
-
-  // Register weekly skill synthesis task if not already present
-  const existingSynthTask = getTask('learning-weekly-synthesis')
-  if (!existingSynthTask) {
-    const schedule = '0 3 * * 0' // Sunday 3am
-    createTask(
-      'learning-weekly-synthesis',
-      String(ALLOWED_CHAT_ID),
-      'Run weekly skill synthesis -- analyze failure feedback and create/update learned skills',
-      schedule,
-      computeNextRun(schedule),
-    )
-    logger.info('Registered weekly skill synthesis task')
-  }
 
   // 8b. Wire dashboard security trigger send function
   setDashboardSendFn(sendFn)

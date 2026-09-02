@@ -3,7 +3,6 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { getDueTasks, updateTaskAfterRun, listTasks, getProject, clearStaleRunningTasks, archiveStaleActionItems, purgeArchivedActionItems, getDb, getKvSetting, setKvSetting, getBacklogTasks } from './db.js'
 import { reapStalePawCycles, getBacklogPaws, updatePawNextRun } from './paws/db.js'
-import { runSkillSynthesis } from './learning/synthesizer.js'
 import { reportAgentStatus, reportFeedItem, reportScheduledTasks, reportPawsState } from './dashboard.js'
 import { getAllSouls, getSoul, buildAgentPrompt } from './souls.js'
 import { executeSecurityScan } from './security/index.js'
@@ -518,35 +517,6 @@ async function runSingleScheduledTask(task: ScheduledTask, send: Sender): Promis
       reportFeedItem(agentId, 'Security scan completed', scope)
       fireTaskCompleted({ task_id: task.id, task_preview: `Security ${scope} scan`, result_preview: result.slice(0, 500), status: 'success' }, task.project_id || 'default')
       logger.info({ taskId: task.id, nextRun }, 'Security scan task completed')
-      return
-    }
-
-    // ── Skill synthesis bypass: uses its own agent session ──
-    if (task.id === 'learning-weekly-synthesis') {
-      const agentId = 'builder'
-      reportAgentStatus(agentId, 'active', 'Weekly skill synthesis')
-      reportFeedItem(agentId, 'Skill synthesis started', 'weekly')
-
-      const { runAgent } = await import('./agent.js')
-      const agentRunner = async (prompt: string): Promise<string | null> => {
-        const soul = getSoul('builder')
-        let fullPrompt = prompt
-        if (soul) {
-          fullPrompt = `${buildAgentPrompt(soul)}\n\n---\n\n${prompt}`
-        }
-        const { text } = await runAgent(fullPrompt, undefined, undefined, undefined, undefined, undefined, {
-          agentId: 'builder',
-        })
-        return text
-      }
-
-      const result = await runSkillSynthesis(agentRunner, psend, task.chat_id)
-
-      // nextRun already computed above
-      updateTaskAfterRun(task.id, result.slice(0, 2000), nextRun)
-      reportAgentStatus(agentId, 'idle')
-      reportFeedItem(agentId, 'Skill synthesis completed', 'weekly')
-      logger.info({ taskId: task.id, nextRun }, 'Skill synthesis task completed')
       return
     }
 

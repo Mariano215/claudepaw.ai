@@ -126,6 +126,9 @@ function ensureBotProjectLifecycleSchema(dbh: Database.Database): void {
   if (!hasColumn(dbh, 'project_settings', 'page_overrides')) {
     dbh.exec(`ALTER TABLE project_settings ADD COLUMN page_overrides TEXT DEFAULT NULL`)
   }
+  if (!hasColumn(dbh, 'project_settings', 'knobs')) {
+    dbh.exec(`ALTER TABLE project_settings ADD COLUMN knobs TEXT DEFAULT NULL`)
+  }
   if (!hasColumn(dbh, 'project_settings', 'execution_pinned')) {
     dbh.exec(`ALTER TABLE project_settings ADD COLUMN execution_pinned INTEGER NOT NULL DEFAULT 0`)
   }
@@ -2660,6 +2663,7 @@ export interface ProjectSettings {
   daily_cost_cap_usd: number | null
   page_overrides: string | null
   execution_pinned: number | null
+  knobs: string | null
 }
 
 export function getAllProjects(): Project[] {
@@ -2696,7 +2700,7 @@ export function getAllProjectsWithSettings(): Array<Project & Partial<ProjectSet
     SELECT p.*, ps.theme_id, ps.primary_color, ps.accent_color, ps.sidebar_color, ps.logo_path,
            ps.execution_provider, ps.execution_provider_secondary, ps.execution_provider_fallback, ps.execution_model,
            ps.execution_model_primary, ps.execution_model_secondary, ps.execution_model_fallback,
-           ps.fallback_policy, ps.model_tier, ps.page_overrides, ps.execution_pinned
+           ps.fallback_policy, ps.model_tier, ps.page_overrides, ps.execution_pinned, ps.knobs
     FROM projects p
     LEFT JOIN project_settings ps ON ps.project_id = p.id
     ORDER BY
@@ -2833,6 +2837,7 @@ export function upsertProjectSettingsInDb(input: {
   daily_cost_cap_usd?: number | null
   page_overrides?: string | null
   execution_pinned?: number | null
+  knobs?: string | null
 }): void {
   const bdb = getBotDbWrite()
   if (!bdb) throw new Error('Bot database not available')

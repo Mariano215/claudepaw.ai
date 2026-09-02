@@ -40,10 +40,6 @@ vi.mock('./souls.js', () => ({
   buildAgentPrompt: vi.fn(() => ''),
 }))
 
-vi.mock('./learning/synthesizer.js', () => ({
-  runSkillSynthesis: vi.fn(),
-}))
-
 vi.mock('./security/index.js', () => ({
   executeSecurityScan: vi.fn(),
 }))
