@@ -1053,7 +1053,7 @@ router.get('/metrics/:category', (req: Request, res: Response, next) => {
   res.json(getMetrics(cat, since, requestedProjectId ?? undefined, allowedProjectIds))
 })
 
-router.post('/metrics/collect', requireAdmin, async (_req: Request, res: Response) => {
+router.post('/metrics/collect', requireBotOrAdmin, async (_req: Request, res: Response) => {
   try {
     const { runMetricsCollection } = await import('./metrics-collector.js')
     const summary = await runMetricsCollection()

@@ -17,7 +17,6 @@ import { extractAndLogFindings } from './research.js'
 import { parseActionItemsFromAgentOutput, ingestParsedItems } from './action-items.js'
 import { buildExampleCompanyTaskContext } from './projects/example-company/task-context.js'
 import { buildDefaultTaskContext } from './projects/default/task-context.js'
-import { buildMetricHealthContext, METRIC_HEALER_TASK_ID } from './metric-health-context.js'
 import { getDuePaws, triggerPaw } from './paws/index.js'
 import { publishDueSocialPosts } from './social/index.js'
 import { checkAndUpgrade } from './system-update.js'
@@ -110,11 +109,7 @@ async function augmentTaskPrompt(
   let context: string | null = null
 
   try {
-    if (task.id === METRIC_HEALER_TASK_ID) {
-      // Pre-fetch the health rows so the agent analyzes instead of collecting.
-      // Keyed on task id, not project: the healer lives in `default`.
-      context = await buildMetricHealthContext()
-    } else if (task.project_id === 'example-company') {
+    if (task.project_id === 'example-company') {
       context = await buildExampleCompanyTaskContext(task.id)
     } else if (task.project_id === 'default') {
       context = await buildDefaultTaskContext(task.id)
@@ -458,7 +453,7 @@ async function executeDueTasks(send: Sender): Promise<void> {
             await triggerPaw(paw.id, agentRunner, send, storedSendApproval, storedPawSend)
           } catch (err) {
             logger.error({ err, pawId: paw.id }, 'Paw cycle failed')
-            await send(paw.config.chat_id, `Paw "${paw.name}" cycle failed: ${err instanceof Error ? err.message : String(err)}`, paw.project_id).catch(() => {})
+            recordError('paws', 'error', `Paw "${paw.name}" cycle failed: ${err instanceof Error ? err.message : String(err)}`, err instanceof Error ? err.stack : undefined, { pawId: paw.id })
           } finally {
             runningPaws.delete(paw.id)
           }
@@ -647,7 +642,11 @@ async function runSingleScheduledTask(task: ScheduledTask, send: Sender): Promis
         projectSlug: taskProjectSlug,
         agentId,
       })
-    const text = agentRes.text
+    // Narration without a result ("I'll run..." or a bare code block) is not
+    // a deliverable. Treat it as empty so it lands in error_log, not Telegram.
+    const narration = agentRes.text && /^\s*(I'll|I will|Let me)\b/.test(agentRes.text) && agentRes.text.trim().length < 600
+    const text = narration ? null : agentRes.text
+    if (narration && !agentRes.emptyReason) agentRes.emptyReason = 'Agent returned narration instead of a result.'
 
     tracker.markAgentEnded()
     tracker.setExecutionMeta({
@@ -682,11 +681,11 @@ async function runSingleScheduledTask(task: ScheduledTask, send: Sender): Promis
     // Scheduled Telegram stays quiet by default.
     // Silent tasks handle their own output (e.g. social-cli sends drafts with buttons).
     if (!silent) {
-      const notification = text && text.trim().length > 0
-        ? summarizeActionItemNotification(agentId, result)
-        : summarizeIssueNotification(agentId, preview, agentRes.emptyReason)
-      if (notification) {
-        await psend(task.chat_id, notification)
+      if (text && text.trim().length > 0) {
+        const notification = summarizeActionItemNotification(agentId, result)
+        if (notification) await psend(task.chat_id, notification)
+      } else {
+        recordError('scheduler', 'warn', summarizeIssueNotification(agentId, preview, agentRes.emptyReason), undefined, { taskId: task.id })
       }
     }
 
@@ -705,13 +704,7 @@ async function runSingleScheduledTask(task: ScheduledTask, send: Sender): Promis
     recordError('scheduler', 'error', errMsg, err instanceof Error ? err.stack : undefined, { taskId: task.id })
     logger.error({ err, taskId: task.id }, 'Scheduled task failed')
 
-    // Notify user of failure
-    await psend(
-      task.chat_id,
-      `\u274C Scheduled task failed: ${preview}...\nError: ${errMsg.slice(0, 500)}`,
-    ).catch(() => {
-      // Don't let notification failure crash the loop
-    })
+    // Failure is in error_log + dashboard feed. Telegram only gets the morning count.
 
     reportAgentStatus(mapTaskToAgent(task.id), 'error', errMsg.slice(0, 100), task.project_id)
     reportFeedItem(mapTaskToAgent(task.id), 'Task failed', errMsg.slice(0, 200), task.project_id)
@@ -831,7 +824,11 @@ export async function runTaskNow(task: ScheduledTask, send: Sender): Promise<voi
         projectId: task.project_id || 'default',
         agentId,
       })
-    const text = agentRes.text
+    // Narration without a result ("I'll run..." or a bare code block) is not
+    // a deliverable. Treat it as empty so it lands in error_log, not Telegram.
+    const narration = agentRes.text && /^\s*(I'll|I will|Let me)\b/.test(agentRes.text) && agentRes.text.trim().length < 600
+    const text = narration ? null : agentRes.text
+    if (narration && !agentRes.emptyReason) agentRes.emptyReason = 'Agent returned narration instead of a result.'
 
     tracker.markAgentEnded()
     tracker.setExecutionMeta({

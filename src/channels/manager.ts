@@ -5,10 +5,13 @@
 import type { Channel } from './types.js'
 import { getFormatter, splitMessage } from './formatters.js'
 import { logger } from '../logger.js'
+import { logChannelMessage } from '../db.js'
+import { flushHeld, holdMessage, isQuietNow, isUrgent } from './quiet-hours.js'
 
 export class ChannelManager {
   private channels = new Map<string, Channel>()
   private running = new Map<string, Channel>()
+  private flushTimer: NodeJS.Timeout | null = null
 
   /**
    * Register a channel. Call before startAll().
@@ -47,12 +50,20 @@ export class ChannelManager {
     if (ok === 0 && this.channels.size > 0) {
       logger.warn('No channels started successfully')
     }
+
+    if (!this.flushTimer) {
+      this.flushTimer = setInterval(() => {
+        this.flushQuietBuffer().catch((err) => logger.warn({ err }, 'quiet-hours flush tick failed'))
+      }, 60_000)
+      this.flushTimer.unref?.()
+    }
   }
 
   /**
    * Gracefully stop all running channels.
    */
   async stopAll(): Promise<void> {
+    if (this.flushTimer) { clearInterval(this.flushTimer); this.flushTimer = null }
     for (const [id, channel] of this.running) {
       try {
         await channel.stop()
@@ -111,7 +122,7 @@ export class ChannelManager {
    * Send a text message through the specified channel.
    * Handles formatting and chunking automatically.
    */
-  async send(channelId: string, chatId: string, text: string): Promise<void> {
+  async send(channelId: string, chatId: string, text: string, opts: { bypassQuiet?: boolean } = {}): Promise<void> {
     const { checkKillSwitch } = await import('../cost/kill-switch-client.js')
     const sw = await checkKillSwitch()
     if (sw) {
@@ -124,6 +135,14 @@ export class ChannelManager {
       return
     }
 
+    // Quiet hours: hold routine messages, release them in one batch later.
+    if (!opts.bypassQuiet && !isUrgent(text) && isQuietNow()) {
+      holdMessage(channelId, chatId, text)
+      logger.info({ channelId, chatId }, 'quiet hours: message held')
+      return
+    }
+
+    let error: string | undefined
     try {
       const formatter = getFormatter(channelId)
       const formatted = formatter(text)
@@ -132,8 +151,19 @@ export class ChannelManager {
         await channel.send(chatId, chunk)
       }
     } catch (err) {
+      error = err instanceof Error ? err.message : String(err)
       logger.error({ channelId, chatId, err }, 'Failed to send message')
     }
+    // Every unprompted outbound message gets a channel_log row (dashboard Logging page).
+    try {
+      logChannelMessage({ direction: 'out', channel: channelId, channelName: channel.name, chatId, content: text, error })
+    } catch { /* logging must never block sending */ }
+  }
+
+  /** Release messages held during quiet hours. Called from the flush timer. */
+  async flushQuietBuffer(): Promise<number> {
+    if (isQuietNow()) return 0
+    return flushHeld((channelId, chatId, text) => this.send(channelId, chatId, text, { bypassQuiet: true }))
   }
 
   /**

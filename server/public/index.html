@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700;800;900&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20260702b">
+  <link rel="stylesheet" href="style.css?v=20260902">
   <!-- Leaflet OSS map library -- used by the Paw Broker Portfolio page (server/public/app.js initPortfolioPage). -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous">
   <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
@@ -43,6 +43,9 @@
     <!-- Pages -->
     <div class="sidebar-pages">
       <span class="sidebar-section-label">Pages</span>
+      <a href="#usage" class="sidebar-link sidebar-link--admin-only" data-page="page-usage" style="display:none">
+        <i data-lucide="inbox"></i><span>Inbox</span>
+      </a>
       <a href="#agents" class="sidebar-link" data-page="page-agents">
         <i data-lucide="bot"></i><span>Agents</span>
       </a>
@@ -100,10 +103,6 @@
       <a href="#knowledge" class="sidebar-link" data-page="page-knowledge">
         <i data-lucide="brain-circuit"></i>
         <span>Knowledge</span>
-      </a>
-      <a href="#usage" class="sidebar-link sidebar-link--admin-only" data-page="page-usage" style="display:none">
-        <i data-lucide="activity"></i>
-        <span>Usage</span>
       </a>
       <a href="#users" class="sidebar-link sidebar-link--admin-only" data-page="page-users" style="display:none">
         <i data-lucide="users"></i>
@@ -428,11 +427,11 @@
       </section>
 
       <!-- ==================== PAGE: USAGE ==================== -->
-      <section id="page-usage" class="page" data-page-title="Usage" aria-label="Usage & Health Report" hidden>
+      <section id="page-usage" class="page" data-page-title="Inbox" aria-label="Inbox: failures, approvals, cost" hidden>
 
         <div class="page-header">
-          <h2 class="page-title">Usage &amp; Health</h2>
-          <p class="page-subtitle">Live snapshot. Mirrors the daily report email. 180-day history retained.</p>
+          <h2 class="page-title">Inbox</h2>
+          <p class="page-subtitle">Everything that needs you: failures, approvals, cost. Same data as the morning Telegram line and the daily email.</p>
           <div class="page-header__actions">
             <button class="btn btn-secondary" data-usage-refresh title="Refresh all data">
               <i data-lucide="refresh-cw" style="width:14px;height:14px;"></i>
@@ -1769,6 +1768,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=20260702b"></script>
+  <script src="app.js?v=20260902"></script>
 </body>
 </html>
