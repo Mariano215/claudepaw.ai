@@ -27,13 +27,19 @@ const THEME_MOTIFS: Record<TopicId, string> = {
 // Art prompt builder
 // ---------------------------------------------------------------------------
 
-export function buildArtPrompt(themes: TopicId[]): string {
+export function buildArtPrompt(themes: TopicId[], scene?: string): string {
   const motifs = themes.map((t) => THEME_MOTIFS[t]).join(', ')
+  // A scene from the brief makes each week's image tell that week's story.
+  // Without one (heuristic brief, old snapshot) fall back to the theme motifs alone.
+  const subject = scene
+    ? `Scene: ${scene} Show the characters clearly, mid-action, as the focal point. ` +
+      `Background details may hint at: ${motifs}. `
+    : `Abstract technology motifs: ${motifs}. `
   return (
     `Create a widescreen 21:9 aspect ratio cyberpunk digital art header image. ` +
     `Style: Blade Runner 2049 inspired, dark moody atmosphere with neon accents in cyan, ` +
-    `magenta, and electric blue. Abstract technology motifs: ${motifs}. ` +
-    `No text, no letters, no words. Cinematic lighting with volumetric fog. ` +
+    `magenta, and electric blue. ${subject}` +
+    `No text, no letters, no words, no signs, no logos. Cinematic lighting with volumetric fog. ` +
     `Professional quality suitable for an email newsletter header. ` +
     `Resolution should work well at 1200x514 pixels.`
   )
@@ -76,9 +82,10 @@ function fallback(reason: HeroFallbackReason): HeroResult {
 export async function generateHeroImage(
   themes: TopicId[],
   dateStr: string,
+  scene?: string,
 ): Promise<HeroResult> {
   const imagePath = heroPathForDate(dateStr)
-  const artDirection = buildArtPrompt(themes)
+  const artDirection = buildArtPrompt(themes, scene)
 
   // Idempotent: reuse existing hero for today
   if (existsSync(imagePath)) {

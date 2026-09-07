@@ -13,11 +13,13 @@ async function main() {
     console.log('')
     console.log('Commands:')
     console.log('  generate    Generate and send newsletter edition')
+    console.log('  preview <out.html> [--email]   Build a full edition (brief, hero, LinkedIn post) and write HTML.')
+    console.log('                                 Never marks articles seen. Add --email to also mail it.')
     console.log('  help        Show this help message')
     process.exit(0)
   }
 
-  if (command !== 'generate') {
+  if (command !== 'generate' && command !== 'preview') {
     console.error(`Unknown command: ${command}`)
     process.exit(1)
   }
@@ -37,7 +39,16 @@ async function main() {
       console.log(`[Newsletter result] ${text}`)
     }
 
-    const result = await generateAndSendNewsletter(dummyChatId, dummySendFn)
+    const isPreview = command === 'preview'
+    const previewArgs = process.argv.slice(3)
+    const previewHtmlPath = isPreview
+      ? previewArgs.find((a) => !a.startsWith('--')) || '/tmp/signal-preview.html'
+      : undefined
+    const previewEmail = isPreview && previewArgs.includes('--email')
+    const result = await generateAndSendNewsletter(dummyChatId, dummySendFn, {
+      previewHtmlPath,
+      previewEmail,
+    })
     logger.info({ result }, 'Newsletter generation complete')
     console.log('\n✅ Newsletter generation complete')
     console.log(`Result: ${result}`)

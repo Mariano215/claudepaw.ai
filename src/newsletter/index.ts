@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { logger } from '../logger.js'
 import { reportFeedItem } from '../dashboard.js'
 import {
@@ -58,6 +58,18 @@ export interface GenerateOptions {
    * publisher against known-good content without burning RSS/LLM cycles.
    */
   loadSnapshotPath?: string
+  /**
+   * Write the rendered HTML here and stop short of Gmail. Implies skipGmail +
+   * bypassDedup, and suffixes the edition id and hero filename with '-preview'
+   * so a fresh hero is generated and today's real edition row is untouched.
+   */
+  previewHtmlPath?: string
+  /**
+   * Preview runs skip Gmail by default. Set this to also email the preview
+   * edition. Dedup marks stay off either way, so a preview never consumes
+   * articles the next real edition would have carried.
+   */
+  previewEmail?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +117,10 @@ export async function generateAndSendNewsletter(
   sendFn: (chatId: string, text: string) => Promise<void>,
   opts: GenerateOptions = {},
 ): Promise<string> {
-  let dateStr = computeEditionDate()
+  if (opts.previewHtmlPath) {
+    opts = { ...opts, skipGmail: !opts.previewEmail, bypassDedup: true }
+  }
+  let dateStr = computeEditionDate() + (opts.previewHtmlPath ? '-preview' : '')
   let editionId = computeEditionId(dateStr)
   let lookbackDays = getLookbackDays()
   logger.info({ opts }, 'Newsletter run options')
@@ -226,7 +241,7 @@ export async function generateAndSendNewsletter(
     logger.info({ themes: brief.topThemes }, 'Executive brief generated')
 
     // 8. Generate hero image
-    const heroOut = await generateHeroImage(brief.topThemes, dateStr)
+    const heroOut = await generateHeroImage(brief.topThemes, dateStr, brief.heroScene)
     imagePath = heroOut.imagePath
     artDirection = heroOut.artDirection
     heroFallbackReason = heroOut.fallbackReason
@@ -289,6 +304,11 @@ export async function generateAndSendNewsletter(
     linkedinPost,
   })
 
+  if (opts.previewHtmlPath) {
+    writeFileSync(opts.previewHtmlPath, html)
+    logger.info({ path: opts.previewHtmlPath }, 'Preview HTML written')
+  }
+
   // 10. Send email (skip on republish flows)
   let sendOk = true
   if (!opts.skipGmail) {
@@ -299,7 +319,9 @@ export async function generateAndSendNewsletter(
     })
     sendOk = sendResult.success
 
-    // 11. Mark URLs as seen
+    // 11. Mark URLs as seen. Never on a preview: a preview must not consume
+    // articles that the next real edition would otherwise carry.
+    if (!opts.previewHtmlPath) {
     const allAccessibleUrls = [
       ...accessibleByCategory.cyber,
       ...accessibleByCategory.ai,
@@ -310,6 +332,7 @@ export async function generateAndSendNewsletter(
     // 11b. Mark GitHub repos as seen (90-day rolling window, re-allow on new release)
     if (githubPicks.length > 0) {
       markReposSeen(githubPicks, dateStr)
+    }
     }
   } else {
     logger.info('skipGmail: skipping sendEmail + markUrlsSeen + markReposSeen')

@@ -37,6 +37,12 @@ describe('buildArtPrompt', () => {
     expect(prompt).toContain('interconnected chain links')
   })
 
+  it('puts the brief scene front and center when provided', () => {
+    const prompt = buildArtPrompt(['identity'], 'A locksmith hands a courier a glowing key at a loading dock.')
+    expect(prompt).toContain('Scene: A locksmith hands a courier')
+    expect(prompt).toContain('biometric iris scans')
+  })
+
   it('always includes the "no text" constraint', () => {
     const prompt = buildArtPrompt(['identity'])
     expect(prompt.toLowerCase()).toContain('no text')

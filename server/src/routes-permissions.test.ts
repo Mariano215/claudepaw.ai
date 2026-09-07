@@ -555,6 +555,8 @@ vi.mock('./db.js', async () => {
     recordSecurityAutoFix: vi.fn(),
     queryChatMessages: stubArr(),
     getAllScheduledTasks,
+    // Audit decoration does not change the already-scoped task set.
+    annotateTasksWithAudit: vi.fn((tasks: unknown[]) => tasks),
     getScheduledTask,
     updateScheduledTaskStatus: vi.fn(),
     createScheduledTask,

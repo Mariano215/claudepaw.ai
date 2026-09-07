@@ -140,6 +140,8 @@ function httpReq(
 // ---------------------------------------------------------------------------
 
 describe('ensureAuthBootstrap', () => {
+  // Admin bootstrap assertions must not inherit a real bot token from the host.
+  beforeEach(() => { vi.stubEnv('BOT_API_TOKEN', '') })
   afterEach(() => { vi.unstubAllEnvs() })
 
   it('no-op when users already exist', () => {

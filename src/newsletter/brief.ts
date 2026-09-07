@@ -150,7 +150,7 @@ function formatArticlesForPrompt(
 async function callAnthropicForBrief(
   articlesBlock: string,
   topThemes: TopicId[],
-): Promise<{ insight: string; implication: string } | null> {
+): Promise<{ insight: string; implication: string; heroScene?: string } | null> {
   const apiKey = getAnthropicKey()
   if (!apiKey) {
     logger.warn('ANTHROPIC_API_KEY not set -- falling back to heuristic brief')
@@ -175,23 +175,32 @@ async function callAnthropicForBrief(
 
   const themeLabels = topThemes.map((t) => TOPIC_LABELS[t]).join(', ')
   const systemPrompt =
-    "You are the editor of The Signal, a senior-executive intelligence brief covering " +
-    "cybersecurity, AI, research, and notable GitHub projects. Your audience is Test User, " +
-    "a CISO and AI/security builder. Write with authority, density, and sharp judgment. " +
-    "No filler. No AI cliches. No em dashes. Every sentence must advance the argument."
+    "You are the editor of The Signal, a weekly brief on cybersecurity, AI, and research " +
+    "read by business leaders, board members, and managers. Most readers are not technical. " +
+    "Write in plain English a smart non-expert understands on the first read. Short sentences. " +
+    "One idea per sentence. If you must use a technical term, CVE number, or product name, explain " +
+    "in the next few words what it is and why the reader should care, in everyday language. " +
+    "Say what happened, who it affects, and what it could cost them. " +
+    "No jargon, no acronyms without a plain-word gloss, no filler, no AI cliches, no em dashes."
 
   const userPrompt =
     `Below are the curated articles for this edition. Dominant themes detected: ${themeLabels}.\n\n` +
     `${articlesBlock}\n\n` +
-    `Produce two sections as strict JSON:\n\n` +
+    `Produce three fields as strict JSON:\n\n` +
     `{\n` +
-    `  "insight": "<4-6 sentences. Identify the real story across these items. ` +
-    `What connects them? What shift is underway that a busy CISO should notice? ` +
-    `Be specific -- reference concrete items, vendors, CVEs, or techniques from the articles. ` +
-    `Do not just summarize counts or themes. Draw a non-obvious conclusion.>",\n` +
-    `  "implication": "<3-5 sentences of actionable guidance tailored to a CISO running ` +
-    `a cybersecurity + AI shop. Name the specific control, process, or tool to change this week. ` +
-    `Avoid generic advice like 'review your IAM policies'. Be prescriptive and time-bound.>"\n` +
+    `  "insight": "<4-6 short sentences. Tell the one story of the week that a busy executive ` +
+    `should know. Explain why it matters to a business, in money, downtime, trust, or legal terms. ` +
+    `Refer to specific items from the articles, but describe each in plain words ` +
+    `(for example: 'a flaw in JFrog Artifactory, a tool many companies use to store software parts, ` +
+    `lets attackers skip the login'). Reading level: a sharp 10th grader. No acronym without a gloss.>",\n` +
+    `  "implication": "<3-5 short sentences. Concrete things a leader can ask their team to do or ` +
+    `check this week. Phrase each as a question to ask or a decision to make, not as a technical ` +
+    `procedure. Example: 'Ask your IT lead whether we use Artifactory and whether it was patched this week.' ` +
+    `Avoid generic advice like 'review your policies'.>",\n` +
+    `  "heroScene": "<One sentence describing a picture that tells this week's story, for an AI ` +
+    `image generator. It must include people or characters doing something concrete (a guard, ` +
+    `a courier, a locksmith, a crowd, a robot, an animal as a symbol). Name the setting and the action. ` +
+    `Describe things, not words: no text, signs, labels, or logos in the scene.>"\n` +
     `}\n\n` +
     `Return ONLY the JSON object. No preamble, no markdown fences.`
 
@@ -226,12 +235,20 @@ async function callAnthropicForBrief(
 
     // Strip optional code fences and parse JSON
     const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim()
-    const parsed = JSON.parse(cleaned) as { insight?: string; implication?: string }
+    const parsed = JSON.parse(cleaned) as {
+      insight?: string
+      implication?: string
+      heroScene?: string
+    }
     if (!parsed.insight || !parsed.implication) {
       logger.error({ parsed }, 'LLM brief missing insight/implication keys')
       return null
     }
-    return { insight: parsed.insight.trim(), implication: parsed.implication.trim() }
+    return {
+      insight: parsed.insight.trim(),
+      implication: parsed.implication.trim(),
+      heroScene: parsed.heroScene?.trim() || undefined,
+    }
   } catch (err) {
     logger.error({ err }, 'Anthropic brief generation failed')
     return null
@@ -252,7 +269,7 @@ export async function generateExecutiveBrief(
   const llm = await callAnthropicForBrief(articlesBlock, topThemes)
   if (llm) {
     logger.info({ model: BRIEF_MODEL }, 'Executive brief generated via LLM')
-    return { insight: llm.insight, implication: llm.implication, topThemes }
+    return { insight: llm.insight, implication: llm.implication, topThemes, heroScene: llm.heroScene }
   }
 
   logger.warn('Falling back to heuristic brief')

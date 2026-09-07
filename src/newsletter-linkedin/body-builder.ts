@@ -287,24 +287,20 @@ export function buildBodyMarkdown(input: BuildLinkedinBodyInput): string {
 /** Fixed hashtag set for The Signal. Plain LinkedIn post, no markdown. */
 const SIGNAL_HASHTAGS = '#Cybersecurity #AI #InfoSec #ArtificialIntelligence #ThreatIntel'
 
-/** First sentence of a block of prose, stripped of HTML and dashes. */
-function firstSentence(text: string): string {
-  const clean = stripHtml(text).replace(/[—–]/g, '-')
-  return clean.split(/(?<=[.!?])\s/)[0] || clean
-}
-
 /**
- * Short, copy-paste LinkedIn teaser for the email footer. Promotes the current
- * edition and drives subscriptions: it does NOT dump the whole newsletter.
- * LinkedIn renders no markdown, so output is plain text with a naked URL
- * (LinkedIn auto-links it). Dashes normalized to hyphens per house style.
- * Stays well under LinkedIn's 3000-char post limit.
+ * Copy-paste LinkedIn teaser for the email footer. Carries the full executive
+ * insight (never truncated; a cut-off sentence reads as broken on LinkedIn),
+ * then drives subscriptions. It does NOT dump the article lists or the
+ * recommended action. LinkedIn renders no markdown, so output is plain text
+ * with a naked URL (LinkedIn auto-links it). Dashes normalized to hyphens per
+ * house style. The insight is 4-6 sentences, so the post stays well under
+ * LinkedIn's 3000-char limit.
  *
  * Builds a topics line from whichever categories actually have articles so the
  * teaser never advertises an empty section.
  */
 export function buildLinkedinPostPlain(input: BuildLinkedinBodyInput): string {
-  const hook = clamp(firstSentence(input.brief.insight), 280)
+  const hook = stripHtml(input.brief.insight).replace(/[—–]/g, '-')
 
   const topics: string[] = []
   if (input.articles.cyber.length) topics.push('cybersecurity')

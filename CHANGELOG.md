@@ -7,6 +7,7 @@ This file follows a lightweight Keep a Changelog style and is intended for human
 ## Unreleased
 
 ### Added
+- PawTrader checks progress every five minutes and sends a persistent daily readiness summary at 5 p.m. Eastern, alongside the existing weekly review. Reports expose stale accounting and missing evidence without automatically enabling live trading.
 - Immediate acknowledgement message ("Got it, working on it...") sent to the user right after routing, before the agent runs — so a mid-run restart no longer leaves the user with zero feedback.
 - Ollama embeddings now fall back to OpenAI `text-embedding-3-small` when Ollama is unreachable (HTTP 4xx/network error). Requires `OPENAI_API_KEY` to be set. Falls back to empty vector if neither succeeds.
 - Empty agent responses now include a descriptive reason (subtype, turn count, tool count, duration) instead of the generic `(No response from Claude)` placeholder, matching the detail level already present in scheduler failure messages.
@@ -37,6 +38,11 @@ This file follows a lightweight Keep a Changelog style and is intended for human
 - Example Company weekly briefing, content-plan, and festival-scan tasks now receive structured Gmail, calendar, and sheet context from the scheduler before the model runs, instead of relying on in-prompt shell commands.
 
 ### Fixed
+- PawTrader uncertain exits retain their original intent for safe recovery; partial exits stay guarded and canceled executions retain their audit trail. Companion engine migration 0007 is required for idempotent recovery.
+- PawTrader exits use fresh position marks and current momentum instead of stale entry enrichment; slow dashboard refreshes no longer overlap.
+- PawTrader retries preserve entry/stop/target prices and reject expired, paused, unprotected, or exhausted intents after broker reconciliation.
+- PawTrader validation rejects missing equity history, corrects single-trial confidence, requires trial variance for multiple variants, and expires approvals when strategy/config changes. Missing prospective evaluation evidence now explicitly blocks live readiness.
+- PawTrader dashboard uses archive-aware accounting with fee limitations and stale timestamps; outages no longer appear as paper mode or an empty portfolio. Readiness details are visible above trading activity.
 - Fixed Paw Trader dashboard usability so pending signals can be approved, skipped, upsized, or paused directly from the dashboard when Telegram delivery stalls, and trader queue/decision tables now scroll inside their cards instead of taking over the page.
 - Fixed Paw Trader alert spam by suppressing blind low-score signals before they page the operator and persisting skip, timeout, and committee-abstain dismissals so the same asset/strategy/side stays quiet unless score or enrichment changes materially or 24 hours pass.
 - Fixed Paw Trader committee rationale calibration so risk/trader explanations now see the configured score floor and stop labeling valid low-end signals as "noise" without threshold context.

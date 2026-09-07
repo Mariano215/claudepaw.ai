@@ -22,6 +22,9 @@ paths = [
   # Telemetry tests — contain mock Slack tokens, AWS keys, and RSA key stubs
   # to verify that summarizeToolInput() properly redacts sensitive values
   "src/telemetry.test.ts",
+  # Architecture tour build cache — SHA-256 digests of the narration scripts,
+  # used to skip regenerating audio. High entropy hex, no credentials.
+  "docs/architecture-tour/audio/hashes.json",
 ]
 
 # Regex patterns that are safe (mock/placeholder values)

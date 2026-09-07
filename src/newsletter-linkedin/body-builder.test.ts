@@ -274,13 +274,21 @@ describe('buildBodyMarkdown', () => {
 })
 
 describe('buildLinkedinPostPlain', () => {
-  it('is a short teaser, not a full newsletter dump', () => {
+  it('is a teaser under the LinkedIn limit, not a full newsletter dump', () => {
     const post = buildLinkedinPostPlain(makeInput())
-    expect(post.length).toBeLessThan(1300)
+    expect(post.length).toBeLessThan(3000)
     expect(post).toContain('The Signal')
     // does not serialize the whole brief / recommended action
     expect(post).not.toContain('Recommended action')
     expect(post).not.toContain('GitHub picks worth')
+  })
+
+  it('carries the full insight, never truncated', () => {
+    const insight =
+      'First sentence about a flaw. Second sentence on who it hits. Third sentence on cost. Fourth closes.'
+    const post = buildLinkedinPostPlain(makeInput({ brief: makeBrief({ insight }) }))
+    expect(post).toContain(insight)
+    expect(post).not.toContain('…')
   })
 
   it('includes the fixed hashtag set', () => {

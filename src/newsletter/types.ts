@@ -72,6 +72,8 @@ export interface ExecutiveBrief {
   insight: string
   implication: string
   topThemes: TopicId[]
+  /** One-sentence visual scene for the hero image, tied to this week's story. LLM path only. */
+  heroScene?: string
 }
 
 export interface NewsletterConfig {
