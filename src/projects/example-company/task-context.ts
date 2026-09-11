@@ -145,7 +145,7 @@ async function buildBlogDraftContext(): Promise<string> {
   // Blog prompt requires festival rows verified against the tracker before
   // calling anything "selected"/"screening", so pre-fetch them too, via the
   // shared reader so this and the fo-festivals collector stay one function.
-  const festivalRows = await readExample FilmFestivalRows()
+  const festivalRows = await readExampleFilmFestivalRows()
 
   return [
     '## Structured Google Context',
@@ -161,7 +161,7 @@ async function buildBlogDraftContext(): Promise<string> {
 
 /** The Example Film festival tracker rows, for the fo-festivals collector. Same
  *  read buildFestivalScanContext used to do, exposed on its own. */
-export async function readExample FilmFestivalRows(): Promise<string[][]> {
+export async function readExampleFilmFestivalRows(): Promise<string[][]> {
   const auth = await withGoogleAuth()
   const sheets = new SheetsModule()
   return await sheets.read(auth, EVELYN_FESTIVAL_SHEET, 'Example Film Festival List!A1:J20')

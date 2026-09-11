@@ -4,9 +4,9 @@ const sheetRows: string[][] = [
   ['Festival', 'Deadline', 'Status'],
   ['Slamdance', '2026-10-01', 'submitted'],
 ]
-let readExample FilmImpl: () => Promise<string[][]> = async () => sheetRows
+let readExampleFilmImpl: () => Promise<string[][]> = async () => sheetRows
 vi.mock('../../../projects/example-company/task-context.js', () => ({
-  readExample FilmFestivalRows: vi.fn(() => readExample FilmImpl()),
+  readExampleFilmFestivalRows: vi.fn(() => readExampleFilmImpl()),
 }))
 
 const seenIds: string[] = []
@@ -27,7 +27,7 @@ const RSS = `<?xml version="1.0"?><rss><channel>
 
 beforeEach(() => {
   seenIds.length = 0
-  readExample FilmImpl = async () => sheetRows
+  readExampleFilmImpl = async () => sheetRows
   vi.stubGlobal('fetch', vi.fn(async () => new Response(RSS, { status: 200 })))
 })
 
@@ -60,7 +60,7 @@ describe('fo-festivals collector', () => {
   })
 
   it('records a tracker read failure without throwing when the RSS path still succeeds', async () => {
-    readExample FilmImpl = async () => { throw new Error('sheet unreachable') }
+    readExampleFilmImpl = async () => { throw new Error('sheet unreachable') }
     const { foFestivalsCollector } = await import('../fo-festivals.js')
     const res = await foFestivalsCollector({ pawId: 'fo-festival-tracker', projectId: 'example-company' })
     const raw = res.raw_data as { tracker_rows: string[][]; candidates: unknown[] }

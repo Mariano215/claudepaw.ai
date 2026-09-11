@@ -13,7 +13,7 @@ import type { Collector } from './index.js'
 import { logger } from '../../logger.js'
 import { getDb } from '../../db.js'
 import { normalizeUrl, parseRssXml, resolveGoogleNewsUrl } from '../../newsletter/feeds.js'
-import { readExample FilmFestivalRows } from '../../projects/example-company/task-context.js'
+import { readExampleFilmFestivalRows } from '../../projects/example-company/task-context.js'
 
 const WINDOW_DAYS = 14
 const FEED_TIMEOUT_MS = 15_000
@@ -112,7 +112,7 @@ export const foFestivalsCollector: Collector = async (ctx) => {
 
   let trackerRows: string[][] = []
   try {
-    trackerRows = await readExample FilmFestivalRows()
+    trackerRows = await readExampleFilmFestivalRows()
   } catch (err) {
     errors.push(`tracker sheet: ${err instanceof Error ? err.message : String(err)}`)
   }
