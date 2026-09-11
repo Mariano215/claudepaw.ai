@@ -1509,6 +1509,22 @@ describe('POST /api/v1/action-items/sync -- external_ref carries through', () =>
     expect(found?.external_ref).toBe(item.external_ref)
   })
 
+  it('accepts the bot token with no project membership (the live snapshot path)', async () => {
+    const res = await httpReq(server, 'POST', '/api/v1/action-items/sync', {
+      headers: tok(botToken),
+      body: { project_id: 'proj-a', items: [], comments: [], events: [] },
+    })
+    expect(res.status).toBe(200)
+  })
+
+  it('still refuses a member with no role on the project', async () => {
+    const res = await httpReq(server, 'POST', '/api/v1/action-items/sync', {
+      headers: tok(memberToken),
+      body: { project_id: 'proj-a', items: [], comments: [], events: [] },
+    })
+    expect(res.status).toBe(403)
+  })
+
   it('syncs an item with no external_ref key at all (pre-migration bot snapshot)', async () => {
     const item = {
       id: 'ai-ext-2',

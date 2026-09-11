@@ -4261,7 +4261,15 @@ router.get(
   },
 )
 
-router.post('/action-items/sync', requireProjectRole('editor'), (req: Request, res: Response) => {
+// The bot pushes this snapshot with its own token (global role bot, no project
+// memberships), so a plain editor check rejected every sync and the dashboard
+// showed cards months stale. Bot passes; anyone else needs editor on the project.
+const requireBotOrEditor: RequestHandler = (req, res, next) => {
+  if (req.user?.global_role === 'bot') { next(); return }
+  requireProjectRole('editor')(req, res, next)
+}
+
+router.post('/action-items/sync', requireBotOrEditor, (req: Request, res: Response) => {
   const bdb = getBotDbWrite()
   if (!bdb) return res.status(503).json({ error: 'bot db unavailable' })
 

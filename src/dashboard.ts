@@ -948,7 +948,12 @@ export function reportScheduledTasks(tasks: unknown[], projectId: string = 'defa
 
 export function reportActionPlanSnapshot(projectId: string): void {
   import('./db.js').then(({ listActionItems, listActionItemComments, listActionItemEvents }) => {
-    const items = listActionItems({ projectId, includeArchived: true })
+    // The server replaces the project's rows with this snapshot and refuses
+    // more than 500 items, so send only live rows, newest first, capped. A
+    // project with 900 archived cards used to be rejected on every sync.
+    const items = listActionItems({ projectId, includeArchived: false })
+      .sort((a, b) => b.created_at - a.created_at)
+      .slice(0, 500)
     const comments = items.flatMap(item => listActionItemComments(item.id))
     const events = items.flatMap(item => listActionItemEvents(item.id))
 
@@ -956,6 +961,8 @@ export function reportActionPlanSnapshot(projectId: string): void {
       method: 'POST',
       headers: dashboardApiHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ project_id: projectId, items, comments, events }),
+    }).then((r) => {
+      if (!r.ok) logger.warn({ projectId, status: r.status, count: items.length }, 'action plan snapshot rejected')
     }).catch(() => { /* silent fallback */ })
   }).catch((err) => {
     logger.error({ err, projectId }, 'Failed to prepare action plan snapshot for dashboard sync')
