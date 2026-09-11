@@ -12722,7 +12722,9 @@ function apCanTransition(from, to) {
 
 function apTargetStatus(item, action) {
   if (!item) return null;
-  if (action === 'approve') return item.executable_by_agent ? 'in_progress' : 'approved';
+  // Approve always lands on 'approved'. The bot's card runner moves executable
+  // cards to in_progress itself; proposed -> in_progress is not a legal step.
+  if (action === 'approve') return 'approved';
   if (action === 'reject') return 'rejected';
   if (action === 'pause') return 'paused';
   if (action === 'complete') return 'completed';

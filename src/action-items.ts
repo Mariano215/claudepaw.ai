@@ -42,11 +42,6 @@ export function canTransition(from: ActionItemStatus, to: ActionItemStatus): boo
   return TRANSITIONS[from]?.includes(to) ?? false
 }
 
-export function nextStatusFor(action: 'approve', executableByAgent: boolean): ActionItemStatus {
-  if (action === 'approve') return executableByAgent ? 'in_progress' : 'approved'
-  throw new Error(`unknown action: ${action}`)
-}
-
 export function isTerminal(s: ActionItemStatus): boolean { return TERMINAL.includes(s) }
 export function isNonTerminal(s: ActionItemStatus): boolean { return NON_TERMINAL.includes(s) }
 

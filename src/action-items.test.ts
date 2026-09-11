@@ -18,7 +18,6 @@ vi.mock('./logger.js', () => ({
 
 import {
   canTransition,
-  nextStatusFor,
   createActionItem,
   transitionActionItem,
   parseActionItemsFromAgentOutput,
@@ -76,12 +75,11 @@ describe('canTransition', () => {
   })
 })
 
-describe('nextStatusFor', () => {
-  it('routes executable items to in_progress', () => {
-    expect(nextStatusFor('approve', true)).toBe('in_progress')
-  })
-  it('routes manual items to approved', () => {
-    expect(nextStatusFor('approve', false)).toBe('approved')
+describe('approve on an executable card', () => {
+  it('never skips approved: proposed -> in_progress is illegal', () => {
+    expect(canTransition('proposed', 'in_progress')).toBe(false)
+    expect(canTransition('proposed', 'approved')).toBe(true)
+    expect(canTransition('approved', 'in_progress')).toBe(true)
   })
 })
 
