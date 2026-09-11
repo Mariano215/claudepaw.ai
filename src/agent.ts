@@ -91,10 +91,22 @@ export async function runAgent(
 
     let capOverride: 'ollama' | null = null
 
+    // Trader is walled off from any ollama failover: trade decisions need
+    // reliable structured-JSON veto logic that local Gemma fumbles (trips the
+    // parse-failure auto-abstain bug), and analyst/watchdog reports feed
+    // financial judgment. This is the bot-side belt-and-suspenders to the
+    // server gate's exclusion — a trade decision must never run on Gemma even if
+    // the server returns override_to_ollama. Detection mirrors the server gate.
+    const isTraderRun = gateProjectId === 'trader'
+
     // POOL GATE — account-wide Anthropic Agent SDK Credit Pool ($200/mo Max 20x,
-    // metered post-June-15 2026). Checked before the per-project gate.
+    // metered post-June-15 2026), trader-reserve aware. Scoped by project so the
+    // server applies the $40 trader reserve + the trader ollama-exclusion.
+    // Checked before the per-project gate so an exhausted account never leaks
+    // spend regardless of which project owns the call.
     const { getPoolGateStatus, getCostGateStatus } = await import('./cost/cost-gate.js')
-    const pool = await getPoolGateStatus()
+    const pool = await getPoolGateStatus(gateProjectId)
+    if (pool.warn) logger.warn({ scope: pool.scope, gateProjectId, warn: pool.warn }, 'cost pool gate warning')
     if (pool.action === 'refuse') {
       const msg = isTraderRun && pool.unavailable
         ? 'Trader credit-pool gate is unavailable. Trader run refused until dashboard cost controls recover.'
@@ -104,7 +116,8 @@ export async function runAgent(
       const reason = pool.unavailable ? 'trader credit-pool gate unavailable' : `agent SDK pool ${pool.scope ?? 'global'} hard-stop`
       return buildRefusalResult(msg, reason, startMs)
     }
-    if (pool.action === 'override_to_ollama') capOverride = 'ollama'
+    // Trader never fails over to ollama; only non-trader work does.
+    if (pool.action === 'override_to_ollama' && !isTraderRun) capOverride = 'ollama'
 
     // PER-PROJECT GATE — unchanged. Layered on top of the pool gate so a single
     // project can still be capped tighter than the pool allows.
@@ -123,7 +136,8 @@ export async function runAgent(
       const msg = `${scope} cost cap reached (${pct}% of $${capAmount}). Agent refused to run. Raise cap in Settings.`
       return buildRefusalResult(msg, `cost cap exceeded at ${pct}%`, startMs)
     }
-    if (status.action === 'override_to_ollama') capOverride = 'ollama'
+    // Trader is excluded from the ollama failover here too (belt-and-suspenders).
+    if (status.action === 'override_to_ollama' && !isTraderRun) capOverride = 'ollama'
 
     let finalMessage = message
 

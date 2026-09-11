@@ -142,10 +142,10 @@ describe('runAgent gate enforcement', () => {
       { projectId: 'test-project', source: 'test' },
     )
 
-    expect(result.text).toMatch(/pool hard-stop reached/i)
+    expect(result.text).toMatch(/non-trader credit budget/i)
     expect(result.text).toContain('$191.42')
     expect(result.text).toContain('$200')
-    expect(result.emptyReason).toMatch(/agent sdk pool exceeded/i)
+    expect(result.emptyReason).toMatch(/agent sdk pool .*hard-stop/i)
     expect(runtime.runAgentWithResolvedExecution).not.toHaveBeenCalled()
   })
 
@@ -175,6 +175,73 @@ describe('runAgent gate enforcement', () => {
     expect(runtimeCtx?.executionOverride?.provider).toBe('ollama')
   })
 
+  // --- Trader exclusion from ollama failover (belt-and-suspenders) ---
+
+  it('trader project is NEVER routed to ollama even when the pool gate says override', async () => {
+    vi.mocked(costGateMod.getPoolGateStatus).mockResolvedValue({
+      action: 'override_to_ollama',
+      spend_usd: 150,
+      cap_usd: 200,
+      percent_of_pool: 75,
+      override_threshold_pct: 80,
+      hardstop_threshold_pct: 100,
+      projected_eom_usd: 180,
+      scope: 'trader',
+    } as any)
+
+    await runAgent('trade decision', undefined, undefined, false, undefined, {
+      projectId: 'trader',
+      source: 'committee',
+    })
+
+    expect(runtime.runAgentWithResolvedExecution).toHaveBeenCalledOnce()
+    const callArgs = vi.mocked(runtime.runAgentWithResolvedExecution).mock.calls[0]
+    const runtimeCtx = callArgs[1] as any
+    expect(runtimeCtx?.executionOverride?.provider).not.toBe('ollama')
+  })
+
+  it('trader project is excluded from the per-project gate ollama override too', async () => {
+    vi.mocked(costGateMod.getCostGateStatus).mockResolvedValue({
+      action: 'override_to_ollama',
+      percent_of_cap: 85,
+      mtd_usd: 42.5,
+      today_usd: 5,
+      monthly_cap_usd: 50,
+      daily_cap_usd: 10,
+      triggering_cap: 'monthly',
+    })
+
+    await runAgent('trade decision', undefined, undefined, false, undefined, {
+      projectId: 'trader',
+      source: 'committee',
+    })
+
+    expect(runtime.runAgentWithResolvedExecution).toHaveBeenCalledOnce()
+    const callArgs = vi.mocked(runtime.runAgentWithResolvedExecution).mock.calls[0]
+    const runtimeCtx = callArgs[1] as any
+    expect(runtimeCtx?.executionOverride?.provider).not.toBe('ollama')
+  })
+
+  it('trader pool hard-stop returns a trader-specific refusal and does not run', async () => {
+    vi.mocked(costGateMod.getPoolGateStatus).mockResolvedValue({
+      action: 'refuse',
+      spend_usd: 200,
+      cap_usd: 200,
+      percent_of_pool: 100,
+      override_threshold_pct: 80,
+      hardstop_threshold_pct: 100,
+      projected_eom_usd: 200,
+      scope: 'trader',
+    } as any)
+
+    const result = await runAgent('trade decision', undefined, undefined, false, undefined, {
+      projectId: 'trader',
+      source: 'committee',
+    })
+
+    expect(result.text).toMatch(/trader paused/i)
+    expect(runtime.runAgentWithResolvedExecution).not.toHaveBeenCalled()
+  })
 
   it('trader pool-gate outage refuses safely with an availability message', async () => {
     vi.mocked(costGateMod.getPoolGateStatus).mockResolvedValue({
@@ -236,7 +303,7 @@ describe('runAgent gate enforcement', () => {
       { projectId: 'test-project', source: 'test' },
     )
 
-    expect(result.text).toMatch(/pool hard-stop reached/i)
+    expect(result.text).toMatch(/non-trader credit budget/i)
     // Per-project gate was never consulted because pool refused first.
     expect(runtime.runAgentWithResolvedExecution).not.toHaveBeenCalled()
   })

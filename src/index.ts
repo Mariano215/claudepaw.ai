@@ -461,21 +461,6 @@ async function main(): Promise<void> {
   setPawdevCardSender(pawSendFn)
 
 
-  // Forward-only Bitcoin research feed. Independent of engine credentials and
-  // intentionally incapable of creating signals, cohorts, decisions, or orders.
-  try {
-    const {startBitcoinOrderFlowCollector} = await import('./trader/bitcoin-order-flow-collector.js')
-    const {syncTraderTablesToServer} = await import('./trader/server-sync.js')
-    const {registerTraderCollectorTelemetry} = await import('./trader/operational-events.js')
-    startBitcoinOrderFlowCollector(getDb(), {
-      onStatusChange: () => syncTraderTablesToServer(getDb()),
-    })
-    // Trader watchdog collector runs land in the operational ledger. Registered
-    // here so the generic paws engine does not import a trader module.
-    registerTraderCollectorTelemetry(getDb())
-  } catch (err) {
-    logger.warn({err}, 'Failed to init Bitcoin order-flow research collection')
-  }
 
 
 
@@ -492,10 +477,6 @@ async function main(): Promise<void> {
     reportFeedItem('system', 'ClaudePaw shutting down', signal)
     clearInterval(healthInterval)
     stopScheduler()
-    try {
-      const {stopBitcoinOrderFlowCollector} = await import('./trader/bitcoin-order-flow-collector.js')
-      stopBitcoinOrderFlowCollector()
-    } catch { /* collector may have been disabled or failed before initialization */ }
     stopSidecar()
     disconnectDashboard()
     await channelManager.stopAll()

@@ -14,7 +14,6 @@
 import Database from 'better-sqlite3'
 import { readdirSync, existsSync, statSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { brokerPaws } from '../paws/broker-paw-defs.js'
 
 const ROOT = process.env.PROJECT_ROOT ?? '.'
 const BOT_DB = join(ROOT, 'store', 'claudepaw.db')
@@ -79,7 +78,6 @@ export function definedRoutines(): Map<string, string[]> {
     list.push(id)
     byProject.set(project, list)
   }
-  for (const p of brokerPaws) add(p.project_id, p.id)
   add('broker', 'broker-deal-underwriter')
   add('pawdev', 'paw-dev-cycle')
   // From scripts/paws-seed.ts. Note these are declared under project_id

@@ -25,6 +25,14 @@ export interface PoolGateStatus {
   override_threshold_pct: number
   hardstop_threshold_pct: number
   projected_eom_usd: number
+  // Trader-reserve slice fields (optional; mirror server/src/cost-gate.ts).
+  scope?: 'trader' | 'nontrader' | 'global'
+  total_spend_usd?: number
+  trader_spend_usd?: number
+  nontrader_spend_usd?: number
+  reserve_usd?: number
+  nontrader_cap_usd?: number
+  warn?: string | null
   /** Set only when a fail-closed project's pool gate could not be read and was refused safely. */
   unavailable?: boolean
 }
@@ -154,15 +162,19 @@ export async function getCostGateStatus(projectId: string): Promise<CostGateStat
 
 export function _resetCache(): void {
   cache.clear()
-  poolCache = null
+  poolCache.clear()
 }
 
 // ---------------------------------------------------------------------------
 // Pool gate client (Agent SDK Credit Pool, post-June-15 2026)
 // ---------------------------------------------------------------------------
 
-let poolCache: { at: number; value: PoolGateStatus } | null = null
+// Cached per scope key (projectId|callerTag): the gate now returns a different
+// action for trader vs non-trader vs global, so a single shared entry would leak
+// one scope's verdict onto another.
+const poolCache = new Map<string, { at: number; value: PoolGateStatus }>()
 const POOL_TTL_MS = 60_000
+const POOL_MAX_CACHE_ENTRIES = 100
 
 /**
  * Fetches account-wide Anthropic Agent SDK Credit Pool status from the
@@ -176,13 +188,31 @@ const POOL_TTL_MS = 60_000
  * ALSO enforces the trader exclusion independently (see src/agent.ts) so a trade
  * decision can never be routed to local Gemma even if this call misfires.
  */
-export async function getPoolGateStatus(): Promise<PoolGateStatus> {
+export async function getPoolGateStatus(
+  projectId?: string,
+  callerTag?: string,
+): Promise<PoolGateStatus> {
   const now = Date.now()
-  if (poolCache && now - poolCache.at < POOL_TTL_MS) return poolCache.value
+  const key = `${projectId ?? ''}|${callerTag ?? ''}`
+  const cached = poolCache.get(key)
+  if (cached && now - cached.at < POOL_TTL_MS) return cached.value
+
+  // Opportunistic eviction to keep the map bounded.
+  if (poolCache.size >= POOL_MAX_CACHE_ENTRIES) {
+    for (const [k, e] of poolCache) if (now - e.at >= POOL_TTL_MS) poolCache.delete(k)
+    if (poolCache.size >= POOL_MAX_CACHE_ENTRIES) {
+      const oldest = poolCache.keys().next().value
+      if (oldest !== undefined) poolCache.delete(oldest)
+    }
+  }
 
   const baseUrl = DASHBOARD_URL || 'http://127.0.0.1:3000'
   const token = BOT_API_TOKEN
-  const url = `${baseUrl}/api/v1/cost-gate/pool`
+  const params = new URLSearchParams()
+  if (projectId) params.set('projectId', projectId)
+  if (callerTag) params.set('callerTag', callerTag)
+  const qs = params.toString()
+  const url = `${baseUrl}/api/v1/cost-gate/pool${qs ? `?${qs}` : ''}`
 
   try {
     const res = await fetch(url, {
@@ -200,8 +230,15 @@ export async function getPoolGateStatus(): Promise<PoolGateStatus> {
       override_threshold_pct: body.override_threshold_pct ?? 80,
       hardstop_threshold_pct: body.hardstop_threshold_pct ?? 100,
       projected_eom_usd: body.projected_eom_usd ?? 0,
+      scope: body.scope,
+      total_spend_usd: body.total_spend_usd,
+      trader_spend_usd: body.trader_spend_usd,
+      nontrader_spend_usd: body.nontrader_spend_usd,
+      reserve_usd: body.reserve_usd,
+      nontrader_cap_usd: body.nontrader_cap_usd,
+      warn: body.warn ?? null,
     }
-    poolCache = { at: now, value }
+    poolCache.set(key, { at: Date.now(), value })
     return value
   } catch (err) {
     const failClosed = failsClosed(projectId)

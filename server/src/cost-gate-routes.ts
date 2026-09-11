@@ -42,7 +42,12 @@ router.get(
   '/pool',
   (req: Request, res: Response): void => {
     try {
-      const status = computePoolGateStatus()
+      // Optional scope: the bot passes projectId (and later a callerTag) so the
+      // gate can apply the trader reserve + trader ollama-exclusion. Absent =
+      // global display view (dashboard widget).
+      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined
+      const callerTag = typeof req.query.callerTag === 'string' ? req.query.callerTag : undefined
+      const status = computePoolGateStatus({ projectId, callerTag })
       res.json(status)
     } catch (err) {
       logger.warn({ err }, 'cost-gate /pool GET failed')

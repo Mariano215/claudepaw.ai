@@ -25,7 +25,6 @@ import { githubCommunityCollector } from './github-community.js'
 import { githubDevCollector } from './github-dev.js'
 import { securityStatusCollector } from './security-status.js'
 import { foFestivalsCollector } from './fo-festivals.js'
-import { brokerSourcedDealsCollector } from './broker-sourced-deals.js'
 export interface CollectorContext {
   pawId: string
   projectId: string
