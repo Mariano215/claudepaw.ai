@@ -204,6 +204,9 @@ function computeRecoveredNextRun(cron: string, currentNextRun: number, now: numb
  *
  * Returns a summary of what was reaped for the startup log.
  */
+/** Worst legitimate cycle: collector + five phases at the SDK timeout. */
+export const LIVE_CYCLE_MAX_AGE_MS = 65 * 60 * 1000
+
 export function reapStalePawCycles(
   db: InstanceType<typeof Database>,
   maxAgeMs: number = 30 * 60 * 1000, // 30 min default (longest legitimate phase)
@@ -217,6 +220,7 @@ export function reapStalePawCycles(
      WHERE phase IN ('observe','analyze','decide','act','report')
        AND completed_at IS NULL
        AND started_at < ?
+       AND COALESCE(json_extract(state, '$.approval_requested'), 0) NOT IN (1, 'true')
   `).run(Date.now(), cutoff)
 
   // Unstick any Paw that is waiting_approval but no longer has an active

@@ -87,6 +87,7 @@ export function createActionItem(input: CreateActionItemInput): string {
     last_run_at: null,
     last_run_result: null,
     last_run_session: null,
+    external_ref: null,
   }
   insertActionItem(item)
   insertActionItemEvent({

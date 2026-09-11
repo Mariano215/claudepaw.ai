@@ -251,4 +251,46 @@ describe('processMessage', () => {
     expect(reportFeedItem).toHaveBeenCalledWith('scout', 'Error', expect.stringContaining('attempted=codex_local'))
     expect(send).toHaveBeenCalledWith('dashboard:default', 'Something went wrong running that command. Check the logs.')
   })
+
+  it('sends the guard fallback response when runAgent reports a blocked result', async () => {
+    const send = vi.fn(async () => {})
+    vi.mocked(runAgent).mockResolvedValueOnce({
+      text: null,
+      newSessionId: 'sess-1',
+      requestedProvider: 'claude_desktop',
+      executedProvider: 'claude_desktop',
+      providerFallbackApplied: false,
+      blocked: true,
+      blockReason: 'Canary token leaked in response (system prompt exfiltration)',
+      blockedLayers: ['l6-output-validate'],
+    } as any)
+
+    await processMessage(
+      {
+        channelId: 'dashboard',
+        chatId: 'dashboard:default',
+        text: 'trigger a blocked response',
+        isVoice: false,
+        source: 'dashboard',
+        projectId: 'default',
+        agentId: 'scout',
+      },
+      {
+        id: 'dashboard',
+        name: 'Dashboard',
+        start: async () => {},
+        stop: async () => {},
+        isRunning: () => true,
+        send,
+        sendVoice: async () => {},
+        sendTyping: async () => {},
+        capabilities: () => ({ voice: false, media: false, formatting: 'plain', maxMessageLength: 4000, typing: false }),
+      },
+    )
+
+    // The guard's own fallback response, not the generic no-output message.
+    expect(send).toHaveBeenCalledWith('dashboard:default', 'I cannot comply.')
+    expect(send).not.toHaveBeenCalledWith('dashboard:default', expect.stringContaining('Agent finished with no output'))
+    expect(reportFeedItem).toHaveBeenCalledWith('guard', 'Response BLOCKED', 'Canary token leaked in response (system prompt exfiltration)')
+  })
 })

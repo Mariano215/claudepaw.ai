@@ -4,10 +4,9 @@ import {
   EMBEDDING_MODEL,
   EMBEDDING_BASE_URL,
   OPENAI_API_KEY,
-  BOT_TOKEN,
-  ALLOWED_CHAT_ID,
 } from './config.js'
 import { logger } from './logger.js'
+import { notifyOwner } from './notify.js'
 
 // Target embedding dimension. 768 matches nomic-embed-text (Ollama default)
 // and is requested explicitly from OpenAI so fallback vectors land in the
@@ -16,7 +15,7 @@ const EMBEDDING_DIM = 768
 const OLLAMA_ALERT_COOLDOWN_MS = 60 * 60 * 1000 // 1 hour between repeat alerts
 const OLLAMA_GRACE_PERIOD_MS = 3 * 60 * 1000    // 3 min grace before first alert (covers reboots)
 let lastOllamaAlertAt = 0
-let ollamaFirstDownAt = 0 // 0 = Ollama is healthy (or never tried); non-zero = first failure timestamp
+let ollamaFirstDownAt: number | null = null
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -72,7 +71,7 @@ export function vecSearch(
 /** Reset alert state between tests. */
 export function _resetOllamaAlertState(): void {
   lastOllamaAlertAt = 0
-  ollamaFirstDownAt = 0
+  ollamaFirstDownAt = null
 }
 
 export async function _embedWithProvider(
@@ -87,14 +86,14 @@ export async function _embedWithProvider(
       ? await _ollamaEmbed(text, baseUrl, model)
       : await _openaiEmbed(text, model, EMBEDDING_DIM)
     // Ollama came back up — reset the outage clock so the next outage gets a fresh grace window.
-    if (provider === 'ollama') ollamaFirstDownAt = 0
+    if (provider === 'ollama') ollamaFirstDownAt = null
     return result
   } catch (err) {
     logger.debug({ err, provider, model }, 'primary embedding attempt failed')
     // Ollama primary: fall back to OpenAI if key is configured.
     if (provider === 'ollama' && OPENAI_API_KEY) {
       // Record the start of this outage (only on the first failure).
-      if (ollamaFirstDownAt === 0) ollamaFirstDownAt = Date.now()
+      if (ollamaFirstDownAt === null) ollamaFirstDownAt = Date.now()
       void maybeAlertOllamaDown(err)
       try {
         return await _openaiEmbed(text, 'text-embedding-3-small', EMBEDDING_DIM)
@@ -107,29 +106,18 @@ export async function _embedWithProvider(
   }
 }
 
-// Alert Telegram when Ollama is unreachable — but only after a grace period
+// Alert the owner when Ollama is unreachable — but only after a grace period
 // (covers reboots / service restarts). Subsequent alerts are suppressed for
 // OLLAMA_ALERT_COOLDOWN_MS so we don't spam during a prolonged outage.
-// Uses raw fetch to avoid importing the Telegram channel (circular risk).
 async function maybeAlertOllamaDown(originalErr: unknown): Promise<void> {
   const now = Date.now()
   // Still inside the grace window — Ollama may just be restarting, stay quiet.
-  if (ollamaFirstDownAt > 0 && now - ollamaFirstDownAt < OLLAMA_GRACE_PERIOD_MS) return
+  if (ollamaFirstDownAt !== null && now - ollamaFirstDownAt < OLLAMA_GRACE_PERIOD_MS) return
   if (now - lastOllamaAlertAt < OLLAMA_ALERT_COOLDOWN_MS) return
-  if (!BOT_TOKEN || !ALLOWED_CHAT_ID) return
   lastOllamaAlertAt = now
   const errMsg = originalErr instanceof Error ? originalErr.message : String(originalErr)
   const text = `Ollama embedding unreachable, falling back to OpenAI. Error: ${errMsg.slice(0, 200)}`
-  try {
-    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: ALLOWED_CHAT_ID, text }),
-      signal: AbortSignal.timeout(5000),
-    })
-  } catch (alertErr) {
-    logger.debug({ err: alertErr }, 'ollama down alert send failed')
-  }
+  await notifyOwner(text, 'default')
 }
 
 async function _ollamaEmbed(text: string, baseUrl: string, model: string): Promise<number[]> {

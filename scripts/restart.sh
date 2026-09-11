@@ -48,22 +48,17 @@ rsync -az \
   && echo "✓ Ecosystem config deployed" \
   || echo "⚠ Ecosystem config deploy failed (non-fatal)"
 
-# Rebuild + restart server on Hostinger (pm2 fork mode -- never cluster)
-#
-# We delete the PM2 process and free port 3000 in a verify loop BEFORE
-# starting fresh, rather than `pm2 startOrRestart` after a single
-# `fuser -k`. The old approach raced: a lingering orphan (or a child that
-# re-grabbed the port within the 1s sleep) left PM2 stuck in an
-# EADDRINUSE restart loop while the orphan served stale code. Clean slate
-# every time: delete from PM2, kill whatever holds 3000 until the port is
-# actually free (up to 5 tries), then start one fresh fork-mode process.
-ssh -o ConnectTimeout=10 "$DASHBOARD_HOST" \
-  "cd $DASHBOARD_DIR && npm install 2>/dev/null && npx tsc 2>/dev/null; \
-   pm2 delete claudepaw-server 2>/dev/null; \
-   for i in 1 2 3 4 5; do kill -9 \$(lsof -ti:3000) 2>/dev/null; sleep 1; lsof -ti:3000 >/dev/null 2>&1 || break; done; \
-   pm2 start ecosystem.config.cjs 2>/dev/null; pm2 save 2>/dev/null" \
-  && echo "✓ Dashboard server restarted" \
-  || echo "⚠ Dashboard server restart failed (non-fatal)"
+# Build before touching the running process, then queue the same detached,
+# marker-verified restart used by deploy-dashboard.sh. A broken SSH connection
+# cannot strand PM2 offline after deletion.
+if ssh -o ConnectTimeout=10 "$DASHBOARD_HOST" \
+  "cd '$DASHBOARD_DIR' && npm install --no-audit --no-fund >/dev/null && npx tsc"; then
+  bash "$SCRIPT_DIR/queue-dashboard-restart.sh" "$DASHBOARD_HOST" "$DASHBOARD_DIR" \
+    && echo "✓ Dashboard server restarted" \
+    || echo "⚠ Dashboard server restart failed (bot restart will continue)"
+else
+  echo "⚠ Dashboard build failed; existing server left running"
+fi
 
 # --- 3. Restart bot via launchd ---
 if [ -f "$PLIST" ]; then

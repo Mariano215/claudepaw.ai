@@ -1,16 +1,18 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { delimiter, dirname, join } from 'node:path'
+import { delimiter, dirname, join, resolve as resolvePath } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFile as execFileCb, spawn } from 'node:child_process'
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
-import { CLAUDE_CWD, PROJECT_ROOT, BOT_API_TOKEN, DASHBOARD_URL } from './config.js'
+import { CLAUDE_CWD, PROJECT_ROOT } from './config.js'
 import { loadProjectMcpServers } from './mcp-loader.js'
 import { readEnvFile } from './env.js'
 import { getProject, getProjectSettings } from './db.js'
 import { getCredential } from './credentials.js'
 import { logger } from './logger.js'
 import { computeCostUsd } from './cost/pricing.js'
+import { buildSdkPermissions } from './sdk-permissions.js'
+import { getSoul } from './souls.js'
 
 export type ExecutionProvider = 'claude_desktop' | 'codex_local' | 'anthropic_api' | 'openai_api' | 'openrouter_api' | 'ollama' | 'lm_studio'
 export type FallbackPolicy = 'disabled' | 'enabled'
@@ -20,6 +22,11 @@ export interface AgentRuntimeContext {
   projectId?: string
   projectSlug?: string
   agentId?: string
+  /** Runs the agent session inside this directory instead of CLAUDE_CWD. Only
+   * honored when it resolves under PROJECT_ROOT/.worktrees/ (src/sdk-permissions.ts
+   * fails closed otherwise). Used by the pawdev builder so the agent edits its
+   * own git worktree, never the live checkout. */
+  workRoot?: string
   executionOverride?: Partial<Pick<ResolvedExecutionSettings, 'provider' | 'secondaryProvider' | 'fallbackProvider' | 'model' | 'modelPrimary' | 'modelSecondary' | 'modelFallback' | 'modelTier' | 'timeoutMs'>> & {
     fallbackPolicy?: FallbackPolicy | 'manual_only' | 'auto_on_quota' | 'auto_on_error'
   }
@@ -39,36 +46,13 @@ export interface ResolvedExecutionSettings {
   projectSlug?: string
   agentId?: string
   timeoutMs?: number
-}
-
-export interface AgentToolRestrictions {
-  /**
-   * When true, a system-prompt prefix is injected that instructs the agent to
-   * avoid destructive operations (arbitrary shell commands, filesystem writes
-   * outside of read-only tasks, etc.).  Does NOT block tool calls at the SDK
-   * level -- it is a defence-in-depth measure on top of Guard.
-   */
-  restrictedMode?: boolean
-  /**
-   * Explicit list of tool names the agent is allowed to use.  When non-empty,
-   * the injected prefix lists these tools and asks the agent to use only them.
-   * Ignored when restrictedMode is false or omitted.
-   */
-  allowedTools?: string[]
-  /**
-   * Explicit list of tool names the agent must not use.  When non-empty,
-   * the injected prefix lists these tools and instructs the agent to refuse them.
-   * Ignored when restrictedMode is false or omitted.
-   */
-  disallowedTools?: string[]
+  workRoot?: string
 }
 
 export interface AdapterRunInput {
   prompt: string
   sessionId?: string
   onEvent?: (event: SDKMessage | Record<string, unknown>) => void
-  /** Optional tool-use restrictions applied via system-prompt prefix. */
-  toolRestrictions?: AgentToolRestrictions
 }
 
 export interface AdapterRunResult {
@@ -102,7 +86,27 @@ const env = readEnvFile()
 const CODEX_TIMEOUT_MS = Number(process.env.CODEX_TIMEOUT_MS || env.CODEX_TIMEOUT_MS || 30000)
 // Default raised to 10 min because web-research agents (Scout competitive-scan,
 // content-scout trend scans) routinely exceed 2 min. Override via env if needed.
-const CLAUDE_DESKTOP_TIMEOUT_MS = Number(process.env.CLAUDE_DESKTOP_TIMEOUT_MS || env.CLAUDE_DESKTOP_TIMEOUT_MS || 600000)
+export const CLAUDE_DESKTOP_TIMEOUT_MS = Number(process.env.CLAUDE_DESKTOP_TIMEOUT_MS || env.CLAUDE_DESKTOP_TIMEOUT_MS || 600000)
+
+// Only these reach an agent subprocess. Everything else in the bot's env
+// (Telegram token, Alpaca keys, dashboard tokens) stays with the bot.
+const AGENT_ENV_ALLOW = [/^PATH$/, /^HOME$/, /^SHELL$/, /^USER$/, /^LANG$/, /^LC_/, /^TMPDIR$/, /^TZ$/, /^CRON_TZ$/,
+  /^NODE_/, /^NVM_/, /^CLAUDE_/, /^ANTHROPIC_/, /^XDG_/]
+
+/** `workRoot` on the runtime context is a path relative to PROJECT_ROOT (or
+ * already absolute); resolve it once here so every cwd site agrees. */
+function resolveWorkRootCwd(workRoot: string | undefined): string | undefined {
+  return workRoot ? resolvePath(PROJECT_ROOT, workRoot) : undefined
+}
+
+export function buildAgentEnv(extra: Record<string, string | undefined> = {}): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v !== undefined && AGENT_ENV_ALLOW.some((re) => re.test(k))) out[k] = v
+  }
+  for (const [k, v] of Object.entries(extra)) if (v !== undefined) out[k] = v
+  return out
+}
 
 const DEFAULT_EXECUTION_SETTINGS: ResolvedExecutionSettings = {
   provider: 'claude_desktop',
@@ -329,6 +333,7 @@ export function resolveExecutionSettings(context?: AgentRuntimeContext): Resolve
   resolved.projectId = projectId
   resolved.projectSlug = projectSlug
   resolved.agentId = agentId
+  resolved.workRoot = context.workRoot
 
   const override = context.executionOverride
   if (override?.provider) resolved.provider = override.provider
@@ -397,30 +402,48 @@ const claudeDesktopAdapter: AgentExecutionAdapter = {
       abortController.abort(new Error(`Claude Desktop execution timed out after ${timeoutMs}ms`))
     }, timeoutMs)
 
-    const restrictionPrefix = buildToolRestrictionPrefix(input.toolRestrictions)
-    const effectivePrompt = restrictionPrefix ? `${restrictionPrefix}${input.prompt}` : input.prompt
+    const soulForRun = settings.agentId ? getSoul(settings.agentId, settings.projectSlug) : undefined
+    const sdkPermissions = buildSdkPermissions(soulForRun, settings.projectId, settings.workRoot)
 
     const conversation = query({
-      prompt: effectivePrompt,
+      prompt: input.prompt,
       options: {
         abortController,
-        cwd: CLAUDE_CWD,
+        cwd: resolveWorkRootCwd(settings.workRoot) ?? CLAUDE_CWD,
         // Caps the agentic loop per run. Lowered from 50 to bound worst-case
         // per-run credit cost once headless runs bill the $200 pool (June 15
         // 2026). Env-tunable so it can be raised without a deploy if a legit
         // multi-step paw needs more turns.
         maxTurns: Number(process.env.AGENT_SDK_MAX_TURNS ?? 15),
-        permissionMode: 'bypassPermissions',
-        settingSources: ['project', 'user'],
-        // Agents cannot read .env (Claude Code denies it), so the dashboard
-        // credentials only reach them through the subprocess env. Scoped to the
-        // healer: every other agent (chat sessions included) runs without a
-        // dashboard token, so a prompt-injected run cannot reach the API.
-        // ponytail: hardcoded agent id, move to agent frontmatter if a second
-        // agent ever needs API credentials.
-        env: settings.agentId === 'healer'
-          ? { ...process.env, BOT_API_TOKEN, DASHBOARD_URL }
-          : process.env,
+        // Tool set and permission callback per soul. Bash is present in the
+        // preset but never auto-allowed, so every Bash call is matched
+        // against the allowlist in src/sdk-permissions.ts. permissionMode
+        // must not be 'bypassPermissions': that mode skips canUseTool
+        // entirely.
+        permissionMode: 'default',
+        // SDK isolation mode. Omitted, every filesystem settings file loads
+        // (~/.claude/settings.json, .claude/settings.json,
+        // .claude/settings.local.json) and its allow rules resolve before
+        // canUseTool ever runs, so an operator allow rule like
+        // "Bash(npm run:*)" would let an agent reach the shell without ever
+        // being matched against the Bash allowlist above. An empty array
+        // means CLAUDE.md is not loaded either (it needs 'project'); that
+        // context reaches the agent through the system prompt instead
+        // (buildAgentPrompt), not through this option.
+        settingSources: [],
+        tools: sdkPermissions.tools,
+        ...(sdkPermissions.disallowedTools ? { disallowedTools: sdkPermissions.disallowedTools } : {}),
+        canUseTool: sdkPermissions.canUseTool,
+        // The real enforcement point for Read, Grep and Glob: the native
+        // CLI never routes those through canUseTool under permissionMode
+        // 'default' (it treats them as safe), but a PreToolUse hook fires
+        // for every tool call regardless. See src/sdk-permissions.ts.
+        hooks: sdkPermissions.hooks,
+        env: buildAgentEnv(),
+        // Without this, the SDK spawns its own bundled Claude Code build
+        // instead of the native binary resolved above, which can be an
+        // older version than what's actually installed.
+        ...(CLAUDE_BINARY.includes('/') ? { pathToClaudeCodeExecutable: CLAUDE_BINARY } : {}),
         ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
         ...(input.sessionId ? { resume: input.sessionId } : {}),
       },
@@ -731,37 +754,6 @@ function getProviderBaseUrl(projectId: string | undefined, provider: ExecutionPr
   return ''
 }
 
-/**
- * Build a system-prompt prefix that communicates tool restrictions to the
- * agent.  This is a defence-in-depth measure: it does not prevent tool calls
- * at the SDK level, but it explicitly tells the model what it may and may not
- * do.  Pair with Guard (guardHarden) for prompt-injection defence.
- */
-function buildToolRestrictionPrefix(restrictions: AgentToolRestrictions | undefined): string {
-  if (!restrictions?.restrictedMode) return ''
-
-  const lines: string[] = [
-    '[SYSTEM: This agent is running in restricted mode.]',
-    'You must not perform destructive operations such as:',
-    '- Executing arbitrary shell commands that modify system state',
-    '- Writing, deleting, or moving files outside of explicitly scoped read-only tasks',
-    '- Making outbound network requests not related to the current task',
-    '- Installing packages or modifying the environment',
-  ]
-
-  if (restrictions.allowedTools && restrictions.allowedTools.length > 0) {
-    lines.push(`You may ONLY use the following tools: ${restrictions.allowedTools.join(', ')}.`)
-    lines.push('Refuse any request that would require a tool not on this list.')
-  }
-
-  if (restrictions.disallowedTools && restrictions.disallowedTools.length > 0) {
-    lines.push(`You must NOT use the following tools under any circumstances: ${restrictions.disallowedTools.join(', ')}.`)
-  }
-
-  lines.push('[END SYSTEM RESTRICTION NOTICE]', '')
-  return lines.join('\n') + '\n'
-}
-
 function emitSyntheticEvent(onEvent: ((event: SDKMessage | Record<string, unknown>) => void) | undefined, event: Record<string, unknown>): void {
   try {
     onEvent?.(event)
@@ -869,10 +861,10 @@ function buildCodexEnv(): NodeJS.ProcessEnv {
   }
 }
 
-async function runCodexExec(args: string[], envVars: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string }> {
+async function runCodexExec(args: string[], envVars: NodeJS.ProcessEnv, cwd: string = PROJECT_ROOT): Promise<{ stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
     const child = spawn(args[0], args.slice(1), {
-      cwd: PROJECT_ROOT,
+      cwd,
       env: envVars,
       stdio: ['pipe', 'pipe', 'pipe'],
     })
@@ -968,6 +960,7 @@ const anthropicApiAdapter: AgentExecutionAdapter = {
           { role: 'user', content: input.prompt },
         ],
       }),
+      signal: AbortSignal.timeout(settings.timeoutMs ?? CLAUDE_DESKTOP_TIMEOUT_MS),
     })
 
     const elapsedMs = Date.now() - startedAt
@@ -1069,18 +1062,19 @@ const codexLocalAdapter: AgentExecutionAdapter = {
         path: codexEnv.PATH,
       }, 'Starting Codex local execution')
 
+      const codexCwd = resolveWorkRootCwd(settings.workRoot) ?? CLAUDE_CWD
       const { stdout, stderr } = await runCodexExec([
         codexBin,
         'exec',
         '-c', 'plugins."hugging-face@openai-curated".enabled=false',
         '--model', model,
-        '--cd', CLAUDE_CWD,
+        '--cd', codexCwd,
         '--sandbox', 'workspace-write',
         '--skip-git-repo-check',
         '--ephemeral',
         '--output-last-message', outputFile,
         input.prompt,
-      ], codexEnv)
+      ], codexEnv, codexCwd)
 
       const elapsedMs = Date.now() - startedAt
       const text = existsSync(outputFile)
@@ -1220,6 +1214,7 @@ const openaiApiAdapter: AgentExecutionAdapter = {
         model,
         input: input.prompt,
       }),
+      signal: AbortSignal.timeout(settings.timeoutMs ?? CLAUDE_DESKTOP_TIMEOUT_MS),
     })
 
     const elapsedMs = Date.now() - startedAt
@@ -1337,6 +1332,7 @@ function makeChatCompletionsAdapter(provider: ExecutionProvider): AgentExecution
           messages: [{ role: 'user', content: input.prompt }],
           stream: false,
         }),
+        signal: AbortSignal.timeout(settings.timeoutMs ?? CLAUDE_DESKTOP_TIMEOUT_MS),
       })
 
       const elapsedMs = Date.now() - startedAt

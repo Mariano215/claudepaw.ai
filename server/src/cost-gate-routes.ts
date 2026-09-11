@@ -4,20 +4,32 @@
  * Cost-gate status and cap-update endpoints mounted under /api/v1/cost-gate.
  *
  * Authorization:
- *   GET  /:projectId       -- requireProjectRead (any project member or admin)
+ *   GET  /:projectId       -- project member, admin, or authenticated bot
  *   PUT  /:projectId/caps  -- requireProjectRole('editor') (editor or owner or admin)
  *
  * The global /api/v1 pipeline (index.ts) runs `authenticate` then
  * `scopeProjects` before this router, so `req.user` is always populated.
  */
 
-import { Router, type Request, type Response } from 'express'
+import { Router, type NextFunction, type Request, type Response } from 'express'
 import { requireProjectRead, requireProjectRole } from './auth.js'
 import { getProjectSettingsById, upsertProjectSettingsInDb } from './db.js'
 import { computeCostGateStatus, computePoolGateStatus } from './cost-gate.js'
 import { logger } from './logger.js'
 
 const router = Router()
+const requireHumanProjectRead = requireProjectRead('projectId')
+
+// The local bot reads this route before every agent run. Its global `bot`
+// identity intentionally has no project memberships, so authorize that
+// identity for this read-only gate without widening any project mutation.
+function requireCostGateRead(req: Request, res: Response, next: NextFunction): void {
+  if (req.user?.global_role === 'bot') {
+    next()
+    return
+  }
+  requireHumanProjectRead(req, res, next)
+}
 
 // ---------------------------------------------------------------------------
 // GET /pool -- Anthropic Agent SDK Credit Pool status (account-wide, all projects)
@@ -45,7 +57,7 @@ router.get(
 
 router.get(
   '/:projectId',
-  requireProjectRead('projectId'),
+  requireCostGateRead,
   (req: Request, res: Response): void => {
     const projectId = String(req.params.projectId)
 

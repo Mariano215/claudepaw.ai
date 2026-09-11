@@ -9,6 +9,8 @@ export interface CostGateStatus {
   monthly_cap_usd: number | null
   daily_cap_usd: number | null
   triggering_cap: 'monthly' | 'daily' | null
+  /** Set only when a fail-closed project's gate could not be read and was refused safely. */
+  unavailable?: boolean
 }
 
 /**
@@ -23,6 +25,8 @@ export interface PoolGateStatus {
   override_threshold_pct: number
   hardstop_threshold_pct: number
   projected_eom_usd: number
+  /** Set only when a fail-closed project's pool gate could not be read and was refused safely. */
+  unavailable?: boolean
 }
 
 const POOL_FAIL_OPEN: PoolGateStatus = {
@@ -35,6 +39,19 @@ const POOL_FAIL_OPEN: PoolGateStatus = {
   projected_eom_usd: 0,
 }
 
+/**
+ * Projects whose runs are refused when the cost gate cannot be read.
+ *
+ * Everything else fails OPEN: a dashboard outage must not stop ordinary agent
+ * work. A project lands here when an unpriced run is worse than no run at all,
+ * which today means anything that moves money. Keep this list tiny.
+ */
+const FAIL_CLOSED_PROJECTS = new Set<string>(['trader'])
+
+function failsClosed(projectId?: string): boolean {
+  return projectId !== undefined && FAIL_CLOSED_PROJECTS.has(projectId)
+}
+
 const TTL_MS = 60_000
 
 const FAIL_OPEN: CostGateStatus = {
@@ -45,6 +62,19 @@ const FAIL_OPEN: CostGateStatus = {
   monthly_cap_usd: null,
   daily_cap_usd: null,
   triggering_cap: null,
+}
+
+const FAIL_CLOSED: CostGateStatus = {
+  ...FAIL_OPEN,
+  action: 'refuse',
+  unavailable: true,
+}
+
+const POOL_FAIL_CLOSED: PoolGateStatus = {
+  ...POOL_FAIL_OPEN,
+  action: 'refuse',
+  unavailable: true,
+  warn: 'Credit-pool gate is unavailable; refusing the run safely.',
 }
 
 interface CacheEntry {
@@ -114,8 +144,11 @@ export async function getCostGateStatus(projectId: string): Promise<CostGateStat
     cache.set(projectId, { at: Date.now(), value })
     return value
   } catch (err) {
-    logger.warn({ err, projectId }, 'cost-gate-client: fetch failed, returning fail-open')
-    return FAIL_OPEN
+    const failClosed = failsClosed(projectId)
+    logger.warn({ err, projectId }, failClosed
+      ? 'cost-gate-client: gate unavailable for a fail-closed project, refusing'
+      : 'cost-gate-client: fetch failed, returning fail-open')
+    return failClosed ? FAIL_CLOSED : FAIL_OPEN
   }
 }
 
@@ -133,8 +166,15 @@ const POOL_TTL_MS = 60_000
 
 /**
  * Fetches account-wide Anthropic Agent SDK Credit Pool status from the
- * dashboard. Cached 60s. Fails open on network errors so a dashboard outage
- * never blocks agent execution.
+ * dashboard, scoped to the calling project. Cached 60s per scope. Non-trader
+ * callers fail open on network errors so a dashboard outage does not block
+ * general agent work. Trader callers fail closed because unknown financial
+ * controls cannot authorize committee spend.
+ *
+ * Pass the run's projectId (and, once the trader ledger lands, a callerTag) so
+ * the server applies the trader reserve + the trader ollama-exclusion. The bot
+ * ALSO enforces the trader exclusion independently (see src/agent.ts) so a trade
+ * decision can never be routed to local Gemma even if this call misfires.
  */
 export async function getPoolGateStatus(): Promise<PoolGateStatus> {
   const now = Date.now()
@@ -164,7 +204,10 @@ export async function getPoolGateStatus(): Promise<PoolGateStatus> {
     poolCache = { at: now, value }
     return value
   } catch (err) {
-    logger.warn({ err }, 'pool-gate-client: fetch failed, returning fail-open')
-    return POOL_FAIL_OPEN
+    const failClosed = failsClosed(projectId)
+    logger.warn({ err, projectId }, failClosed
+      ? 'pool-gate-client: gate unavailable for a fail-closed project, refusing'
+      : 'pool-gate-client: fetch failed, returning fail-open')
+    return failClosed ? POOL_FAIL_CLOSED : POOL_FAIL_OPEN
   }
 }

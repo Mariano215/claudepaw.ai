@@ -39,9 +39,10 @@ const MAX_CONNECTIONS_PER_USER = 10
  */
 export function canDeliverToClient(client: ConnectedClient, projectId?: string | null): boolean {
   if (client.clientId === BOT_CLIENT_ID) return true
-  if (client.user?.isAdmin) return true
+  if (!client.user) return false
+  if (client.user.isAdmin) return true
   if (!projectId) return true
-  const allowed = client.user?.allowedProjectIds
+  const allowed = client.user.allowedProjectIds
   if (!allowed) return false
   return allowed.includes(projectId)
 }
@@ -72,7 +73,8 @@ export function setupWebSocket(server: Server): WebSocketServer {
   const wss = new WebSocketServer({ server })
 
   wss.on('connection', (ws) => {
-    if (clients.size >= MAX_WS_CLIENTS) {
+    const registeredCount = [...clients.values()].filter(c => c.user || c.clientId === BOT_CLIENT_ID).length
+    if (registeredCount >= MAX_WS_CLIENTS) {
       ws.send(JSON.stringify({ type: 'error', reason: 'max connections reached' }))
       ws.close()
       return
@@ -293,6 +295,20 @@ export function setupWebSocket(server: Server): WebSocketServer {
 
     // Store as anonymous until registered
     clients.set(clientId, { ws, clientId, connectedAt: Date.now() })
+
+    // A socket that never sends a register message stays anonymous and
+    // unable to receive project-scoped broadcasts; close it so it doesn't
+    // sit around consuming a connection slot forever.
+    const registerTimeoutMs = Number(process.env.WS_REGISTER_TIMEOUT_MS) || 10_000
+    const registerTimer = setTimeout(() => {
+      const current = clients.get(clientId)
+      if (current && !current.user && clientId !== BOT_CLIENT_ID) {
+        ws.close(4401, 'register timeout')
+        clients.delete(clientId)
+        logger.info({ clientId }, 'WebSocket closed: never registered')
+      }
+    }, registerTimeoutMs)
+    ws.on('close', () => clearTimeout(registerTimer))
   })
 
   logger.info('WebSocket server attached')
@@ -697,6 +713,16 @@ function broadcastSecurityUpdate(projectId: string = 'default'): void {
 
 export function broadcastPawsUpdate(projectId: string = 'default'): void {
   const payload = JSON.stringify({ type: 'paws-update', ts: Date.now(), project_id: projectId })
+  for (const client of clients.values()) {
+    if (client.ws.readyState === WebSocket.OPEN && canDeliverToClient(client, projectId)) {
+      client.ws.send(payload)
+    }
+  }
+}
+
+/** Notify authorized Paw Trader viewers that committed ledger rows are ready. */
+export function broadcastTraderUpdate(projectId: string = 'trader', eventCount = 0): void {
+  const payload = JSON.stringify({ type: 'trader-update', ts: Date.now(), project_id: projectId, event_count: eventCount })
   for (const client of clients.values()) {
     if (client.ws.readyState === WebSocket.OPEN && canDeliverToClient(client, projectId)) {
       client.ws.send(payload)

@@ -24,6 +24,14 @@ vi.mock('./db.js', () => ({
   setKvSetting: vi.fn((key: string, value: string) => {
     kvStore.set(key, value)
   }),
+  getBacklogTasks: vi.fn(() => []),
+}))
+
+vi.mock('./paws/db.js', () => ({
+  getBacklogPaws: vi.fn(() => []),
+  updatePawNextRun: vi.fn(),
+  reapStalePawCycles: vi.fn(() => ({ cyclesReaped: 0, pawsUnstuck: 0 })),
+  LIVE_CYCLE_MAX_AGE_MS: 1,
 }))
 
 vi.mock('./dashboard.js', () => ({
@@ -57,6 +65,23 @@ vi.mock('./config.js', () => ({
   DASHBOARD_API_TOKEN: 'test-token',
   BOT_API_TOKEN: 'test-token', // falls back to DASHBOARD_API_TOKEN in prod
   DASHBOARD_URL: 'http://localhost:3000',
+  ALLOWED_CHAT_ID: 'test-chat-id',
+}))
+
+vi.mock('./channels/quiet-hours.js', () => ({
+  shouldDrainNow: vi.fn(() => false),
+  LAST_DRAIN_KEY: 'notify.last_drain_ms',
+  LAST_DRAIN_ATTEMPT_KEY: 'notify.last_drain_attempt_ms',
+  flushHeld: vi.fn(async () => 0),
+}))
+
+vi.mock('./reports/daily-usage-report.js', () => ({
+  gatherReportData: vi.fn(async (hours: number) => ({ period: { hours } })),
+  appendWeeklyVerdicts: vi.fn(async () => {}),
+}))
+
+vi.mock('./reports/digest-text.js', () => ({
+  renderDigestText: vi.fn(() => 'digest text'),
 }))
 
 vi.mock('./webhooks/index.js', () => ({
@@ -379,5 +404,170 @@ describe('stopScheduler', () => {
     stopScheduler()
     // Second call should be a no-op and not throw
     expect(() => stopScheduler()).not.toThrow()
+  })
+})
+
+describe('backlog skip fires only after a gap', () => {
+  beforeEach(async () => {
+    const { updateTaskAfterRun } = await import('./db.js')
+    vi.mocked(updateTaskAfterRun).mockClear()
+  })
+
+  it('does not skip a due task when the previous tick was recent', async () => {
+    const { getBacklogTasks, getDueTasks, updateTaskAfterRun } = await import('./db.js')
+    const stale = { id: 'stale-task', chat_id: '1', prompt: 'x', schedule: '0 9 * * *', next_run: Date.now() - 60 * 60 * 1000, status: 'active', project_id: 'default' }
+    vi.mocked(getBacklogTasks).mockReturnValue([stale as never])
+    vi.mocked(getDueTasks).mockReturnValue([])
+
+    const { runDueTasks, _resetTickClockForTest } = await import('./scheduler.js')
+    _resetTickClockForTest(Date.now() - 60 * 1000) // last tick one minute ago
+    await runDueTasks(vi.fn())
+
+    const skips = vi.mocked(updateTaskAfterRun).mock.calls.filter(c => c[0] === 'stale-task' && c[1] === 'skipped (backlog)')
+    expect(skips.length).toBe(0)
+    vi.mocked(getBacklogTasks).mockReturnValue([])
+  })
+
+  it('skips backlog when the gap since the last tick exceeds the window', async () => {
+    const { getBacklogTasks, getDueTasks, updateTaskAfterRun } = await import('./db.js')
+    const stale = { id: 'stale-task', chat_id: '1', prompt: 'x', schedule: '0 9 * * *', next_run: Date.now() - 60 * 60 * 1000, status: 'active', project_id: 'default' }
+    vi.mocked(getBacklogTasks).mockReturnValue([stale as never])
+    vi.mocked(getDueTasks).mockReturnValue([])
+
+    const { runDueTasks, _resetTickClockForTest } = await import('./scheduler.js')
+    _resetTickClockForTest(Date.now() - 2 * 60 * 60 * 1000) // last tick two hours ago (sleep)
+    await runDueTasks(vi.fn())
+
+    expect(updateTaskAfterRun).toHaveBeenCalledWith('stale-task', 'skipped (backlog)', expect.any(Number))
+    vi.mocked(getBacklogTasks).mockReturnValue([])
+  })
+
+  it('one invalid cron in the backlog does not abort skipping the rest', async () => {
+    const { getBacklogTasks, getDueTasks, updateTaskAfterRun } = await import('./db.js')
+    const badCron = { id: 'bad-backlog-task', chat_id: '1', prompt: 'x', schedule: 'not a cron', next_run: Date.now() - 60 * 60 * 1000, status: 'active', project_id: 'default' }
+    const goodCron = { id: 'good-backlog-task', chat_id: '1', prompt: 'x', schedule: '0 9 * * *', next_run: Date.now() - 60 * 60 * 1000, status: 'active', project_id: 'default' }
+    vi.mocked(getBacklogTasks).mockReturnValue([badCron, goodCron] as never)
+    vi.mocked(getDueTasks).mockReturnValue([])
+
+    const { runDueTasks, _resetTickClockForTest } = await import('./scheduler.js')
+    _resetTickClockForTest(Date.now() - 2 * 60 * 60 * 1000) // last tick two hours ago (sleep)
+    await runDueTasks(vi.fn())
+
+    const badCall = vi.mocked(updateTaskAfterRun).mock.calls.find(c => c[0] === 'bad-backlog-task')
+    const goodCall = vi.mocked(updateTaskAfterRun).mock.calls.find(c => c[0] === 'good-backlog-task')
+    expect(badCall).toBeDefined()
+    expect(String(badCall![1])).toMatch(/^skipped \(backlog/)
+    expect(goodCall).toBeDefined()
+    expect(String(goodCall![1])).toMatch(/^skipped \(backlog/)
+    vi.mocked(getBacklogTasks).mockReturnValue([])
+  })
+})
+
+describe('invalid cron on a due task', () => {
+  it('records an error result, pushes next_run out an hour, and releases the lock', async () => {
+    const { getDueTasks, updateTaskAfterRun } = await import('./db.js')
+    const bad = { id: 'bad-cron', chat_id: '1', prompt: 'x', schedule: 'not a cron', next_run: Date.now() - 1000, status: 'active', project_id: 'default' }
+    vi.mocked(getDueTasks).mockReturnValue([bad as never])
+
+    const { runDueTasks } = await import('./scheduler.js')
+    await runDueTasks(vi.fn())
+    await runDueTasks(vi.fn())
+
+    const calls = vi.mocked(updateTaskAfterRun).mock.calls.filter(c => c[0] === 'bad-cron')
+    expect(calls.length).toBe(2)
+    expect(String(calls[0][1])).toMatch(/^ERROR: invalid cron/)
+    expect(calls[0][2]).toBeGreaterThan(Date.now() + 59 * 60 * 1000)
+    vi.mocked(getDueTasks).mockReturnValue([])
+  })
+})
+
+describe('daily digest tick', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    kvStore.clear()
+  })
+
+  it('sends the digest and drains the buffer when shouldDrainNow says so', async () => {
+    const { shouldDrainNow, flushHeld } = await import('./channels/quiet-hours.js')
+    const { gatherReportData } = await import('./reports/daily-usage-report.js')
+    const { renderDigestText } = await import('./reports/digest-text.js')
+    vi.mocked(shouldDrainNow).mockReturnValueOnce(true)
+
+    const send = vi.fn(async () => {})
+    const sendDigest = vi.fn(async () => {})
+    await runDueTasks(send, sendDigest)
+
+    expect(vi.mocked(gatherReportData)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(renderDigestText)).toHaveBeenCalledTimes(1)
+    // Recorded before the work, so a failed send backs off instead of
+    // rebuilding the report on every tick for the rest of the day.
+    expect(kvStore.get('notify.last_drain_attempt_ms')).toBeTruthy()
+    expect(sendDigest).toHaveBeenCalledWith('telegram', 'test-chat-id', 'digest text')
+    expect(vi.mocked(flushHeld)).toHaveBeenCalledWith(sendDigest)
+  })
+
+  it('does nothing when shouldDrainNow says it is not time yet', async () => {
+    const { shouldDrainNow } = await import('./channels/quiet-hours.js')
+    const { gatherReportData } = await import('./reports/daily-usage-report.js')
+    vi.mocked(shouldDrainNow).mockReturnValueOnce(false)
+
+    const send = vi.fn(async () => {})
+    const sendDigest = vi.fn(async () => {})
+    await runDueTasks(send, sendDigest)
+
+    expect(sendDigest).not.toHaveBeenCalled()
+    expect(vi.mocked(gatherReportData)).not.toHaveBeenCalled()
+  })
+
+  it('does nothing when no sendDigest is wired (no digest sender configured)', async () => {
+    const { shouldDrainNow } = await import('./channels/quiet-hours.js')
+    vi.mocked(shouldDrainNow).mockReturnValueOnce(true)
+
+    const send = vi.fn(async () => {})
+    await runDueTasks(send)
+
+    expect(vi.mocked(shouldDrainNow)).not.toHaveBeenCalled()
+  })
+
+  // 2026-09-06T12:30Z = 08:30 ET on a Sunday; 2026-09-08T12:30Z = 08:30 ET on a Tuesday.
+  const sunday = new Date('2026-09-06T12:30:00Z')
+  const tuesday = new Date('2026-09-08T12:30:00Z')
+
+  it('gathers the weekly window and appends project-health verdicts on Sunday', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(sunday)
+    try {
+      const { shouldDrainNow } = await import('./channels/quiet-hours.js')
+      const { gatherReportData, appendWeeklyVerdicts } = await import('./reports/daily-usage-report.js')
+      vi.mocked(shouldDrainNow).mockReturnValueOnce(true)
+
+      const send = vi.fn(async () => {})
+      const sendDigest = vi.fn(async () => {})
+      await runDueTasks(send, sendDigest)
+
+      expect(vi.mocked(gatherReportData)).toHaveBeenCalledWith(168)
+      expect(vi.mocked(appendWeeklyVerdicts)).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('gathers the 24-hour window and skips project-health verdicts on a weekday', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(tuesday)
+    try {
+      const { shouldDrainNow } = await import('./channels/quiet-hours.js')
+      const { gatherReportData, appendWeeklyVerdicts } = await import('./reports/daily-usage-report.js')
+      vi.mocked(shouldDrainNow).mockReturnValueOnce(true)
+
+      const send = vi.fn(async () => {})
+      const sendDigest = vi.fn(async () => {})
+      await runDueTasks(send, sendDigest)
+
+      expect(vi.mocked(gatherReportData)).toHaveBeenCalledWith(24)
+      expect(vi.mocked(appendWeeklyVerdicts)).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

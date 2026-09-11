@@ -4,7 +4,7 @@ import type { Paw, PawPhase, PawCycleState, PawFinding, PawDecision, PawCycle, A
 import { buildApprovalCard, type ApprovalFinding } from './approval-card.js'
 import { getProjectName } from './project-name.js'
 import { getPaw, createCycle, updateCycle, getCycle, updatePawStatus, listCycles } from './db.js'
-import { runCollector } from './collectors/index.js'
+import { runCollector, type CollectorResult } from './collectors/index.js'
 import { getHandler } from './handlers/index.js'
 import { guardChain } from '../guard/index.js'
 import { logger } from '../logger.js'
@@ -21,10 +21,38 @@ type AgentRunResult = {
   durationSec?: number
 }
 
-type AgentRunner = (prompt: string) => Promise<AgentRunResult>
+/**
+ * Runs one phase prompt.
+ *
+ * `phase` is optional so existing callers compile unchanged, but the scheduler
+ * uses it to label telemetry. Without it, routine runs were invisible in
+ * agent_events: the cost, provider and duration of every ODAR phase went
+ * unrecorded, so routine spend was unattributed.
+ */
+type AgentRunner = (prompt: string, phase?: PawPhase) => Promise<AgentRunResult>
 type Sender = (chatId: string, text: string, projectId?: string) => Promise<void>
 const FINDING_DEDUPE_HISTORY_LIMIT = 10
-const COMPETITIVE_WATCH_PAW_ID = 'cp-competitive-watch'
+// A hung collector (network black hole, stuck CLI) must not stall a cycle
+// forever. 120s is well above the slowest known collector (the 15s festival
+// feed timeout) and short enough that a stuck cycle self-resolves the same day.
+const COLLECTOR_TIMEOUT_MS = 120_000
+
+function withCollectorTimeout(
+  promise: Promise<CollectorResult>,
+  collectorName: string,
+): Promise<CollectorResult> {
+  return Promise.race([
+    promise,
+    new Promise<CollectorResult>((resolve) => {
+      setTimeout(() => resolve({
+        raw_data: null,
+        collected_at: Date.now(),
+        collector: collectorName,
+        errors: ['collector timeout'],
+      }), COLLECTOR_TIMEOUT_MS)
+    }),
+  ])
+}
 
 /**
  * Run a single Paw cycle through all phases.
@@ -52,21 +80,51 @@ export async function runPawCycle(
     // collector path is preferred: zero LLM cost, cannot hallucinate, and works
     // on every execution provider.
     let observeResult: string
+    let observeFingerprint: string | undefined
     const collectorName = paw.config.observe_collector
     if (collectorName) {
-      const collected = await runCollector(collectorName, {
+      const collected = await withCollectorTimeout(runCollector(collectorName, {
         pawId,
         projectId: paw.project_id,
         args: paw.config.observe_collector_args,
-      })
+      }), collectorName)
       // Serialize into the string shape the rest of the pipeline expects.
       // `observe_raw` is stored as a string and later substituted into the
       // ANALYZE prompt, so JSON stringify keeps downstream code unchanged.
       observeResult = JSON.stringify(collected, null, 2)
+      // `collected_at` differs every run, so the unchanged-check compares
+      // raw_data only, not the full collector envelope.
+      observeFingerprint = JSON.stringify(collected.raw_data)
       logger.info(
         { pawId, collector: collectorName, errorCount: collected.errors?.length ?? 0 },
         '[paws] OBSERVE via collector',
       )
+      if (
+        paw.config.skip_if_unchanged &&
+        previousCycle?.phase === 'completed' &&
+        previousCycle.state?.observe_fingerprint === observeFingerprint
+      ) {
+        updateCycle(db, cycleId, {
+          phase: 'completed',
+          report: null,
+          completed_at: Date.now(),
+          state: {
+            observe_raw: observeResult,
+            observe_fingerprint: observeFingerprint,
+            analysis: null,
+            decisions: null,
+            approval_requested: false,
+            approval_granted: null,
+            act_result: null,
+          },
+          // Carry the previous cycle's findings forward so the dedupe
+          // history (getLatestCycleBefore / forceSeenFindingsToKnown) does
+          // not go blind after a run of skipped cycles.
+          findings: previousCycle?.findings ?? [],
+        })
+        logger.info({ pawId, cycleId }, '[paws] Collector output unchanged, cycle skipped')
+        return cycleId
+      }
     } else {
       observeResult = await runPhase(paw, 'observe', {
         previousFindings: previousCycle?.findings ?? [],
@@ -82,6 +140,7 @@ export async function runPawCycle(
 
     const state: PawCycleState = {
       observe_raw: observeResult,
+      observe_fingerprint: observeFingerprint,
       analysis: null,
       decisions: null,
       approval_requested: false,
@@ -114,11 +173,22 @@ export async function runPawCycle(
         is_new: true,
       }]
     }
-    findings = sanitizeFindingsForPaw(paw, observeResult, findings)
     findings = forceSeenFindingsToKnown(db, pawId, cycleId, findings)
 
     state.analysis = analyzeResult
     updateCycle(db, cycleId, { phase: 'decide', state, findings })
+
+    if (paw.config.post_analyze_handler) {
+      const analyzeHandler = getHandler(paw.config.post_analyze_handler)
+      if (analyzeHandler) {
+        try {
+          await analyzeHandler(cycleId, pawId, paw.project_id, analyzeResult)
+        } catch (err) {
+          logger.error({ err, cycleId, handler: paw.config.post_analyze_handler },
+            '[paws] post_analyze_handler threw, continuing to DECIDE')
+        }
+      }
+    }
 
     // DECIDE
     const decideResult = await runPhase(paw, 'decide', {
@@ -136,12 +206,22 @@ export async function runPawCycle(
       maxSeverity = Math.max(0, ...findings.map(f => f.severity))
     }
 
+    // A decision the DECIDE phase marks `escalate` is by definition something
+    // a person has to approve, so its finding must reach the approval
+    // threshold whatever severity ANALYZE gave it. Generic: any paw whose
+    // DECIDE phase escalates parks the cycle (ruling N2, second half).
+    const escalated = new Set(decisions.filter(d => d.action === 'escalate').map(d => d.finding_id))
+    if (escalated.size > 0) {
+      findings = findings.map(f => (escalated.has(f.id) ? { ...f, severity: Math.max(f.severity, 4) } : f))
+      updateCycle(db, cycleId, { findings })
+    }
+
     state.decisions = decisions
     updateCycle(db, cycleId, { state })
 
     // Check if approval is needed
     const actionFindings = findings.filter(
-      f => f.is_new !== false && f.severity >= paw.config.approval_threshold,
+      f => f.is_new !== false && f.severity >= clampThreshold(paw.config.approval_threshold),
     )
 
     if (actionFindings.length > 0) {
@@ -168,6 +248,10 @@ export async function runPawCycle(
         target: (f as unknown as { target?: string }).target ?? '',
         auto_fixable: (f as unknown as { auto_fixable?: 0 | 1 }).auto_fixable ?? 0,
       }))
+      // The cycle card carries approve and skip only. A Paw Dev ask button
+      // names one card, so it rides on that card's own message: the builder's
+      // merge card and the triage handler's reply asks (final review,
+      // Important 6).
       const card = buildApprovalCard(paw, projectName, cardFindings, Date.now())
 
       if (pawSend) {
@@ -254,10 +338,9 @@ export async function resumePawCycle(
       completed_at: Date.now(),
       state,
     })
-    const projectName = getProjectName(paw.project_id)
-    const meta = `paw: ${paw.id}  •  project: ${paw.project_id}  •  cron: ${paw.cron}`
-    const header = `🛡 ${paw.name}\n${projectName}  •  ACT skipped\n${meta}\n\n`
-    await send(paw.config.chat_id, header + reportResult, paw.project_id)
+    // No meta header: the report is a routine message, so it lands in the
+    // digest buffer and the 08:00 drain groups it by project (spec 5.4).
+    await send(paw.config.chat_id, `${paw.name}: ${reportResult}`, paw.project_id)
     return
   }
 
@@ -290,6 +373,17 @@ function normalizeFindingToken(value: string | null | undefined): string {
 function clampSeverity(value: unknown): number {
   const n = Number(value)
   if (!Number.isFinite(n)) return 1
+  return Math.max(1, Math.min(5, Math.round(n)))
+}
+
+/**
+ * approval_threshold lives on the same 1..5 scale as severity, so a stored 6
+ * silently disables the gate. Read it honestly: above 5 reads as 5, below 1
+ * reads as 1, and a missing value reads as 4 (spec 4.6).
+ */
+export function clampThreshold(value: unknown): number {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 4
   return Math.max(1, Math.min(5, Math.round(n)))
 }
 
@@ -351,50 +445,6 @@ function normalizeDecisions(value: unknown, findings: PawFinding[]): PawDecision
       action: action as PawDecision['action'],
       reason: reason || 'no reason given',
     }]
-  })
-}
-
-function sanitizeFindingsForPaw(
-  paw: Paw,
-  observeRaw: string,
-  findings: PawFinding[],
-): PawFinding[] {
-  if (paw.id === COMPETITIVE_WATCH_PAW_ID && paw.config.observe_collector === 'competitive-landscape') {
-    return sanitizeCompetitiveLandscapeFindings(observeRaw, findings)
-  }
-  return findings
-}
-
-function getCompetitiveCollectorEvidenceUrls(observeRaw: string): Set<string> {
-  try {
-    const parsed = JSON.parse(observeRaw) as { raw_data?: { articles?: Array<{ url?: string }> } }
-    const articles = Array.isArray(parsed?.raw_data?.articles) ? parsed.raw_data.articles : []
-    return new Set(
-      articles
-        .map(article => typeof article?.url === 'string' ? normalizeUrl(article.url) : '')
-        .filter(Boolean),
-    )
-  } catch {
-    return new Set()
-  }
-}
-
-function sanitizeCompetitiveLandscapeFindings(
-  observeRaw: string,
-  findings: PawFinding[],
-): PawFinding[] {
-  const observedUrls = getCompetitiveCollectorEvidenceUrls(observeRaw)
-  if (observedUrls.size === 0) {
-    logger.warn('[paws] Competitive watch collector returned no evidence URLs; suppressing findings')
-    return []
-  }
-
-  return findings.flatMap((finding): PawFinding[] => {
-    const evidence_urls = Array.isArray(finding.evidence_urls)
-      ? finding.evidence_urls.filter(url => observedUrls.has(normalizeUrl(url)))
-      : []
-    if (evidence_urls.length === 0) return []
-    return [{ ...finding, evidence_urls }]
   })
 }
 
@@ -473,7 +523,10 @@ async function runActAndReport(
 ): Promise<void> {
   // Quiet cycle short-circuit: nothing new, no planned actions.
   // Mark completed, skip ACT/REPORT/Telegram to cut noise + cost.
-  if (!hasMeaningfulWork(findings, decisions)) {
+  // always_run_act keeps a routine whose post-ACT handler drains a queue from
+  // going idle on a quiet cycle. Paw Dev sets it: a card queued on Monday must
+  // still be built on a Tuesday with nothing new (final review, Important 10).
+  if (!paw.config.always_run_act && !hasMeaningfulWork(findings, decisions)) {
     updateCycle(db, cycleId, {
       phase: 'completed',
       report: null,
@@ -501,11 +554,13 @@ async function runActAndReport(
   // running on non-claude_desktop providers have no real tool access and will
   // hallucinate Bash/SQLite execution.  The ACT phase text is the handler's
   // sole input; it must contain a structured JSON block the handler can parse.
+  let handlerReport: string | null = null
   if (paw.config.post_act_handler) {
     const handler = getHandler(paw.config.post_act_handler)
     if (handler) {
       try {
-        await handler(cycleId, paw.id, paw.project_id, actResult)
+        const out = await handler(cycleId, paw.id, paw.project_id, actResult)
+        if (typeof out === 'string' && out.trim().length > 0) handlerReport = out
       } catch (err) {
         logger.error(
           { err, cycleId, handler: paw.config.post_act_handler },
@@ -517,18 +572,25 @@ async function runActAndReport(
 
   updateCycle(db, cycleId, { phase: 'report' })
 
-  // Bug 3 fix: REPORT phase failures should not mark a completed cycle as failed
+  // A handler that produced the report has already done the work
+  // deterministically. Skipping the REPORT model call keeps the numbers
+  // honest and the cycle cheap (Task 10).
   let reportResult: string
-  try {
-    reportResult = await runPhase(paw, 'report', {
-      findings,
-      decisions,
-      act_result: actResult,
-    }, runAgent)
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err)
-    logger.warn(`[paws] REPORT phase failed for cycle ${cycleId}: ${errMsg}`)
-    reportResult = '[Paw cycle completed -- report generation failed]'
+  if (handlerReport) {
+    reportResult = handlerReport
+  } else {
+    // Bug 3 fix: REPORT phase failures should not mark a completed cycle as failed
+    try {
+      reportResult = await runPhase(paw, 'report', {
+        findings,
+        decisions,
+        act_result: actResult,
+      }, runAgent)
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      logger.warn(`[paws] REPORT phase failed for cycle ${cycleId}: ${errMsg}`)
+      reportResult = '[Paw cycle completed -- report generation failed]'
+    }
   }
 
   // Extract research findings from the report output
@@ -544,10 +606,9 @@ async function runActAndReport(
   })
 
   if (reportResult && reportResult.trim().length > 0) {
-    const projectName = getProjectName(paw.project_id)
-    const meta = `paw: ${paw.id}  •  project: ${paw.project_id}  •  cron: ${paw.cron}`
-    const header = `🛡 ${paw.name}\n${projectName}  •  Cycle complete\n${meta}\n\n`
-    await send(paw.config.chat_id, header + reportResult, paw.project_id)
+    // No meta header: the report is a routine message, so it lands in the
+    // digest buffer and the 08:00 drain groups it by project (spec 5.4).
+    await send(paw.config.chat_id, `${paw.name}: ${reportResult}`, paw.project_id)
   }
 }
 
@@ -594,7 +655,7 @@ async function runPhase(
 
   let result: AgentRunResult
   try {
-    result = await runAgent(prompt)
+    result = await runAgent(prompt, phase)
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     throw new Error(`${phase.toUpperCase()} phase failed: ${errMsg}`)

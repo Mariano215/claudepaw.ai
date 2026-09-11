@@ -1,7 +1,9 @@
+import { randomUUID } from 'node:crypto'
 import { TYPING_REFRESH_MS } from './config.js'
 import { logger } from './logger.js'
 import { guardChain } from './guard/index.js'
 import { parseActionItemsFromAgentOutput, ingestParsedItems } from './action-items.js'
+import { recordError } from './telemetry.js'
 import type { AgentRuntimeContext } from './agent-runtime.js'
 import { runAgentWithResolvedExecution } from './agent-runtime.js'
 
@@ -33,6 +35,12 @@ export interface AgentResult {
   executedProvider?: string
   /** True when runtime downgraded to another provider */
   providerFallbackApplied?: boolean
+  /** True when the guard output pass blocked the result. */
+  blocked?: boolean
+  /** Why the guard blocked it. Only set when blocked is true. */
+  blockReason?: string
+  /** Guard layers that triggered the block. Only set when blocked is true. */
+  blockedLayers?: string[]
 }
 
 export async function runAgent(
@@ -88,8 +96,13 @@ export async function runAgent(
     const { getPoolGateStatus, getCostGateStatus } = await import('./cost/cost-gate.js')
     const pool = await getPoolGateStatus()
     if (pool.action === 'refuse') {
-      const msg = `Anthropic Agent SDK Pool hard-stop reached: $${pool.spend_usd.toFixed(2)} of $${pool.cap_usd} (${pool.percent_of_pool.toFixed(0)}%). All Anthropic-backed runs refused. Pool resets on the 1st.`
-      return buildRefusalResult(msg, `agent SDK pool exceeded at ${pool.percent_of_pool.toFixed(0)}%`, startMs)
+      const msg = isTraderRun && pool.unavailable
+        ? 'Trader credit-pool gate is unavailable. Trader run refused until dashboard cost controls recover.'
+        : isTraderRun
+        ? `Anthropic credit pool exhausted: $${pool.spend_usd.toFixed(2)} of $${pool.cap_usd} (global hard-stop). Trader paused until the pool resets on the 1st (paper phase: no overflow billing).`
+        : `Non-trader credit budget reached ($${(pool.nontrader_spend_usd ?? pool.spend_usd).toFixed(2)} of $${pool.nontrader_cap_usd ?? pool.cap_usd}; $${pool.reserve_usd ?? 0} reserved for trader). Non-trader Anthropic runs refused until the pool resets.`
+      const reason = pool.unavailable ? 'trader credit-pool gate unavailable' : `agent SDK pool ${pool.scope ?? 'global'} hard-stop`
+      return buildRefusalResult(msg, reason, startMs)
     }
     if (pool.action === 'override_to_ollama') capOverride = 'ollama'
 
@@ -97,6 +110,13 @@ export async function runAgent(
     // project can still be capped tighter than the pool allows.
     const status = await getCostGateStatus(gateProjectId)
     if (status.action === 'refuse') {
+      if (isTraderRun && status.unavailable) {
+        return buildRefusalResult(
+          'Trader project cost gate is unavailable. Trader run refused until dashboard cost controls recover.',
+          'trader project cost gate unavailable',
+          startMs,
+        )
+      }
       const scope = status.triggering_cap === 'daily' ? 'Daily' : 'Monthly'
       const capAmount = status.monthly_cap_usd ?? status.daily_cap_usd ?? 0
       const pct = status.percent_of_cap.toFixed(0)
@@ -165,6 +185,53 @@ export async function runAgent(
 
   const durationSec = Math.round((Date.now() - startMs) / 1000)
 
+  // Guard output gate. hardenPrompt issued a canary and the L6 validator was
+  // already written; nothing consumed either one before this
+  // (.reviews/loop1-autonomy.md, primitive 04, HIGH). A blocked run returns no
+  // text, is marked blocked, and lands in error_log.
+  let blocked = false
+  let blockReason: string | undefined
+  let blockedLayers: string[] | undefined
+  if (guardHarden && canary && resultText) {
+    try {
+      const post = await guardChain.postProcess(resultText, message, {
+        requestId: randomUUID(),
+        canary,
+        delimiterID: delimiterID ?? '',
+        chatId: actionPlan?.projectId ?? 'agent',
+      })
+      if (post.blocked) {
+        blocked = true
+        blockReason = post.blockReason ?? 'guard output validation blocked the response'
+        blockedLayers = post.triggeredLayers
+        recordError('guard', 'error', blockReason, undefined, {
+          layers: post.triggeredLayers, projectId: actionPlan?.projectId,
+        })
+        logger.error({ layers: post.triggeredLayers, blockReason }, 'agent result blocked by guard')
+        resultText = null
+      }
+    } catch (err) {
+      // A broken guard must not look identical to a guard that passed
+      // everything. Fail closed by default so a real bug shows up in
+      // error_log instead of silently letting every result through. The one
+      // exception is a sidecar network error: postProcess already degrades
+      // gracefully for its own L7 sidecar call, but this guards against a
+      // future change that lets a network failure escape that internal
+      // try/catch, in which case a down sidecar should not block agent output.
+      if (isSidecarNetworkError(err)) {
+        logger.warn({ err }, 'guard postProcess sidecar unreachable, result passed through')
+      } else {
+        blocked = true
+        blockReason = 'guard output validation threw and was treated as blocked'
+        recordError('guard', 'error', blockReason, err instanceof Error ? err.stack : undefined, {
+          projectId: actionPlan?.projectId,
+        })
+        logger.error({ err }, 'guard postProcess threw, treating result as blocked')
+        resultText = null
+      }
+    }
+  }
+
   // Build a descriptive reason if no text was returned
   let emptyReason: string | undefined
   if (resultText === null || resultText === '') {
@@ -185,7 +252,7 @@ export async function runAgent(
   // Legacy agents can propose items just by including a `## Action Items` markdown
   // block in their response. New items always land as `proposed` and require human
   // approval before anything runs.
-  if (actionPlan && resultText) {
+  if (actionPlan && resultText && !blocked) {
     try {
       const parsed = parseActionItemsFromAgentOutput(resultText)
       if (parsed.length > 0) {
@@ -215,7 +282,19 @@ export async function runAgent(
     requestedProvider,
     executedProvider,
     providerFallbackApplied,
+    blocked,
+    blockReason,
+    blockedLayers,
   }
+}
+
+function isSidecarNetworkError(err: unknown): boolean {
+  const code = (err as { code?: string } | undefined)?.code
+  const name = (err as { name?: string } | undefined)?.name
+  if (code === 'ECONNREFUSED' || code === 'ETIMEDOUT') return true
+  if (name === 'AbortError') return true
+  const message = err instanceof Error ? err.message : String(err)
+  return /ECONNREFUSED|ETIMEDOUT/.test(message)
 }
 
 function buildRefusalResult(text: string, emptyReason: string, startMs: number): AgentResult {

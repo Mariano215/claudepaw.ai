@@ -1,16 +1,30 @@
 #!/bin/bash
 # Deploy dashboard files to Hostinger (no bot restart)
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 DASHBOARD_HOST="${DASHBOARD_HOST:-root@localhost}"
 DASHBOARD_DIR="${DASHBOARD_DIR:-/opt/claudepaw-server}"
+SSH_OPTS=(
+  -n
+  -o BatchMode=yes
+  -o ConnectTimeout=10
+  -o ConnectionAttempts=1
+  -o ServerAliveInterval=2
+  -o ServerAliveCountMax=2
+)
+RSYNC_SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 -o ServerAliveInterval=2 -o ServerAliveCountMax=2"
+
+dashboard_rsync() {
+  rsync -e "$RSYNC_SSH" "$@" </dev/null
+}
 
 cd "$PROJECT_DIR"
 
 if [ -f "$PROJECT_DIR/.env" ]; then
   set -a
+  # shellcheck disable=SC1091 # Project-local environment is resolved dynamically.
   source "$PROJECT_DIR/.env"
   set +a
 fi
@@ -20,8 +34,17 @@ if [ -z "${DASHBOARD_API_TOKEN:-}" ]; then
   exit 1
 fi
 
-if ! ssh -o ConnectTimeout=10 "$DASHBOARD_HOST" "test -s '$DASHBOARD_DIR/.env' && grep -Eq '^DASHBOARD_API_TOKEN=.+$' '$DASHBOARD_DIR/.env'"; then
-  echo "ABORT: remote $DASHBOARD_DIR/.env is missing DASHBOARD_API_TOKEN"
+# Keep transport failure distinct from a reachable host with bad config.
+set +e
+# shellcheck disable=SC2029 # Host/path constants intentionally form the remote command.
+ssh "${SSH_OPTS[@]}" "$DASHBOARD_HOST" "test -s '$DASHBOARD_DIR/.env' && grep -Eq '^DASHBOARD_API_TOKEN=.+$' '$DASHBOARD_DIR/.env'"
+REMOTE_ENV_STATUS=$?
+set -e
+if [ "$REMOTE_ENV_STATUS" -eq 255 ]; then
+  echo "ABORT: cannot connect to dashboard host $DASHBOARD_HOST"
+  exit 1
+elif [ "$REMOTE_ENV_STATUS" -ne 0 ]; then
+  echo "ABORT: connected, but remote $DASHBOARD_DIR/.env is missing DASHBOARD_API_TOKEN"
   exit 1
 fi
 
@@ -39,17 +62,17 @@ echo "Deploying dashboard to Hostinger..."
 } > server/src/trader-schema.gen.ts
 echo "✓ trader-schema.gen.ts refreshed"
 
-rsync -az --delete \
+dashboard_rsync -az --delete \
   server/public/ \
   "$DASHBOARD_HOST:$DASHBOARD_DIR/public/"
 echo "✓ public/"
 
-rsync -az --delete \
+dashboard_rsync -az --delete \
   server/src/ \
   "$DASHBOARD_HOST:$DASHBOARD_DIR/src/"
 echo "✓ src/"
 
-rsync -az --delete \
+dashboard_rsync -az --delete \
   server/themes/ \
   "$DASHBOARD_HOST:$DASHBOARD_DIR/themes/"
 echo "✓ themes/"
@@ -57,12 +80,12 @@ echo "✓ themes/"
 # Canonical projects manifest -- read on server boot by seedCanonicalProjects()
 # in server/src/db.ts. Source of truth for which projects exist in the bot DB
 # on Hostinger; idempotent INSERT OR IGNORE so runtime mutations survive.
-rsync -az --delete \
+dashboard_rsync -az --delete \
   server/seeds/ \
   "$DASHBOARD_HOST:$DASHBOARD_DIR/seeds/"
 echo "✓ seeds/"
 
-rsync -az --delete \
+dashboard_rsync -az --delete \
   server/integrations/ \
   "$DASHBOARD_HOST:$DASHBOARD_DIR/integrations/"
 echo "✓ integrations/"
@@ -70,38 +93,38 @@ echo "✓ integrations/"
 # package-lock.json ships too: without it the remote `npm install` resolves
 # transitive deps against its own stale tree, so security fixes verified here
 # never reach production. Keep the lock and package.json together.
-rsync -az \
+dashboard_rsync -az \
   server/package.json server/package-lock.json server/tsconfig.json \
   "$DASHBOARD_HOST:$DASHBOARD_DIR/"
 echo "✓ config files"
 
 # Sync pm2 ecosystem file (fork mode is pinned here -- see CLAUDE.md)
-rsync -az \
+dashboard_rsync -az \
   ecosystem.config.cjs \
   "$DASHBOARD_HOST:$DASHBOARD_DIR/"
 echo "✓ ecosystem.config.cjs"
 
 # Copy scripts if they exist
 if [ -d "server/scripts" ]; then
-  rsync -az --delete \
+  dashboard_rsync -az --delete \
     server/scripts/ \
     "$DASHBOARD_HOST:$DASHBOARD_DIR/scripts/"
   echo "✓ scripts/"
 fi
 
 # Sync agent definitions (base + templates + projects)
-rsync -az --delete \
+dashboard_rsync -az --delete \
   agents/ \
   "$DASHBOARD_HOST:$DASHBOARD_DIR/agents/"
 echo "✓ agents/"
 
-rsync -az --delete \
+dashboard_rsync -az --delete \
   templates/ \
   "$DASHBOARD_HOST:$DASHBOARD_DIR/templates/"
 echo "✓ templates/"
 
 if [ -d "projects" ]; then
-  rsync -az \
+  dashboard_rsync -az \
     projects/ \
     "$DASHBOARD_HOST:$DASHBOARD_DIR/projects/"
   echo "✓ projects/"
@@ -111,34 +134,22 @@ fi
 # IMPORTANT: Must use PM2 in fork mode (not cluster) -- cluster mode breaks WebSocket upgrades.
 # Fork mode is pinned in ecosystem.config.cjs at repo root; we sync it above and invoke
 # `pm2 start ecosystem.config.cjs` so the flags never drift out of version control.
-# Clean slate every deploy: delete from PM2, free port 3000 in a verify loop
-# (kills any orphan that would otherwise leave PM2 stuck in EADDRINUSE), then
-# start one fresh fork-mode process.
+# Clean slate every deploy: a detached remote job deletes PM2, frees port 3000,
+# and starts one fresh fork-mode process. Detaching is critical: an SSH reset
+# after `pm2 delete` must not terminate the remaining restart commands.
 # Build FIRST and fail the deploy on any compile error. The old version piped
 # tsc errors to /dev/null and restarted regardless, which shipped a broken
 # dist and took the dashboard down for 3 days (Jun 8-11 2026). Never silence
 # the remote build.
-if ! ssh -o ConnectTimeout=10 "$DASHBOARD_HOST" \
+# shellcheck disable=SC2029 # Host/path constants intentionally form the remote command.
+if ! ssh "${SSH_OPTS[@]}" "$DASHBOARD_HOST" \
   "cd $DASHBOARD_DIR && npm install --no-audit --no-fund >/dev/null && npx tsc"; then
   echo "ABORT: remote TypeScript build FAILED -- server NOT restarted (old process left running)"
   exit 1
 fi
 echo "✓ remote build OK"
 
-ssh -o ConnectTimeout=10 "$DASHBOARD_HOST" \
-  "cd $DASHBOARD_DIR && pm2 delete claudepaw-server 2>/dev/null; \
-   for i in 1 2 3 4 5; do kill -9 \$(lsof -ti:3000) 2>/dev/null; sleep 1; lsof -ti:3000 >/dev/null 2>&1 || break; done; \
-   pm2 start ecosystem.config.cjs 2>/dev/null; pm2 save 2>/dev/null"
-
-# Verify the server actually came up and is listening. PM2 'online' is not
-# proof of life (a module-load crash can leave a zombie): require an HTTP 200.
-sleep 4
-if ! ssh -o ConnectTimeout=10 "$DASHBOARD_HOST" \
-  "curl -s -o /dev/null -w '%{http_code}' -m 8 http://127.0.0.1:3000/api/v1/system-state/kill-switch -H \"x-dashboard-token: \$(grep '^DASHBOARD_API_TOKEN=' $DASHBOARD_DIR/.env | cut -d= -f2)\" | grep -q 200"; then
-  echo "ABORT: server restarted but kill-switch endpoint is NOT answering -- check pm2 logs claudepaw-server"
-  exit 1
-fi
-echo "✓ Server rebuilt, restarted, and answering"
+bash "$SCRIPT_DIR/queue-dashboard-restart.sh" "$DASHBOARD_HOST" "$DASHBOARD_DIR"
 
 echo ""
 echo "✓ Dashboard deploy complete"

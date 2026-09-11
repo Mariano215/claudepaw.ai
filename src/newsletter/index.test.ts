@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeEditionId, computeEditionDate, heroStatusLabel } from './index.js'
+import { computeEditionId, computeEditionDate, heroStatusLabel, resolveLinkedinGate } from './index.js'
 
 describe('newsletter orchestrator helpers', () => {
   it('generates a stable edition ID for a given date', () => {
@@ -26,5 +26,25 @@ describe('heroStatusLabel', () => {
 
   it('reports MISSING when optimize dropped the image with no reason', () => {
     expect(heroStatusLabel('')).toBe('MISSING')
+  })
+})
+
+describe('resolveLinkedinGate (the social.post gate for the LinkedIn newsletter leg)', () => {
+  it('deny: publishes nothing and yields REFUSED (policy)', () => {
+    const gate = resolveLinkedinGate('deny')
+    expect(gate.publish).toBe(false)
+    expect(gate.heldStatus).toBe('REFUSED (policy)')
+  })
+
+  it('pending: publishes nothing and yields HELD (card <id>)', () => {
+    const gate = resolveLinkedinGate('pending:card-7')
+    expect(gate.publish).toBe(false)
+    expect(gate.heldStatus).toBe('HELD (card card-7)')
+  })
+
+  it('allow: clears the publish and reports no held status', () => {
+    const gate = resolveLinkedinGate('allow')
+    expect(gate.publish).toBe(true)
+    expect(gate.heldStatus).toBeUndefined()
   })
 })

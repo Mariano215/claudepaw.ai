@@ -3,6 +3,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { initPawsTables, createPaw, getCycle, getLatestCycle } from '../db.js'
 import { runPawCycle, resumePawCycle } from '../engine.js'
+import { __setProjectLookupForTests } from '../project-name.js'
+import { registerCollector } from '../collectors/index.js'
+import { registerHandler } from '../handlers/index.js'
 import type { PawConfig } from '../types.js'
 
 let db: InstanceType<typeof Database>
@@ -27,6 +30,163 @@ afterEach(() => {
 })
 
 describe('runPawCycle', () => {
+  it('skip_if_unchanged: identical collector output completes the cycle without ANALYZE', async () => {
+    registerCollector('static-test', async () => ({
+      collector: 'static-test',
+      collected_at: Date.now(),
+      raw_data: { open: 1, fingerprint: 'abc' },
+    }))
+    createPaw(db, {
+      id: 'static-paw',
+      project_id: 'default',
+      name: 'Static Paw',
+      agent_id: 'auditor',
+      cron: '0 9 * * *',
+      config: { ...testConfig, observe_collector: 'static-test', skip_if_unchanged: true },
+    })
+    // First cycle: collector runs, ANALYZE and DECIDE run and find nothing.
+    mockRunAgent
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({ decisions: [], max_severity: 0 }) })
+    const first = await runPawCycle(db, 'static-paw', mockRunAgent, mockSend)
+    expect(getCycle(db, first)!.phase).toBe('completed')
+    const callsAfterFirst = mockRunAgent.mock.calls.length
+
+    // Second cycle: same collector output, so no LLM call at all.
+    const second = await runPawCycle(db, 'static-paw', mockRunAgent, mockSend)
+
+    expect(mockRunAgent.mock.calls.length).toBe(callsAfterFirst)
+    expect(getCycle(db, second)!.phase).toBe('completed')
+    expect(getCycle(db, second)!.report).toBeNull()
+    expect(mockSend).not.toHaveBeenCalled()
+  })
+
+  it('skip_if_unchanged: a skipped cycle carries forward the previous cycle findings for dedupe', async () => {
+    registerCollector('static-test-findings', async () => ({
+      collector: 'static-test-findings',
+      collected_at: Date.now(),
+      raw_data: { open: 1, fingerprint: 'abc' },
+    }))
+    createPaw(db, {
+      id: 'static-paw-findings',
+      project_id: 'default',
+      name: 'Static Paw Findings',
+      agent_id: 'auditor',
+      cron: '0 9 * * *',
+      config: { ...testConfig, observe_collector: 'static-test-findings', skip_if_unchanged: true },
+    })
+
+    // First cycle: ANALYZE reports f1 as new (below the approval threshold),
+    // so DECIDE, ACT and REPORT all still run.
+    mockRunAgent
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        findings: [{ id: 'f1', severity: 2, title: 'Open port 80', detail: 'HTTP open', is_new: true }],
+      }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({ decisions: [], max_severity: 2 }) })
+      .mockResolvedValueOnce({ text: 'ACT: noted' })
+      .mockResolvedValueOnce({ text: 'REPORT: noted' })
+    const first = await runPawCycle(db, 'static-paw-findings', mockRunAgent, mockSend)
+    expect(getCycle(db, first)!.phase).toBe('completed')
+    expect(getCycle(db, first)!.findings).toEqual([
+      expect.objectContaining({ id: 'f1', is_new: true }),
+    ])
+    const callsAfterFirst = mockRunAgent.mock.calls.length
+
+    // Second cycle: same collector output, skipped before any LLM call.
+    const second = await runPawCycle(db, 'static-paw-findings', mockRunAgent, mockSend)
+    expect(mockRunAgent.mock.calls.length).toBe(callsAfterFirst)
+    expect(getCycle(db, second)!.phase).toBe('completed')
+    // The skipped cycle must still carry f1 forward so dedupe history does
+    // not go blind after a run of skipped cycles.
+    expect(getCycle(db, second)!.findings).toEqual([
+      expect.objectContaining({ id: 'f1', is_new: true }),
+    ])
+
+    // Third cycle: collector output changes, ANALYZE re-emits f1 as "new"
+    // again. Dedupe must still see it via the skipped cycle's carried
+    // findings and force it back to known.
+    registerCollector('static-test-findings', async () => ({
+      collector: 'static-test-findings',
+      collected_at: Date.now(),
+      raw_data: { open: 2, fingerprint: 'def' },
+    }))
+    // Dedupe forces f1 back to known before the meaningful-work check, so
+    // the cycle stays quiet: no ACT/REPORT calls needed here either.
+    mockRunAgent
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        findings: [{ id: 'f1', severity: 2, title: 'Open port 80', detail: 'HTTP open', is_new: true }],
+      }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({ decisions: [], max_severity: 2 }) })
+    const third = await runPawCycle(db, 'static-paw-findings', mockRunAgent, mockSend)
+    expect(getCycle(db, third)!.findings).toEqual([
+      expect.objectContaining({ id: 'f1', is_new: false }),
+    ])
+  })
+
+  it('skip_if_unchanged: does not skip after a failed cycle, even with identical collector output', async () => {
+    registerCollector('static-test-fail', async () => ({
+      collector: 'static-test-fail',
+      collected_at: Date.now(),
+      raw_data: { open: 1, fingerprint: 'abc' },
+    }))
+    createPaw(db, {
+      id: 'static-paw-fail',
+      project_id: 'default',
+      name: 'Static Paw Fail',
+      agent_id: 'auditor',
+      cron: '0 9 * * *',
+      config: { ...testConfig, observe_collector: 'static-test-fail', skip_if_unchanged: true },
+    })
+
+    // First cycle: ANALYZE rejects, cycle ends up 'failed' but its state still
+    // carries the observe_fingerprint written before the ANALYZE call.
+    mockRunAgent.mockRejectedValueOnce(new Error('analyze boom'))
+    const first = await runPawCycle(db, 'static-paw-fail', mockRunAgent, mockSend)
+    expect(getCycle(db, first)!.phase).toBe('failed')
+    const callsAfterFirst = mockRunAgent.mock.calls.length
+
+    // Second cycle: same collector output as the failed cycle. Must NOT be
+    // treated as "unchanged since last success" -- the LLM should run again
+    // (findings=[] / decisions=[] hits the existing quiet-cycle short-circuit
+    // after ANALYZE+DECIDE run, so report stays null; the point here is that
+    // ANALYZE/DECIDE were actually invoked instead of the cycle being
+    // silently marked completed by the skip guard before any LLM call).
+    mockRunAgent
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({ decisions: [], max_severity: 0 }) })
+    const second = await runPawCycle(db, 'static-paw-fail', mockRunAgent, mockSend)
+
+    expect(mockRunAgent.mock.calls.length).toBe(callsAfterFirst + 2)
+    expect(getCycle(db, second)!.phase).toBe('completed')
+  })
+
+  it('times out a collector that never resolves instead of stalling the cycle', async () => {
+    vi.useFakeTimers()
+    try {
+      registerCollector('hanging-collector', () => new Promise(() => { /* never resolves */ }))
+      createPaw(db, {
+        id: 'hanging-paw',
+        project_id: 'default',
+        name: 'Hanging Paw',
+        agent_id: 'auditor',
+        cron: '0 9 * * *',
+        config: { ...testConfig, observe_collector: 'hanging-collector' },
+      })
+      mockRunAgent
+        .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }) })
+        .mockResolvedValueOnce({ text: JSON.stringify({ decisions: [], max_severity: 0 }) })
+
+      const cyclePromise = runPawCycle(db, 'hanging-paw', mockRunAgent, mockSend)
+      await vi.advanceTimersByTimeAsync(120_000)
+      const cycleId = await cyclePromise
+
+      expect(getCycle(db, cycleId)!.phase).toBe('completed')
+      expect(String(mockRunAgent.mock.calls[0][0])).toContain('collector timeout')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('runs all 5 phases for a low-severity cycle (no approval needed)', async () => {
     createPaw(db, {
       id: 'test-paw',
@@ -248,7 +408,7 @@ describe('runPawCycle', () => {
     const cycle = getCycle(db, cycleId)
     expect(cycle!.findings[0].is_new).toBe(true)
     expect(cycle!.phase).toBe('completed')
-    expect(mockSend).toHaveBeenCalledWith('12345', expect.stringContaining('Cycle complete'), expect.any(String))
+    expect(mockSend).toHaveBeenCalledWith('12345', expect.stringContaining('REPORT:'), expect.any(String))
   })
 
   it('does not request approval for repeated high-severity findings once dedupe marks them known', async () => {
@@ -331,7 +491,7 @@ describe('runPawCycle', () => {
     const cycle = getCycle(db, cycleId)
     expect(cycle!.phase).toBe('completed')
     expect(cycle!.state.approval_requested).toBe(false)
-    expect(mockSend).toHaveBeenCalledWith('12345', expect.stringContaining('Cycle complete'), expect.any(String))
+    expect(mockSend).toHaveBeenCalledWith('12345', expect.stringContaining('REPORT:'), expect.any(String))
   })
 
   it('records error if a phase fails', async () => {
@@ -442,5 +602,81 @@ describe('runPawCycle', () => {
     expect(keyboard.inline_keyboard).toHaveLength(1)
     expect(keyboard.inline_keyboard[0][0].callback_data).toBe('paw:approve:sentinel-patrol')
     expect(keyboard.inline_keyboard[0][1].callback_data).toBe('paw:skip:sentinel-patrol')
+  })
+
+  it('gives a pawdev approval card only approve and skip, never a card-specific ask button', async () => {
+    createPaw(db, {
+      id: 'paw-dev-cycle', project_id: 'pawdev', name: 'Paw Dev Cycle', agent_id: 'pawdev--triage',
+      cron: '30 8 * * 1-5', config: testConfig,
+    })
+    __setProjectLookupForTests(() => ({ id: 'pawdev', name: 'Paw Dev' }))
+    mockRunAgent
+      .mockResolvedValueOnce({ text: 'observe' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [{ id: 'f1', severity: 5, title: 'CI red', detail: 'main is red', is_new: true }] }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({ decisions: [{ finding_id: 'f1', action: 'escalate', reason: 'a merge' }] }) })
+
+    const pawSend = vi.fn().mockResolvedValue(undefined)
+    await runPawCycle(db, 'paw-dev-cycle', mockRunAgent, mockSend, undefined, pawSend)
+
+    __setProjectLookupForTests(undefined)
+    const keyboard = pawSend.mock.calls[0][2]
+    expect(keyboard.inline_keyboard).toHaveLength(1)
+    expect(keyboard.inline_keyboard[0].map((b: { callback_data: string }) => b.callback_data))
+      .toEqual(['paw:approve:paw-dev-cycle', 'paw:skip:paw-dev-cycle'])
+  })
+
+  it('raises a finding the DECIDE phase escalates to severity 4, so the cycle parks', async () => {
+    createPaw(db, {
+      id: 'esc-paw', project_id: 'default', name: 'Esc', agent_id: 'auditor', cron: '0 9 * * *',
+      config: { ...testConfig, approval_threshold: 4 },
+    })
+    mockRunAgent
+      .mockResolvedValueOnce({ text: 'observe' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [{ id: 'f1', severity: 3, title: 'External question', detail: 'needs a public reply', is_new: true }] }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({ decisions: [{ finding_id: 'f1', action: 'escalate', reason: 'a public reply' }] }) })
+
+    const cycleId = await runPawCycle(db, 'esc-paw', mockRunAgent, mockSend)
+
+    const cycle = getCycle(db, cycleId)
+    expect(cycle!.phase).toBe('decide')
+    expect(cycle!.state.approval_requested).toBe(true)
+    expect(cycle!.findings[0].severity).toBe(4)
+  })
+
+  it('always_run_act runs ACT and the post-ACT handler on a quiet cycle', async () => {
+    const seen: string[] = []
+    registerHandler('test-quiet-act', async () => { seen.push('ran'); return 'queue drained' })
+    createPaw(db, {
+      id: 'quiet-paw', project_id: 'default', name: 'Quiet', agent_id: 'auditor', cron: '0 9 * * *',
+      config: { ...testConfig, post_act_handler: 'test-quiet-act', always_run_act: true },
+    })
+    mockRunAgent
+      .mockResolvedValueOnce({ text: 'observe' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({ decisions: [] }) })
+      .mockResolvedValueOnce({ text: 'act text' })
+
+    const cycleId = await runPawCycle(db, 'quiet-paw', mockRunAgent, mockSend)
+
+    expect(seen).toEqual(['ran'])
+    expect(getCycle(db, cycleId)!.report).toBe('queue drained')
+  })
+
+  it('runs post_analyze_handler with the raw ANALYZE text before DECIDE', async () => {
+    const seen: string[] = []
+    registerHandler('test-analyze', async (_c, _p, _proj, text) => { seen.push(text); return })
+    createPaw(db, {
+      id: 'hook-paw', project_id: 'default', name: 'Hook', agent_id: 'auditor', cron: '0 9 * * *',
+      config: { ...testConfig, post_analyze_handler: 'test-analyze' },
+    })
+    mockRunAgent
+      .mockResolvedValueOnce({ text: 'observe' })
+      .mockResolvedValueOnce({ text: JSON.stringify({ findings: [] }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({ decisions: [], max_severity: 0 }) })
+
+    await runPawCycle(db, 'hook-paw', mockRunAgent, mockSend)
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toContain('findings')
   })
 })

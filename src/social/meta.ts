@@ -1,71 +1,68 @@
-import { execSync } from 'node:child_process'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
+import { PROJECT_ROOT } from '../config.js'
 import { logger } from '../logger.js'
 import type { PublishResult } from './types.js'
 
 // ---------------------------------------------------------------------------
-// GitHub CDN image proxy
+// Image proxy through the public repo
 //
 // Used for both Instagram (HostPapa WAF blocks Meta crawlers) and Facebook
 // (image size enforcement — FB cap is 10 MB).
+//
+// The bytes are written into the MONOREPO at assets/ig-proxy/, never
+// committed here. scripts/sync-oss.sh rsyncs assets/ into the mirror on the
+// next run, so the file reaches YourGitHubUser/claudepaw.ai and the raw URL goes
+// live after that sync. Nothing in this module writes to the mirror: a
+// mirror is a build artifact (spec 6.5).
 // ---------------------------------------------------------------------------
 
 const GH_PROXY_REPO = 'YourGitHubUser/claudepaw.ai'
 const GH_PROXY_BRANCH = 'main'
-const GH_PROXY_PREFIX = 'assets/ig-proxy'
+export const GH_PROXY_PREFIX = 'assets/ig-proxy'
 const FB_MAX_BYTES = 10 * 1024 * 1024 // 10 MB
 
+function safeFilename(filename: string): string {
+  return basename(filename.split('?')[0] ?? '') || `proxy-${Date.now()}.jpg`
+}
+
+/** Absolute monorepo path for one proxied image. */
+export function igProxyMonorepoPath(filename: string): string {
+  return join(PROJECT_ROOT, GH_PROXY_PREFIX, safeFilename(filename))
+}
+
+/** The URL the mirror serves once a sync has carried the file across. */
+export function igProxyRawUrl(filename: string): string {
+  return `https://raw.githubusercontent.com/${GH_PROXY_REPO}/${GH_PROXY_BRANCH}/${GH_PROXY_PREFIX}/${safeFilename(filename)}`
+}
+
 /**
- * Upload a buffer to the GitHub CDN proxy and return its raw URL.
- * Returns null on failure so callers can fall back to the original URL.
+ * Write a buffer into the monorepo proxy directory and return the raw URL it
+ * will be served from once the next sync carries it to the mirror. Never
+ * commits: the working-tree change is picked up by npm run sync:oss.
+ * Returns null on a write failure so the caller falls back to the original URL.
  */
 async function uploadToGithubCDN(buffer: Uint8Array, filename: string, label: string): Promise<string | null> {
+  const target = igProxyMonorepoPath(filename)
+  const url = igProxyRawUrl(filename)
   try {
-    const ghToken = execSync('gh auth token', { encoding: 'utf-8' }).trim()
-    if (!ghToken) throw new Error('gh auth token returned empty')
-
-    const path = `${GH_PROXY_PREFIX}/${filename}`
-    const base64 = Buffer.from(buffer).toString('base64')
-
-    // Check for existing file SHA (required for update)
-    const checkResp = await fetch(
-      `https://api.github.com/repos/${GH_PROXY_REPO}/contents/${path}?ref=${GH_PROXY_BRANCH}`,
-      { headers: { Authorization: `Bearer ${ghToken}`, Accept: 'application/vnd.github+json' } },
-    )
-    let sha: string | undefined
-    if (checkResp.ok) {
-      const existing = await checkResp.json() as { sha?: string }
-      sha = existing.sha
-    }
-
-    const body: Record<string, string> = {
-      message: `${label}: ${filename}`,
-      content: base64,
-      branch: GH_PROXY_BRANCH,
-    }
-    if (sha) body.sha = sha
-
-    const uploadResp = await fetch(
-      `https://api.github.com/repos/${GH_PROXY_REPO}/contents/${path}`,
-      {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${ghToken}`,
-          Accept: 'application/vnd.github+json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-      },
-    )
-
-    if (!uploadResp.ok) {
-      const err = await uploadResp.text()
-      logger.warn({ path, status: uploadResp.status, err }, `${label}: GitHub upload failed`)
-      return null
-    }
-
-    return `https://raw.githubusercontent.com/${GH_PROXY_REPO}/${GH_PROXY_BRANCH}/${path}`
+    mkdirSync(join(PROJECT_ROOT, GH_PROXY_PREFIX), { recursive: true })
+    writeFileSync(target, buffer)
+    logger.info({ target, url }, `${label}: image written to the monorepo proxy directory`)
   } catch (err) {
-    logger.warn({ err, filename }, `${label}: GitHub CDN upload threw`)
+    logger.warn({ err, filename }, `${label}: monorepo proxy write failed`)
+    return null
+  }
+
+  // The URL only resolves once npm run sync:oss has carried assets/ across.
+  try {
+    const head = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(5000) })
+    if (head.ok) return url
+    logger.warn({ url, status: head.status },
+      `${label}: proxy file is written but not on the mirror yet, run npm run sync:oss`)
+    return null
+  } catch (err) {
+    logger.warn({ err, url }, `${label}: proxy URL probe failed`)
     return null
   }
 }

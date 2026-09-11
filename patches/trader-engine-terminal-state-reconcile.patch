@@ -1,0 +1,128 @@
+--- a/src/trader_engine/execution/order_reconciler.py
++++ b/src/trader_engine/execution/order_reconciler.py
+@@ -44,6 +44,9 @@
+     "pending", "placed", "unknown", "new", "pending_new", "accepted",
+     "partially_filled", "pending_cancel", "pending_replace",
+ )
++_TERMINAL_BROKER_STATUSES = frozenset({
++    "filled", "canceled", "cancelled", "rejected", "expired", "failed",
++})
+ 
+ # Orphan sweep recency horizon (ms). A local order created within this window
+ # is never swept as an orphan -- it may still be in-flight (slow broker ACK,
+@@ -159,7 +162,16 @@
+             # Monotonic guard: mirrors persist_order_update's logic.
+             # A strictly older broker snapshot can never be authoritative --
+             # skip the UPDATE entirely to protect a fresher order_sync write.
+-            if broker_updated < stored_updated and local_by_coid[coid].status not in ('pending', 'unknown'):
++            local_status = local_by_coid[coid].status
++            terminal_promotion = (
++                local_status in _LIVE_LOCAL_STATUSES
++                and bo.status in _TERMINAL_BROKER_STATUSES
++            )
++            if (
++                broker_updated < stored_updated
++                and local_status not in ('pending', 'unknown')
++                and not terminal_promotion
++            ):
+                 result.matched += 1  # counted as matched (we saw it), not updated
+                 continue
+             session.execute(
+--- a/src/trader_engine/execution/reconciler.py
++++ b/src/trader_engine/execution/reconciler.py
+@@ -134,10 +134,12 @@
+ 
+         for asset, local in local_map.items():
+             if asset not in broker_map:
+-                if local.qty > 1e-9:
+-                    if self._latest_filled_side(asset) == "sell":
++                if abs(local.qty) > 1e-9:
++                    expected_close_side = "sell" if local.qty > 0 else "buy"
++                    if self._latest_filled_side(asset) == expected_close_side:
+                         # Position ended in a real close: the newest order
+-                        # with fills is a sell, so broker-absent is expected.
++                        # has the side needed to flatten the local quantity,
++                        # so broker-absent is expected.
+                         # Zero the row (NAV + close-out sweep read it) instead
+                         # of halting. Unexplained absence still halts below.
+                         log.info(
+--- a/tests/test_order_reconciler.py
++++ b/tests/test_order_reconciler.py
+@@ -387,6 +387,40 @@
+         f"stale reconcile clobbered fresher fill: got {row.filled_avg_price}"
+     )
+     assert row.updated_at == t_fresh  # timestamp also untouched
++
++
++@pytest.mark.asyncio
++async def test_terminal_broker_state_promotes_fresher_live_local_row(session, adapter):
++    """Terminal broker truth closes a stale live row even when its timestamp
++    predates the local write. This repairs legacy placed/partial rows whose
++    stored timestamp was advanced after Alpaca had already closed the order.
++    """
++    t_fresh = int(time.time() * 1000)
++    t_terminal = t_fresh - 10_000
++    _seed_order_at(
++        session, "coid-terminal", "placed", "b-terminal",
++        filled_qty=0.0, filled_avg_price=None, updated_at=t_fresh,
++    )
++    terminal_bo = BrokerOrder(
++        client_order_id="coid-terminal", broker_order_id="b-terminal",
++        asset="SPY", side="buy", qty=1.0, order_type="limit",
++        limit_price=100.0, status="canceled", filled_qty=0.0,
++        filled_avg_price=None, source="alpaca",
++        created_at=t_terminal, updated_at=t_terminal,
++    )
++    adapter.get_orders.side_effect = (
++        lambda **kw: [terminal_bo] if kw["status"] == "closed" else []
++    )
++
++    from trader_engine.execution.order_reconciler import reconcile_orders
++    await reconcile_orders(session, adapter)
++
++    row = session.execute(text(
++        "SELECT status,updated_at FROM engine_orders "
++        "WHERE client_order_id='coid-terminal'"
++    )).one()
++    assert row.status == "canceled"
++    assert row.updated_at == t_terminal
+ 
+ 
+ # ---------------------------------------------------------------------------
+--- a/tests/test_reconciler.py
++++ b/tests/test_reconciler.py
+@@ -206,6 +206,34 @@
+ 
+ 
+ @pytest.mark.asyncio
++async def test_covered_short_absent_at_broker_zeroes_row(session, mock_adapter):
++    """A filled buy closes a negative local quantity when the broker no longer
++    lists the asset. This prevents a completed paper repair from remaining as
++    a stale short in GET /positions.
++    """
++    now_ms = int(time.time() * 1000)
++    session.add(EnginePosition(
++        asset="IWM", qty=-3.0, avg_entry_price=294.16,
++        market_value=-882.48, unrealized_pnl=0.0,
++        source="alpaca", updated_at=now_ms,
++    ))
++    session.add(_order("IWM", "sell", 3.0, now_ms - 1_000_000))
++    session.add(_order("IWM", "buy", 3.0, now_ms - 1_000))
++    session.commit()
++    mock_adapter.get_positions.return_value = []
++
++    from trader_engine.execution.reconciler import Reconciler
++    result = await Reconciler(session=session, adapter=mock_adapter).run()
++
++    assert result.drift_detected is False
++    session.expire_all()
++    row = session.get(EnginePosition, "IWM")
++    assert row.qty == 0.0
++    assert row.market_value == 0.0
++    assert row.unrealized_pnl == 0.0
++
++
++@pytest.mark.asyncio
+ async def test_absent_at_broker_with_newer_buy_still_halts(session, mock_adapter):
+     """Rebuy after a close: newest filled order is a BUY but the broker
+     omits the asset. That absence is unexplained — must still halt."""

@@ -283,6 +283,13 @@ export function requireProjectRole(
   pidResolver?: (req: Request) => string | null,
 ): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {
+    const fromQuery = typeof req.query.project_id === 'string' ? req.query.project_id : null
+    const fromBody = typeof req.body?.project_id === 'string' ? req.body.project_id : null
+    if (fromQuery && fromBody && fromQuery !== fromBody) {
+      res.status(400).json({ error: 'project_id in query and body disagree' })
+      return
+    }
+
     if (req.user?.isAdmin) {
       next()
       return
@@ -291,9 +298,9 @@ export function requireProjectRole(
     const defaultResolver = (r: Request): string | null => {
       const fromParamsRaw = r.params.id
       const fromParams = typeof fromParamsRaw === 'string' ? fromParamsRaw : null
-      const fromQuery = typeof r.query.project_id === 'string' ? r.query.project_id : null
-      const fromBody = typeof r.body?.project_id === 'string' ? r.body.project_id : null
-      return fromParams ?? fromQuery ?? fromBody ?? null
+      const mutating = r.method === 'POST' || r.method === 'PUT' || r.method === 'PATCH'
+      // Mutations are checked against the value the handler will write with.
+      return fromParams ?? (mutating ? (fromBody ?? fromQuery) : (fromQuery ?? fromBody)) ?? null
     }
 
     const resolve = pidResolver ?? defaultResolver

@@ -24,15 +24,11 @@
 //
 // If listings[] is empty, the agent should output: {"actions":[]}
 
-import { execFileSync } from 'node:child_process'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { getDb } from '../../db.js'
 import { logger } from '../../logger.js'
+import { notifyOwner } from '../../notify.js'
 import type { PostActHandler } from './index.js'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const NOTIFY_SH = path.resolve(__dirname, '../../../scripts/notify.sh')
 const PROJECT_ID = 'broker'
 
 interface InsertPocketAction {
@@ -134,11 +130,11 @@ export const brokerPocketPersistHandler: PostActHandler = async (
       }
     } else if (action.type === 'notify' && !notified) {
       try {
-        execFileSync('/bin/bash', [NOTIFY_SH, action.message], { timeout: 10_000 })
+        await notifyOwner(action.message, PROJECT_ID)
         notified = true
         logger.info({ cycleId }, '[broker-pocket-persist] Telegram notification sent')
       } catch (err) {
-        logger.warn({ cycleId, err }, '[broker-pocket-persist] notify.sh failed')
+        logger.warn({ cycleId, err }, '[broker-pocket-persist] notify failed')
       }
     }
   }
@@ -147,8 +143,6 @@ export const brokerPocketPersistHandler: PostActHandler = async (
 
   if (inserted > 0 && !notified) {
     const msg = `Father feed (handler): ${inserted} pocket listing${inserted === 1 ? '' : 's'} saved from cycle ${cycleId.slice(0, 8)}.`
-    try {
-      execFileSync('/bin/bash', [NOTIFY_SH, msg], { timeout: 10_000 })
-    } catch { /* non-fatal */ }
+    await notifyOwner(msg, PROJECT_ID).catch(() => { /* non-fatal */ })
   }
 }

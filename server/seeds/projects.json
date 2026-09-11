@@ -10,6 +10,7 @@
       "display_name": "Personal Assistant",
       "icon": "layers",
       "status": "active",
+      "kind": "project",
       "settings": {
         "theme_id": "claudepaw",
         "primary_color": "#f97316",
@@ -24,6 +25,7 @@
       "display_name": "ClaudePaw Platform",
       "icon": "code",
       "status": "active",
+      "kind": "project",
       "settings": {
         "theme_id": "claudepaw",
         "primary_color": "#f97316",
@@ -38,6 +40,7 @@
       "display_name": "Paw Trader",
       "icon": "trending-up",
       "status": "active",
+      "kind": "paw",
       "settings": {
         "theme_id": "synthwave-nights"
       }
@@ -49,8 +52,22 @@
       "display_name": "Paw Broker",
       "icon": "home",
       "status": "active",
+      "kind": "paw",
       "settings": {
         "theme_id": "broker"
+      }
+    },
+    {
+      "id": "pawdev",
+      "slug": "pawdev",
+      "name": "pawdev",
+      "display_name": "Paw Dev",
+      "icon": "git-pull-request",
+      "status": "active",
+      "kind": "paw",
+      "settings": {
+        "theme_id": "claudepaw",
+        "primary_color": "#38bdf8"
       }
     },
     {

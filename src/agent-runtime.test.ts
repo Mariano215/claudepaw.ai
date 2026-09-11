@@ -52,7 +52,7 @@ vi.mock('node:child_process', () => ({
   spawn: (...args: any[]) => mockSpawn(...args),
 }))
 
-import { resolveExecutionSettings, runAgentWithResolvedExecution } from './agent-runtime.js'
+import { resolveExecutionSettings, runAgentWithResolvedExecution, CLAUDE_BINARY } from './agent-runtime.js'
 
 describe('agent runtime', () => {
   beforeAll(() => {
@@ -305,6 +305,48 @@ provider: claude_desktop
     expect(events[0]?.model).toBe('claude-haiku-4-5')
   })
 
+  it('anthropic_api fetch carries an AbortSignal', async () => {
+    mockProjectSettingsById['test-project'] = { execution_provider: 'anthropic_api', model_tier: 'cheap' }
+    mockCredentials['test-project:anthropic:api_key'] = 'anthropic-key'
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true, status: 200,
+      text: async () => JSON.stringify({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await runAgentWithResolvedExecution({ prompt: 'hello' }, { projectId: 'test-project' })
+
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('openai_api fetch carries an AbortSignal', async () => {
+    mockProjectSettingsById['test-project'] = { execution_provider: 'openai_api', model_tier: 'balanced' }
+    mockCredentials['test-project:openai:api_key'] = 'openai-key'
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true, status: 200,
+      text: async () => JSON.stringify({ output_text: 'ok', usage: { input_tokens: 1, output_tokens: 1 } }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await runAgentWithResolvedExecution({ prompt: 'hello' }, { projectId: 'test-project' })
+
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('ollama fetch carries an AbortSignal', async () => {
+    mockProjectSettingsById['test-project'] = { execution_provider: 'ollama', model_tier: 'cheap' }
+    mockCredentials['test-project:ollama:host'] = 'http://ollama.test:11434/v1'
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true, status: 200,
+      text: async () => JSON.stringify({ choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await runAgentWithResolvedExecution({ prompt: 'hello' }, { projectId: 'test-project' })
+
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal)
+  })
+
   it('ignores explicit models for claude desktop runs', async () => {
     mockProjectSettingsById['test-project'] = {
       execution_provider: 'claude_desktop',
@@ -324,6 +366,70 @@ provider: claude_desktop
 
     expect(result.executedProvider).toBe('claude_desktop')
     expect(result.text).toBe('desktop ok')
+  })
+
+  it('claude_desktop env is an allowlist: no arbitrary secrets', async () => {
+    vi.stubEnv('SOME_VENDOR_SECRET', 'leak-me')
+    vi.stubEnv('ANTHROPIC_API_KEY', 'keep-me')
+    mockProjectSettingsById['test-project'] = { execution_provider: 'claude_desktop', model_tier: 'premium' }
+    mockQuery.mockImplementation(() => (async function* () {
+      yield { type: 'system', subtype: 'init', sessionId: 'claude-session', model: 'claude-desktop' }
+      yield { type: 'result', result: 'desktop ok', subtype: 'success' }
+    })())
+
+    await runAgentWithResolvedExecution({ prompt: 'hello' }, { projectId: 'test-project' })
+
+    const options = mockQuery.mock.calls[0][0].options
+    expect(options.env.SOME_VENDOR_SECRET).toBeUndefined()
+    expect(options.env.ANTHROPIC_API_KEY).toBe('keep-me')
+    expect(options.env.PATH).toBeDefined()
+    vi.unstubAllEnvs()
+  })
+
+  it('claude_desktop query passes the resolved native claude binary to the SDK', async () => {
+    mockProjectSettingsById['test-project'] = { execution_provider: 'claude_desktop', model_tier: 'premium' }
+    mockQuery.mockImplementation(() => (async function* () {
+      yield { type: 'system', subtype: 'init', sessionId: 'claude-session', model: 'claude-desktop' }
+      yield { type: 'result', result: 'desktop ok', subtype: 'success' }
+    })())
+
+    await runAgentWithResolvedExecution({ prompt: 'hello' }, { projectId: 'test-project' })
+
+    const options = mockQuery.mock.calls[0][0].options
+    if (CLAUDE_BINARY.includes('/') || CLAUDE_BINARY.includes('\\')) {
+      expect(options.pathToClaudeCodeExecutable).toBe(CLAUDE_BINARY)
+    } else {
+      // No path-shaped binary was resolved in this test environment (bare
+      // 'claude' fallback), so the option is intentionally omitted.
+      expect(options.pathToClaudeCodeExecutable).toBeUndefined()
+    }
+  })
+
+  it('claude_desktop query isolates the SDK from filesystem settings', async () => {
+    mockProjectSettingsById['test-project'] = { execution_provider: 'claude_desktop', model_tier: 'premium' }
+    mockQuery.mockImplementation(() => (async function* () {
+      yield { type: 'system', subtype: 'init', sessionId: 'claude-session', model: 'claude-desktop' }
+      yield { type: 'result', result: 'desktop ok', subtype: 'success' }
+    })())
+
+    await runAgentWithResolvedExecution({ prompt: 'hello' }, { projectId: 'test-project' })
+
+    const options = mockQuery.mock.calls[0][0].options
+    expect(options.settingSources).toEqual([])
+  })
+
+  it('claude_desktop query registers the PreToolUse hook (fix round 3)', async () => {
+    mockProjectSettingsById['test-project'] = { execution_provider: 'claude_desktop', model_tier: 'premium' }
+    mockQuery.mockImplementation(() => (async function* () {
+      yield { type: 'system', subtype: 'init', sessionId: 'claude-session', model: 'claude-desktop' }
+      yield { type: 'result', result: 'desktop ok', subtype: 'success' }
+    })())
+
+    await runAgentWithResolvedExecution({ prompt: 'hello' }, { projectId: 'test-project' })
+
+    const options = mockQuery.mock.calls[0][0].options
+    expect(options.hooks?.PreToolUse).toBeDefined()
+    expect(options.hooks.PreToolUse.length).toBeGreaterThan(0)
   })
 
   it('falls back to codex-local defaults when the configured model is incompatible', async () => {

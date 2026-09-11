@@ -7,6 +7,7 @@ import { pawRetryRemediation } from './paw-retry.js'
 import { hallucinatingPawRemediation } from './hallucinating-paw.js'
 import { costCapPauserRemediation } from './cost-cap-pauser.js'
 import { staleApprovalSkipRemediation } from './stale-approval-skip.js'
+import { cliVersionGuardRemediation } from './cli-version-guard.js'
 
 const registry = new Map<string, RemediationDefinition>()
 
@@ -33,3 +34,4 @@ registerRemediation(pawRetryRemediation)
 registerRemediation(hallucinatingPawRemediation)
 registerRemediation(costCapPauserRemediation)
 registerRemediation(staleApprovalSkipRemediation)
+registerRemediation(cliVersionGuardRemediation)

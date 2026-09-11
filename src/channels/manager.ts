@@ -6,7 +6,7 @@ import type { Channel } from './types.js'
 import { getFormatter, splitMessage } from './formatters.js'
 import { logger } from '../logger.js'
 import { logChannelMessage } from '../db.js'
-import { flushHeld, holdMessage, isQuietNow, isUrgent } from './quiet-hours.js'
+import { digestMode, flushHeld, holdMessage, isQuietNow, shouldHold } from './quiet-hours.js'
 
 export class ChannelManager {
   private channels = new Map<string, Channel>()
@@ -100,6 +100,7 @@ export class ChannelManager {
     }
     const channel = this.running.get(channelId) as any
     if (!channel || typeof channel.sendWithKeyboard !== 'function') {
+      // send() writes the channel_log row for this path.
       await this.send(channelId, chatId, text)
       return
     }
@@ -107,8 +108,15 @@ export class ChannelManager {
       await channel.sendWithKeyboard(chatId, text, keyboard)
     } catch (err) {
       logger.error({ channelId, chatId, err }, 'Failed to send with keyboard, falling back to text')
+      // send() writes the channel_log row for this path too.
       await this.send(channelId, chatId, text)
+      return
     }
+    // Keyboard sends (approval cards) need a channel_log row like any other
+    // unprompted outbound message, otherwise no approval request is auditable.
+    try {
+      logChannelMessage({ direction: 'out', channel: channelId, channelName: channel.name, chatId, content: text })
+    } catch { /* logging must never block sending */ }
   }
 
   /**
@@ -122,7 +130,7 @@ export class ChannelManager {
    * Send a text message through the specified channel.
    * Handles formatting and chunking automatically.
    */
-  async send(channelId: string, chatId: string, text: string, opts: { bypassQuiet?: boolean } = {}): Promise<void> {
+  async send(channelId: string, chatId: string, text: string, opts: { bypassQuiet?: boolean; projectId?: string } = {}): Promise<void> {
     const { checkKillSwitch } = await import('../cost/kill-switch-client.js')
     const sw = await checkKillSwitch()
     if (sw) {
@@ -135,10 +143,12 @@ export class ChannelManager {
       return
     }
 
-    // Quiet hours: hold routine messages, release them in one batch later.
-    if (!opts.bypassQuiet && !isUrgent(text) && isQuietNow()) {
-      holdMessage(channelId, chatId, text)
-      logger.info({ channelId, chatId }, 'quiet hours: message held')
+    // Routine messages are held for the daily digest. digest_mode 'daily'
+    // (the default) holds at every hour; 'off' holds only during quiet hours.
+    // Urgent messages and approval keyboards always go out at once.
+    if (!opts.bypassQuiet && shouldHold(text)) {
+      holdMessage(channelId, chatId, text, opts.projectId)
+      logger.info({ channelId, chatId, projectId: opts.projectId }, 'routine message held for the digest')
       return
     }
 
@@ -160,8 +170,14 @@ export class ChannelManager {
     } catch { /* logging must never block sending */ }
   }
 
-  /** Release messages held during quiet hours. Called from the flush timer. */
+  /**
+   * Release messages held during quiet hours. Called from the flush timer.
+   * digest_mode 'daily' (the default) holds the buffer for the scheduler's
+   * 08:00 digest tick to drain instead, so this must not race it by draining
+   * early on its own 60s cadence.
+   */
   async flushQuietBuffer(): Promise<number> {
+    if (digestMode() === 'daily') return 0
     if (isQuietNow()) return 0
     return flushHeld((channelId, chatId, text) => this.send(channelId, chatId, text, { bypassQuiet: true }))
   }

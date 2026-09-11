@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { logger } from '../logger.js'
 import { reportFeedItem } from '../dashboard.js'
+import { checkAction, type PolicyDecision } from '../policy.js'
 import {
   NEWSLETTER_CONFIG,
   getLookbackDays,
@@ -108,6 +109,17 @@ export function heroStatusLabel(
   return `MISSING${reason ? ` (${reason})` : ''}`
 }
 
+/**
+ * social.post gate outcome for the LinkedIn newsletter leg. `deny` refuses
+ * the publish outright; a pending decision parks it behind the card id in
+ * the label; `allow` clears the publish to run.
+ */
+export function resolveLinkedinGate(decision: PolicyDecision): { publish: boolean; heldStatus?: string } {
+  if (decision === 'deny') return { publish: false, heldStatus: 'REFUSED (policy)' }
+  if (decision !== 'allow') return { publish: false, heldStatus: `HELD (card ${decision.slice('pending:'.length)})` }
+  return { publish: true }
+}
+
 // ---------------------------------------------------------------------------
 // Main orchestrator
 // ---------------------------------------------------------------------------
@@ -126,7 +138,7 @@ export async function generateAndSendNewsletter(
   logger.info({ opts }, 'Newsletter run options')
 
   logger.info({ editionId, lookbackDays }, 'Starting newsletter generation')
-  reportFeedItem('scout', 'Newsletter generation started', editionId)
+  reportFeedItem('content-researcher', 'Newsletter generation started', editionId)
 
   let accessibleByCategory: Record<CategoryId, ScoredArticle[]>
   let githubPicks: ScoredRepo[] = []
@@ -356,9 +368,15 @@ export async function generateAndSendNewsletter(
     recipient: NEWSLETTER_CONFIG.recipientEmail,
   })
 
-  // 14b. LinkedIn Newsletter publish (gated by opts.publishLinkedin)
+  // 14b. LinkedIn Newsletter publish (gated by opts.publishLinkedin and social.post)
   let linkedinResult: { ok: boolean; publishedUrl?: string; errorMessage?: string } | null = null
-  if (opts.publishLinkedin) {
+  // The LinkedIn newsletter publish is a social.post side effect that never
+  // touches the social_posts table, so it needs its own gate.
+  const linkedinDecision = opts.publishLinkedin
+    ? await checkAction('default', 'social.post', 'social-writer', { edition_id: editionId, surface: 'linkedin-newsletter' })
+    : 'deny'
+  const linkedinGate = resolveLinkedinGate(linkedinDecision)
+  if (opts.publishLinkedin && linkedinGate.publish) {
     try {
       const linkedinBody = buildLinkedinBody({
         brief,
@@ -399,13 +417,15 @@ export async function generateAndSendNewsletter(
 
   // 14. Report to dashboard
   const gmailStatus = opts.skipGmail ? 'SKIPPED' : sendOk ? 'OK' : 'FAILED'
-  const linkedinStatus = opts.publishLinkedin
-    ? linkedinResult?.ok
-      ? opts.linkedinDryRun
-        ? 'DRY-DRAFT'
-        : `OK${linkedinResult.publishedUrl ? ` ${linkedinResult.publishedUrl}` : ''}`
-      : `FAILED${linkedinResult?.errorMessage ? ` (${linkedinResult.errorMessage})` : ''}`
-    : 'OFF'
+  const linkedinStatus = !opts.publishLinkedin
+    ? 'OFF'
+    : linkedinGate.heldStatus
+      ? linkedinGate.heldStatus
+      : linkedinResult?.ok
+        ? opts.linkedinDryRun
+          ? 'DRY-DRAFT'
+          : `OK${linkedinResult.publishedUrl ? ` ${linkedinResult.publishedUrl}` : ''}`
+        : `FAILED${linkedinResult?.errorMessage ? ` (${linkedinResult.errorMessage})` : ''}`
   const heroStatus = heroStatusLabel(heroImageSrc, heroFallbackReason)
   const summary =
     `The Signal ${dateStr}: ${accessibleByCategory.cyber.length} cyber, ` +
@@ -413,7 +433,7 @@ export async function generateAndSendNewsletter(
     `${githubPicks.length} repos. ` +
     `Hero: ${heroStatus}. Gmail: ${gmailStatus}. LinkedIn: ${linkedinStatus}.`
 
-  reportFeedItem('scout', 'newsletter-sent', summary)
+  reportFeedItem('content-researcher', 'newsletter-sent', summary)
 
   // 15. Notify user
   try {

@@ -50,6 +50,26 @@ export interface PawConfig {
    * actually executes.
    */
   post_act_handler?: string
+  /**
+   * Optional named handler that runs AFTER the ANALYZE LLM call and BEFORE
+   * DECIDE. Same registry and signature as post_act_handler; it receives the
+   * raw ANALYZE text. Paw Dev uses it to open cards from triage findings so a
+   * cycle that parks at DECIDE has already recorded what it saw.
+   */
+  post_analyze_handler?: string
+  /**
+   * When true and a collector is configured, the engine skips ANALYZE/DECIDE/
+   * ACT/REPORT entirely if the collector's raw_data is unchanged since the
+   * previous cycle. Keeps quiet routines (nothing new to report) from
+   * spending an LLM call every scheduled run.
+   */
+  skip_if_unchanged?: boolean
+  /**
+   * When true, ACT and the post-ACT handler run even on a quiet cycle. For a
+   * routine whose handler drains a queue (Paw Dev's builder), a cycle with no
+   * new findings still has work to do.
+   */
+  always_run_act?: boolean
 }
 
 export interface PawCycle {
@@ -73,6 +93,8 @@ export interface PawCycleState {
   approval_requested_at?: number | null
   approval_granted: boolean | null
   act_result: string | null
+  /** JSON.stringify(collector raw_data) from this cycle, used by skip_if_unchanged. */
+  observe_fingerprint?: string
 }
 
 export interface PawFinding {

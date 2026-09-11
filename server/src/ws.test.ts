@@ -327,9 +327,9 @@ describe('canDeliverToClient', () => {
     expect(canDeliverToClient(client, 'proj-x')).toBe(false)
   })
 
-  it('client with no user object passes null-project messages', () => {
+  it('client with no user object is denied null-project messages too', () => {
     const client = makeClient({ clientId: 'unregistered-browser' })
-    expect(canDeliverToClient(client, null)).toBe(true)
+    expect(canDeliverToClient(client, null)).toBe(false)
   })
 })
 
@@ -461,6 +461,13 @@ describe('WebSocket register: browser client path', () => {
     expect(msg.reason).toContain('already used')
     c1.ws.close()
     c2.ws.close()
+  })
+
+  it('a socket that never registers is closed with 4401 after the register timeout', async () => {
+    vi.stubEnv('WS_REGISTER_TIMEOUT_MS', '200')
+    const { ws } = await wsConnect(handle.port)
+    const closeCode = await new Promise<number>(res => ws.on('close', (code) => res(code)))
+    expect(closeCode).toBe(4401)
   })
 })
 

@@ -13,10 +13,10 @@ describe('CLI arg parser', () => {
   })
 
   it('parses drive list with account', () => {
-    const args = parseArgs(['service', 'google', 'drive', 'list', '--project', 'example-company', '--account', 'user@gmail.com'])
+    const args = parseArgs(['service', 'google', 'drive', 'list', '--project', 'example-company', '--account', 'user@example.com'])
     expect(args.module).toBe('drive')
     expect(args.command).toBe('list')
-    expect(args.account).toBe('user@gmail.com')
+    expect(args.account).toBe('user@example.com')
   })
 
   it('parses sheets read with sheet and range', () => {

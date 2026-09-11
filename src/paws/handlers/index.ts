@@ -23,6 +23,9 @@
 import { brokerPropertyPersistHandler } from './broker-property-persist.js'
 import { brokerPocketPersistHandler } from './broker-pocket-persist.js'
 import { brokerWeeklyEmailHandler } from './broker-weekly-email.js'
+import { pawdevTriageHandler } from './pawdev-triage.js'
+import { pawdevBuilderHandler } from './pawdev-builder.js'
+import { brokerDealUnderwritePersistHandler } from './broker-deal-underwrite-persist.js'
 import { logger } from '../../logger.js'
 
 export type PostActHandler = (
@@ -30,12 +33,15 @@ export type PostActHandler = (
   pawId: string,
   projectId: string,
   actOutput: string,
-) => Promise<void>
+) => Promise<void | string>
 
 const HANDLERS: Record<string, PostActHandler> = {
   'broker-property-persist': brokerPropertyPersistHandler,
   'broker-pocket-persist': brokerPocketPersistHandler,
   'broker-weekly-email': brokerWeeklyEmailHandler,
+  'pawdev-triage': pawdevTriageHandler,
+  'pawdev-builder': pawdevBuilderHandler,
+  'broker-deal-underwrite-persist': brokerDealUnderwritePersistHandler,
 }
 
 export function getHandler(name: string): PostActHandler | null {

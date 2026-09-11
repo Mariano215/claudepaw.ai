@@ -121,8 +121,25 @@ function makeSchema(db: Database.Database) {
       display_name TEXT NOT NULL DEFAULT '',
       icon TEXT,
       status TEXT NOT NULL DEFAULT 'active',
+      kind TEXT NOT NULL DEFAULT 'project',
       auto_archive_days INTEGER,
       created_at INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS kv_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS trader_pnl_snapshots (
+      date TEXT PRIMARY KEY,
+      account_nav REAL NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS deals (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      address TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'sourced',
+      created_at INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS paws (
       id TEXT PRIMARY KEY,
@@ -147,6 +164,20 @@ function makeSchema(db: Database.Database) {
       completed_at INTEGER,
       error TEXT
     );
+    CREATE TABLE IF NOT EXISTS action_audit (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts_ms         INTEGER NOT NULL,
+      project_id    TEXT    NOT NULL,
+      actor         TEXT    NOT NULL,
+      action_class  TEXT    NOT NULL,
+      decision      TEXT    NOT NULL,
+      policy_value  TEXT    NOT NULL,
+      ref_table     TEXT,
+      ref_id        TEXT,
+      payload_hash  TEXT,
+      bot_row_id    INTEGER,
+      synced_at     INTEGER NOT NULL DEFAULT 0
+    );
   `)
 }
 
@@ -159,6 +190,7 @@ vi.mock('./db.js', async () => {
 
   return {
     getDb: vi.fn(() => getTestDb()),
+    getServerDb: vi.fn(() => getTestDb()),
     getBotDb: vi.fn(() => getTestDb()),
     getBotDbWrite: vi.fn(() => getTestDb()),
     getAllAgents: vi.fn(() => []),
@@ -592,5 +624,300 @@ describe('POST /api/v1/internal/paws-sync -- bot callback gate', () => {
       body: syncBody,
     })
     expect(res.status).toBe(401)
+  })
+})
+
+// ===========================================================================
+// GET /api/v1/projects/:id/paw-state
+// ===========================================================================
+
+describe('GET /api/v1/projects/:id/paw-state', () => {
+  beforeAll(() => {
+    testDb.prepare(
+      `INSERT INTO projects (id, name, slug, display_name, kind, created_at)
+       VALUES ('trader', 'trader', 'trader', 'Paw Trader', 'paw', 0),
+              ('broker', 'broker', 'broker', 'Paw Broker', 'paw', 0)`,
+    ).run()
+    testDb.prepare(
+      `INSERT INTO paws (id, project_id, name, agent_id, cron, status, config, next_run, created_at)
+       VALUES ('paw-trader-analyst', 'trader', 'Analyst', 'analyst', '0 8 * * *', 'active', '{}', 0, 0),
+              ('re-property-scout', 'broker', 'Scout', 'broker--scout', '0 8 * * *', 'waiting_approval', '{}', 0, 0)`,
+    ).run()
+    testDb.prepare(
+      `INSERT INTO paw_cycles (id, paw_id, started_at, phase) VALUES
+       ('cyc-old', 'paw-trader-analyst', 1000, 'report'),
+       ('cyc-new', 'paw-trader-analyst', 2000, 'analyze'),
+       ('cyc-brk', 're-property-scout', 1500, 'decide')`,
+    ).run()
+    testDb.prepare(
+      `INSERT INTO kv_settings (key, value) VALUES
+       ('trader.progress.last', '{"mode":"paper","checked_at":2000}')`,
+    ).run()
+    testDb.prepare(
+      `INSERT INTO trader_pnl_snapshots (date, account_nav) VALUES
+       ('2026-09-08', 99000), ('2026-09-09', 101234.5)`,
+    ).run()
+    testDb.prepare(
+      `INSERT INTO deals (id, project_id, address, status) VALUES
+       ('d1', 'broker', '1 Main St', 'sourced'),
+       ('d2', 'broker', '2 Main St', 'under-review'),
+       ('d3', 'broker', '3 Main St', 'closed')`,
+    ).run()
+  })
+
+  it('reports a plain project as not a Paw', async () => {
+    const r = await httpReq(server, 'GET', '/api/v1/projects/proj-a/paw-state', {
+      headers: { 'x-dashboard-token': adminToken },
+    })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ is_paw: false, kind: 'project', phase: null, number: null })
+  })
+
+  it('reports trader mode, latest cycle phase and NAV', async () => {
+    const r = await httpReq(server, 'GET', '/api/v1/projects/trader/paw-state', {
+      headers: { 'x-dashboard-token': adminToken },
+    })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({
+      is_paw: true, kind: 'paw', mode: 'PAPER',
+      phase: 'ANALYZE', cycle_id: 'cyc-new', number: 101234.5, label: 'NAV',
+    })
+  })
+
+  it('reports WAITING for a parked broker cycle and counts open deals', async () => {
+    const r = await httpReq(server, 'GET', '/api/v1/projects/broker/paw-state', {
+      headers: { 'x-dashboard-token': adminToken },
+    })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({
+      is_paw: true, kind: 'paw', phase: 'WAITING', number: 2, label: 'deals in pipeline',
+    })
+  })
+
+  it('404s a member with no read access to the project (requireProjectRead hides existence)', async () => {
+    const r = await httpReq(server, 'GET', '/api/v1/projects/trader/paw-state', {
+      headers: { 'x-dashboard-token': noMemberToken },
+    })
+    expect(r.status).toBe(404)
+  })
+
+  it('404s an unknown project', async () => {
+    const r = await httpReq(server, 'GET', '/api/v1/projects/nope/paw-state', {
+      headers: { 'x-dashboard-token': adminToken },
+    })
+    expect(r.status).toBe(404)
+  })
+})
+
+// ===========================================================================
+// GET /api/v1/projects/pawdev/paw-state -- Phase 3 Task 11 badge
+// ===========================================================================
+
+describe('paw-state for pawdev', () => {
+  beforeAll(() => {
+    testDb.prepare(
+      `INSERT OR REPLACE INTO projects (id, name, slug, display_name, icon, status, kind, created_at)
+       VALUES ('pawdev','pawdev','pawdev','Paw Dev','git-pull-request','active','paw',0)`,
+    ).run()
+    testDb.exec(`CREATE TABLE IF NOT EXISTS action_items (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT '', proposed_by TEXT NOT NULL DEFAULT '',
+      executable_by_agent INTEGER NOT NULL DEFAULT 0, external_ref TEXT,
+      created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0)`)
+    for (const [id, status] of [['p1', 'blocked'], ['p2', 'blocked'], ['p3', 'approved']]) {
+      testDb.prepare(
+        `INSERT OR REPLACE INTO action_items (id, project_id, title, status) VALUES (?, 'pawdev', 't', ?)`,
+      ).run(id, status)
+    }
+  })
+
+  it('the badge number is the count of cards waiting on the owner', async () => {
+    const r = await httpReq(server, 'GET', '/api/v1/projects/pawdev/paw-state', {
+      headers: { 'x-dashboard-token': adminToken },
+    })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ is_paw: true, label: 'PRs waiting on you', number: 2 })
+  })
+})
+
+// ===========================================================================
+// GET /api/v1/action-audit
+// ===========================================================================
+
+describe('GET /api/v1/action-audit', () => {
+  beforeAll(() => {
+    testDb.prepare(
+      `INSERT INTO action_audit (ts_ms, project_id, actor, action_class, decision, policy_value)
+       VALUES
+       (1000, 'proj-a', 'scout', 'code.pr', 'allowed', 'auto'),
+       (3000, 'proj-a', 'auditor', 'social.post', 'blocked', 'ask'),
+       (2000, 'proj-b', 'scout', 'email.send', 'allowed', 'auto')`,
+    ).run()
+  })
+
+  it('returns rows for the requested project, newest first', async () => {
+    const r = await httpReq(server, 'GET', '/api/v1/action-audit?project_id=proj-a', { headers: tok(adminToken) })
+    expect(r.status).toBe(200)
+    const rows = r.body as Array<{ ts_ms: number; project_id: string }>
+    expect(rows.map(row => row.ts_ms)).toEqual([3000, 1000])
+    expect(rows.every(row => row.project_id === 'proj-a')).toBe(true)
+  })
+
+  it('allows a viewer with read access to the project', async () => {
+    const r = await httpReq(server, 'GET', '/api/v1/action-audit?project_id=proj-a', { headers: tok(viewerToken) })
+    expect(r.status).toBe(200)
+  })
+
+  it('404s a member with no read access to the project', async () => {
+    const r = await httpReq(server, 'GET', '/api/v1/action-audit?project_id=proj-a', { headers: tok(noMemberToken) })
+    expect(r.status).toBe(404)
+  })
+
+  it('400s when project_id is missing', async () => {
+    const r = await httpReq(server, 'GET', '/api/v1/action-audit', { headers: tok(adminToken) })
+    expect(r.status).toBe(400)
+  })
+})
+
+describe('GET /api/v1/needs-you/count', () => {
+  beforeAll(() => {
+    testDb.exec(`
+      CREATE TABLE IF NOT EXISTS action_items (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT '',
+        proposed_by TEXT NOT NULL DEFAULT '',
+        executable_by_agent INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS trader_decisions (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        asset TEXT NOT NULL DEFAULT '',
+        decided_at INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS scheduled_tasks (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT 'default',
+        status TEXT NOT NULL DEFAULT 'active',
+        last_run INTEGER,
+        last_result TEXT
+      );
+    `)
+    const now = Date.now()
+    testDb.prepare(
+      `INSERT INTO action_items (id, project_id, title, status, executable_by_agent, created_at, updated_at)
+       VALUES ('ai-1', 'proj-a', 'Approve the reply', 'proposed', 0, ?, ?),
+              ('ai-2', 'proj-a', 'Agent can do this', 'proposed', 1, ?, ?)`,
+    ).run(now, now, now, now)
+    testDb.prepare(
+      `INSERT INTO trader_decisions (id, status, asset, decided_at)
+       VALUES ('td-1', 'committee_review', 'SPY', ?), ('td-2', 'closed', 'QQQ', ?)`,
+    ).run(now, now)
+    testDb.prepare(
+      `INSERT INTO scheduled_tasks (id, project_id, status, last_run, last_result)
+       VALUES ('t-1', 'proj-a', 'active', ?, 'Agent error: boom'),
+              ('t-2', 'proj-a', 'active', ?, 'all good')`,
+    ).run(now, now)
+  })
+
+  it('counts approvals, ask cards, open trader decisions and failures for an admin', async () => {
+    const r = await httpReq(server, 'GET', '/api/v1/needs-you/count', {
+      headers: { 'x-dashboard-token': adminToken },
+    })
+    expect(r.status).toBe(200)
+    const body = r.body as { total: number; by_kind: Record<string, number>; rows: unknown[] }
+    // one waiting_approval paw (re-property-scout), two ask cards (ai-1, ai-2:
+    // F5 drops the executable_by_agent predicate, so both proposed rows count),
+    // one open trader decision (td-1), one failed task (t-1)
+    expect(body.by_kind.approvals).toBe(1)
+    expect(body.by_kind.cards).toBe(2)
+    expect(body.by_kind.trader_decisions).toBe(1)
+    expect(body.by_kind.failures).toBe(1)
+    expect(body.total).toBe(5)
+    expect(Array.isArray(body.rows)).toBe(true)
+  })
+
+  it('does not treat a status DECISION_STATUS never writes as terminal', async () => {
+    // 'filled' cannot come from order-lifecycle.ts; it must count as an open
+    // decision, or a stuck row would silently drop off the Needs You badge.
+    testDb.prepare(
+      `INSERT INTO trader_decisions (id, status, asset, decided_at) VALUES ('td-filled', 'filled', 'GLD', ?)`,
+    ).run(Date.now())
+    try {
+      const r = await httpReq(server, 'GET', '/api/v1/needs-you/count', {
+        headers: { 'x-dashboard-token': adminToken },
+      })
+      expect(r.status).toBe(200)
+      const body = r.body as { by_kind: Record<string, number> }
+      // td-1 ('committee_review') plus td-filled ('filled')
+      expect(body.by_kind.trader_decisions).toBe(2)
+    } finally {
+      testDb.prepare(`DELETE FROM trader_decisions WHERE id = 'td-filled'`).run()
+    }
+  })
+
+  it('scopes a member to the projects they can read', async () => {
+    // viewer is a member of proj-a only, so the broker approval and the
+    // trader decisions drop out.
+    const r = await httpReq(server, 'GET', '/api/v1/needs-you/count', {
+      headers: { 'x-dashboard-token': viewerToken },
+    })
+    expect(r.status).toBe(200)
+    const body = r.body as { by_kind: Record<string, number> }
+    expect(body.by_kind.approvals).toBe(0)
+    expect(body.by_kind.trader_decisions).toBe(0)
+    expect(body.by_kind.cards).toBe(2)
+  })
+
+  it('counts every proposed card, not just the 50-row page returned for the list', async () => {
+    const now = Date.now()
+    const insert = testDb.prepare(
+      `INSERT INTO action_items (id, project_id, title, status, executable_by_agent, created_at, updated_at)
+       VALUES (?, 'proj-a', 'Bulk card', 'proposed', 0, ?, ?)`,
+    )
+    for (let i = 0; i < 58; i++) insert.run('bulk-' + i, now, now)
+    // 58 new + the 2 from beforeAll = 60 proposed cards total.
+    const r = await httpReq(server, 'GET', '/api/v1/needs-you/count', {
+      headers: { 'x-dashboard-token': adminToken },
+    })
+    expect(r.status).toBe(200)
+    const body = r.body as { by_kind: Record<string, number>; rows: unknown[] }
+    expect(body.by_kind.cards).toBe(60)
+    expect(body.rows.filter((row: any) => row.kind === 'card').length).toBe(50)
+  })
+})
+
+describe('GET /api/v1/needs-you', () => {
+  it('scopes a member to only their project rows', async () => {
+    const r = await httpReq(server, 'GET', '/api/v1/needs-you', {
+      headers: { 'x-dashboard-token': viewerToken },
+    })
+    expect(r.status).toBe(200)
+    const body = r.body as { rows: Array<{ project_id: string }> }
+    expect(body.rows.length).toBeGreaterThan(0)
+    expect(body.rows.every(row => row.project_id === 'proj-a')).toBe(true)
+  })
+
+  it('gives an admin every row across projects', async () => {
+    const r = await httpReq(server, 'GET', '/api/v1/needs-you', {
+      headers: { 'x-dashboard-token': adminToken },
+    })
+    expect(r.status).toBe(200)
+    const body = r.body as { rows: Array<{ project_id: string }> }
+    expect(body.rows.some(row => row.project_id === 'proj-a')).toBe(true)
+    expect(body.rows.some(row => row.project_id === 'trader')).toBe(true)
+  })
+
+  it('gives a member with no project access empty rows and a 200', async () => {
+    const r = await httpReq(server, 'GET', '/api/v1/needs-you', {
+      headers: { 'x-dashboard-token': noMemberToken },
+    })
+    expect(r.status).toBe(200)
+    const body = r.body as { rows: unknown[] }
+    expect(body.rows).toEqual([])
   })
 })

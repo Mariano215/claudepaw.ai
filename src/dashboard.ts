@@ -10,6 +10,7 @@ import { runAgent } from './agent.js'
 import { upsertProjectSettings, insertActionItem, updateActionItemFields, insertActionItemEvent, insertActionItemComment, getActionItem, deleteActionItem, pauseTask, resumeTask, getTask, createTask, deleteTask, type ActionItem, type ActionItemComment, type ActionItemEvent } from './db.js'
 import { setCredential, deleteCredential, deleteService } from './credentials.js'
 import { loadHotContext } from './pipeline.js'
+import { makePawAgentRunner } from './paws/agent-runner.js'
 
 // ---------------------------------------------------------------------------
 // Dashboard WebSocket client
@@ -569,33 +570,15 @@ function handleServerMessage(msg: Record<string, unknown>): void {
       return
     }
     const sendFn = dashboardSendFn
-    Promise.all([
-      import('./paws/index.js'),
-      import('./souls.js'),
-    ]).then(([{ triggerPaw, getPaw }, { getSoul, buildAgentPrompt }]) => {
+    import('./paws/index.js').then(({ triggerPaw, getPaw }) => {
       const paw = getPaw(pawId)
-      const agentRunner = async (prompt: string): Promise<{ text: string | null; emptyReason?: string; resultSubtype?: string }> => {
-        const agentId = paw?.agent_id
-        const projectId = paw?.project_id ?? 'default'
-        const soul = agentId ? getSoul(agentId) : undefined
-        let fullPrompt = prompt
-        if (soul) {
-          fullPrompt = `${buildAgentPrompt(soul, projectId)}\n\n---\n\n${prompt}`
-        }
-        const { text, emptyReason, resultSubtype } = await runAgent(fullPrompt, undefined, undefined, undefined, undefined, {
-          projectId,
-          source: agentId ?? 'paw',
-        }, {
-          projectId,
-          agentId: agentId ?? 'paw',
-        })
-        return { text, emptyReason, resultSubtype }
+      if (!paw) {
+        logger.error({ pawId }, 'Run-paw requested for an unknown paw')
+        return
       }
-      triggerPaw(pawId, agentRunner, sendFn).catch((err) => {
-        logger.error({ err, pawId }, 'Run-paw execution failed')
-      })
+      return triggerPaw(pawId, makePawAgentRunner(paw), sendFn)
     }).catch((err) => {
-      logger.error({ err }, 'Failed to import paws for run-paw')
+      logger.error({ err, pawId }, 'Run-paw execution failed')
     })
     return
   }

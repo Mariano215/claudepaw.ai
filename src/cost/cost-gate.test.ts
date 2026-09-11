@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { getCostGateStatus, _resetCache, type CostGateStatus } from './cost-gate.js'
+import { getCostGateStatus, getPoolGateStatus, _resetCache, type CostGateStatus } from './cost-gate.js'
 
 vi.mock('../logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -57,6 +57,22 @@ describe('getCostGateStatus', () => {
 
     const result = await getCostGateStatus('default')
     expect(result).toEqual(FAIL_OPEN)
+  })
+
+  it('fails closed when the trader project gate is unavailable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ok: false, status: 404}))
+
+    const result = await getCostGateStatus('trader')
+
+    expect(result).toEqual(expect.objectContaining({action: 'refuse', unavailable: true}))
+  })
+
+  it('fails closed when the trader pool gate is unavailable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network error')))
+
+    const result = await getPoolGateStatus('trader')
+
+    expect(result).toEqual(expect.objectContaining({action: 'refuse', unavailable: true}))
   })
 
   it('reuses cache on 2nd call within 60s (fetch called once)', async () => {

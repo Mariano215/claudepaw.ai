@@ -147,23 +147,6 @@ export function initTelemetryDatabase(): void {
     )
   `)
 
-  // Kanban cards
-  d.exec(`
-    CREATE TABLE IF NOT EXISTS kanban_cards (
-      id TEXT PRIMARY KEY,
-      project_id TEXT DEFAULT 'claudepaw',
-      title TEXT NOT NULL,
-      description TEXT,
-      column_name TEXT NOT NULL DEFAULT 'backlog' CHECK(column_name IN ('backlog','todo','in_progress','review','done','archived')),
-      priority INTEGER DEFAULT 0,
-      sort_order REAL DEFAULT 0,
-      tags TEXT,
-      linked_event_id TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )
-  `)
-
   // System health snapshots
   d.exec(`
     CREATE TABLE IF NOT EXISTS system_health (
@@ -275,6 +258,14 @@ export function initTelemetryDatabase(): void {
     )
   `)
   d.exec(`CREATE INDEX IF NOT EXISTS idx_sync_queue_queued ON event_sync_queue(queued_at)`)
+
+  // Shell v2 spec 3.4: the Monday board card replaced kanban_cards. Drop the
+  // leftover table from disk for databases that still carry it.
+  try {
+    d.exec(`DROP TABLE IF EXISTS kanban_cards`)
+  } catch (err) {
+    logger.error({ err }, 'Failed to drop kanban_cards')
+  }
 
   logger.info('Telemetry database initialized')
 }

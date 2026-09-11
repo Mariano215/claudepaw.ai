@@ -3,7 +3,7 @@
    Dual-theme: Cyberpunk Dark + Linear/Vercel-style Light
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Orbitron:wght@400;500;600;700;800;900&family=Outfit:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap');
 
 /* Global: ensure HTML hidden attribute always wins over CSS display */
 [hidden] { display: none !important; }
@@ -13,48 +13,48 @@
    ============================================================ */
 :root {
   /* Backgrounds */
-  --bg-base:        #080810;
-  --bg-raised:      #0d0d18;
-  --bg-surface:     #111120;
-  --bg-overlay:     #161628;
-  --bg-glass:       rgba(13, 13, 24, 0.75);
+  --bg-base:        #08080f;
+  --bg-raised:      #0e0e1a;
+  --bg-surface:     #131322;
+  --bg-overlay:     #1a1a2e;
+  --bg-glass:       rgba(14, 14, 26, 0.80);
   --bg-glass-hover: rgba(17, 17, 32, 0.92);
 
   /* Card gradient overlays */
-  --card-gradient: linear-gradient(135deg, rgba(0, 255, 159, 0.04) 0%, transparent 60%);
-  --card-gradient-hover: linear-gradient(135deg, rgba(0, 255, 159, 0.07) 0%, transparent 60%);
+  --card-gradient: linear-gradient(135deg, rgba(249, 115, 22, 0.04) 0%, rgba(99, 102, 241, 0.02) 60%, transparent 100%);
+  --card-gradient-hover: linear-gradient(135deg, rgba(249, 115, 22, 0.07) 0%, rgba(99, 102, 241, 0.04) 60%, transparent 100%);
 
   /* Accent palette */
-  --accent:         #00ff9f;
-  --accent-dim:     rgba(0, 255, 159, 0.13);
-  --accent-glow:    rgba(0, 255, 159, 0.32);
-  --accent-soft:    rgba(0, 255, 159, 0.07);
-  --accent-faint:   rgba(0, 255, 159, 0.03);
-  --accent-subtle:  rgba(0, 255, 159, 0.10);
-  --accent-medium:  rgba(0, 255, 159, 0.28);
-  --accent-strong:  rgba(0, 255, 159, 0.60);
-  --accent-grid:    rgba(0, 255, 159, 0.010);
-  --magenta:        #ff00aa;
-  --magenta-dim:    rgba(255, 0, 170, 0.13);
-  --cyan:           #00d4ff;
-  --cyan-dim:       rgba(0, 212, 255, 0.13);
-  --green:          #00ff88;
-  --green-dim:      rgba(0, 255, 136, 0.13);
-  --amber:          #ffaa00;
-  --amber-dim:      rgba(255, 170, 0, 0.13);
-  --red:            #ff3355;
-  --red-dim:        rgba(255, 51, 85, 0.13);
-  --purple:         #a78bfa;
-  --purple-dim:     rgba(167, 139, 250, 0.13);
+  --accent:         #f97316;
+  --accent-dim:     rgba(249, 115, 22, 0.13);
+  --accent-glow:    rgba(249, 115, 22, 0.32);
+  --accent-soft:    rgba(249, 115, 22, 0.07);
+  --accent-faint:   rgba(249, 115, 22, 0.03);
+  --accent-subtle:  rgba(249, 115, 22, 0.10);
+  --accent-medium:  rgba(249, 115, 22, 0.28);
+  --accent-strong:  rgba(249, 115, 22, 0.60);
+  --accent-grid:    rgba(249, 115, 22, 0.010);
+  --magenta:        #ec4899;
+  --magenta-dim:    rgba(236, 72, 153, 0.13);
+  --cyan:           #6366f1;
+  --cyan-dim:       rgba(99, 102, 241, 0.13);
+  --green:          #22c55e;
+  --green-dim:      rgba(34, 197, 94, 0.13);
+  --amber:          #f97316;
+  --amber-dim:      rgba(249, 115, 22, 0.13);
+  --red:            #ef4444;
+  --red-dim:        rgba(239, 68, 68, 0.13);
+  --purple:         #6366f1;
+  --purple-dim:     rgba(99, 102, 241, 0.13);
 
   /* Text */
-  --text-primary:   #eaeaf5;
-  --text-secondary: #8a8aac;
-  --text-muted:     #50506e;
-  --text-on-accent: #050510;
+  --text-primary:   #e8e8f5;
+  --text-secondary: #8888aa;
+  --text-muted:     #505070;
+  --text-on-accent: #08080f;
 
   /* Fonts */
-  --font-heading:   'Orbitron', sans-serif;
+  --font-heading:   'Outfit', sans-serif;
   --font-mono:      'JetBrains Mono', monospace;
   --font-body:      'Outfit', sans-serif;
 
@@ -71,13 +71,13 @@
   --radius-pill:    999px;
 
   /* Borders */
-  --border-color:   rgba(0, 255, 159, 0.14);
+  --border-color:   rgba(249, 115, 22, 0.14);
   --border-subtle:  rgba(255, 255, 255, 0.06);
 
   /* Shadows */
   --shadow-card:    0 1px 3px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3);
-  --shadow-hover:   0 0 0 1px rgba(0,255,159,0.3), 0 4px 24px rgba(0,0,0,0.4), 0 0 32px rgba(0,255,159,0.06);
-  --shadow-glow:    0 0 8px var(--accent-dim), 0 0 24px rgba(0,255,159,0.05);
+  --shadow-hover:   0 0 0 1px rgba(249,115,22,0.3), 0 4px 24px rgba(0,0,0,0.4), 0 0 32px rgba(249,115,22,0.06);
+  --shadow-glow:    0 0 8px var(--accent-dim), 0 0 24px rgba(249,115,22,0.05);
 
   /* Motion */
   --ease-out:       cubic-bezier(0.22, 1, 0.36, 1);
@@ -213,7 +213,7 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--text-primary);
 }
 
-/* Only use Orbitron for display headings — body headings use Outfit */
+/* Headings use Outfit; the display face was dropped in Shell v2 */
 .page-heading, .section-title, .subsection-title,
 .agent-card__name, .agent-detail-card__name,
 .kanban-column__header h3, .kanban-col__header,
@@ -329,6 +329,7 @@ img { max-width: 100%; display: block; }
    Project Selector (in left sidebar)
    ============================================================ */
 .project-selector {
+  position: relative;
   width: 100%;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border-color);
@@ -382,6 +383,10 @@ img { max-width: 100%; display: block; }
 }
 
 .project-selector__dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: calc(var(--z-header) + 1);
   margin-top: 4px;
   background: var(--bg-raised);
   border: 1px solid var(--border-color);
@@ -455,7 +460,6 @@ body:not(.sidebar-expanded) .project-selector__current {
 }
 
 body:not(.sidebar-expanded) .project-selector__dropdown {
-  position: absolute;
   left: calc(var(--sidebar-w) + 4px);
   top: 70px;
   width: 220px;
@@ -5631,42 +5635,6 @@ input.sec-filter {
   color: var(--red);
 }
 
-.btn-primary {
-  background: var(--accent);
-  color: var(--text-on-accent);
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: 10px 24px;
-  font-size: 14px;
-  font-weight: 600;
-  font-family: var(--font-body);
-  cursor: pointer;
-  transition: opacity 0.15s, transform 0.1s;
-}
-
-.btn-primary:hover {
-  opacity: 0.9;
-  transform: translateY(-1px);
-}
-
-.btn-secondary {
-  background: transparent;
-  color: var(--text-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: 10px 24px;
-  font-size: 14px;
-  font-weight: 500;
-  font-family: var(--font-body);
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
-}
-
-.btn-secondary:hover {
-  border-color: var(--text-secondary);
-  color: var(--text-primary);
-}
-
 @media (max-width: 768px) {
   .theme-grid {
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -6804,6 +6772,7 @@ body:not(.sidebar-expanded) .project-selector[data-project-active="true"]::after
 }
 .cp-toast--error { border-color: var(--red); color: var(--red); }
 .cp-toast--success { border-color: var(--accent); color: var(--accent); }
+.cp-toast--warn { border-color: var(--amber); color: var(--amber); }
 @keyframes toastIn {
   from { opacity: 0; transform: translateX(-50%) translateY(8px); }
   to   { opacity: 1; transform: translateX(-50%) translateY(0); }

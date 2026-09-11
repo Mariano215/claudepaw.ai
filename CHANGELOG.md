@@ -7,6 +7,29 @@ This file follows a lightweight Keep a Changelog style and is intended for human
 ## Unreleased
 
 ### Added
+
+- Added a one-shot, append-only Bitcoin order-flow research evaluator that runs
+  only after the frozen 180-day boundary, preserves the untouched holdout, and
+  cannot activate strategies, cohorts, signals, decisions, or orders.
+- Added immutable trade-price OHLC outcome evidence to future Bitcoin
+  order-flow bars and a read-only Mission Control evaluation verdict.
+
+- Added an append-only PawTrader operational event ledger with authenticated, project-scoped WebSocket catch-up for real scheduler, strategy, suppression, committee, order, fill, exit, reconcile, verdict, cohort, and watchdog activity.
+- Predeclared a forward-only Bitcoin order-flow imbalance research family while keeping all rejected Bitcoin candidates and the new family paused and non-executable.
+- Added a forward-only public BTC-USD research collector with append-only trade/L2 storage, immutable 15-minute order-flow feature bars, sequence/reconnect/feed-quality watchdogs, and no signal or execution path. Mission Control now labels the lane `RESEARCH PAUSED` while retaining the latest rejected cohort as evidence detail.
+- Fixed Coinbase research-feed gap detection to follow the socket's interleaved sequence instead of producing false warnings between channel messages; duplicate and out-of-order frames are now ignored. Derived bars deduplicate trade IDs before feature calculation, source-order unique trades behind a 60-second local-receive-time watermark, and apply L2 state transitions in authoritative receive/sequence order so repeated trades and delayed L2 event clocks do not create false clock-reversal failures or inflate features.
+- Added fail-closed Bitcoin order-flow collection progress to Mission Control: eligible completed bars, forward days, and the earliest permitted 180-day evaluation date. Operational tape UUID deduplication now has a direct regression test.
+- Partitioned new high-volume Bitcoin raw market data into immutable UTC-day SQLite shards while preserving the original research DB in place, preventing the 180-day collection from becoming one multi-billion-row database.
+
+- Fixed PawTrader Mission Control so unavailable risk data and stale reconcile data no longer appear healthy; pipeline motion now reflects current work instead of running continuously.
+
+- Added versioned BTC/USD paper candidates, matching engine backtest workflows, and prospective ROI accounting with conservative crypto fees and slippage.
+- Added a BTC/USD four-hour trend candidate with completed-candle aggregation, explicit cost hurdle, matched production backtest, and a frozen v5 paper cohort.
+- Fixed Coinbase history pagination across short intermediate pages and added a cost-adjusted BTC momentum backtest plus corrected v3 cohort metadata.
+
+### Added
+- PawTrader prospective paper cohorts now freeze stock and Bitcoin strategy configs, venues, cost assumptions, code identities, position/daily caps, and evidence thresholds. Every new entry is cohort-linked; drift, missing broker state, stale reconciliation, open orders, shorts, or legacy overlap blocks activation. One running cohort is allowed per asset-class sleeve. Independent cost-adjusted scorecards count only completed-trade regimes and require current paper broker/data health, clean reconciliation, fresh NAV, 100 round trips, qualified matched backtests, DSR, drawdown, execution quality, and benchmark outperformance before producing a review-only pass. A local paper-control CLI handles audited bootstrap, preflight, legacy flattening, activation, invalidation, and backtest evidence; live mode never switches automatically.
+- PawTrader Mission Control adds a near-live capital curve, stock/Bitcoin execution lanes, system-flow and activity views, broker exposure, honest proof-of-edge blockers, and an admin-only two-step control for canceling individual open Alpaca orders. Order and position outages now stay visibly unknown instead of looking empty.
 - PawTrader checks progress every five minutes and sends a persistent daily readiness summary at 5 p.m. Eastern, alongside the existing weekly review. Reports expose stale accounting and missing evidence without automatically enabling live trading.
 - Immediate acknowledgement message ("Got it, working on it...") sent to the user right after routing, before the agent runs — so a mid-run restart no longer leaves the user with zero feedback.
 - Ollama embeddings now fall back to OpenAI `text-embedding-3-small` when Ollama is unreachable (HTTP 4xx/network error). Requires `OPENAI_API_KEY` to be set. Falls back to empty vector if neither succeeds.
@@ -38,6 +61,10 @@ This file follows a lightweight Keep a Changelog style and is intended for human
 - Example Company weekly briefing, content-plan, and festival-scan tasks now receive structured Gmail, calendar, and sheet context from the scheduler before the model runs, instead of relying on in-prompt shell commands.
 
 ### Fixed
+- PawTrader health and weekly reports now quarantine pre-cohort verdict-less closures from active paper-cohort failure counts while retaining the legacy rows for audit. New cohort-linked closures without verdicts still alert.
+- Restored scheduled agent cost checks for the authenticated bot identity. The bot can read project cost-gate status without project memberships, while cost-cap mutations remain limited to project editors, owners, and admins.
+- Dashboard deployments now run PM2 replacement in a detached remote session, ignore terminal stdin, detect dropped SSH connections with keepalives, and verify a unique completion marker plus authenticated health. An SSH reset after process deletion can no longer strand the dashboard offline, report an old process as the new deploy, or leave the deploy waiting for Enter.
+- PawTrader auto-dispatch now honors the engine's limit-only buy contract, blocks new exposure when broker positions or trader cost controls are unavailable or unexpectedly short, and replaces cumulative partial-fill snapshots instead of double-counting them. In paper mode it autonomously covers unexpected stock shorts during market hours without counting repairs as strategy returns. Companion engine patches add full ledger catch-up, durable GTC bracket protection, targeted stale-state recovery, and safe cancellation of stale engine-owned orders.
 - PawTrader uncertain exits retain their original intent for safe recovery; partial exits stay guarded and canceled executions retain their audit trail. Companion engine migration 0007 is required for idempotent recovery.
 - PawTrader exits use fresh position marks and current momentum instead of stale entry enrichment; slow dashboard refreshes no longer overlap.
 - PawTrader retries preserve entry/stop/target prices and reject expired, paused, unprotected, or exhausted intents after broker reconciliation.

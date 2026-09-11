@@ -30,6 +30,7 @@ import { writeFileSync } from 'node:fs'
 import { PROJECT_ROOT, readEnvFile } from '../env.js'
 import { sendEmail } from '../google/gmail.js'
 import { renderDailyHtml } from './daily-html.js'
+import { gatherNeedsYou, gatherProjectActivity } from './gather.js'
 import type {
   ReportData,
   ProjectCost,
@@ -40,6 +41,7 @@ import type {
   Anomaly,
   KillSwitchState,
   RemediationRow,
+  DegradedIntegration,
 } from './types.js'
 
 // -----------------------------------------------------------------------------
@@ -110,6 +112,29 @@ async function fetchKillSwitch(): Promise<KillSwitchState> {
     }
   } catch {
     return { active: false }
+  }
+}
+
+async function fetchDegradedIntegrations(): Promise<DegradedIntegration[]> {
+  if (!DASHBOARD_URL || !DASHBOARD_API_TOKEN) return []
+  try {
+    const res = await fetch(`${DASHBOARD_URL}/api/v1/metric-health/degraded`, {
+      headers: { 'x-dashboard-token': DASHBOARD_API_TOKEN },
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!res.ok) return []
+    const rows = (await res.json()) as Array<Record<string, unknown>>
+    return rows.map((r) => ({
+      integration_id: Number(r.integration_id ?? 0),
+      project_id: String(r.project_id ?? 'default'),
+      platform: String(r.platform ?? ''),
+      status: String(r.status ?? 'failing'),
+      attempts: Number(r.attempts ?? 0),
+      reason: r.reason == null ? null : String(r.reason),
+    }))
+  } catch {
+    // A digest that loses one section still beats no digest.
+    return []
   }
 }
 
@@ -504,19 +529,34 @@ function computeOverallStatus(data: ReportCore): { status: 'green' | 'yellow' | 
   return { status, issues }
 }
 
-async function gatherReportData(): Promise<ReportData> {
+// Exported so the bot's 08:00 scheduler tick can reuse the exact same
+// gathers for the Telegram digest (one ReportData, two processes, B4). Safe
+// to import: the main() call below only fires when this file is the process
+// entry point, not on import.
+//
+// `hours` defaults to the module's PERIOD_HOURS (this CLI's own env-driven
+// window) but the scheduler tick always passes it explicitly: PERIOD_HOURS
+// is read once from process.env at import time, and the bot process never
+// has DAILY_REPORT_PERIOD_HOURS set (that only exists in the separate weekly
+// launchd job's environment), so relying on the module constant silently
+// pinned the Telegram digest to 24 hours forever, even on Sunday.
+export async function gatherReportData(hours: number = PERIOD_HOURS): Promise<ReportData> {
   const telemetry = new Database(TELEMETRY_DB, { readonly: true })
   const core = new Database(CORE_DB, { readonly: true })
 
   try {
     const killSwitch = await fetchKillSwitch()
+    const degradedIntegrations = await fetchDegradedIntegrations()
     const costRoll = gatherCost(telemetry)
     const perProject = await gatherPerProjectCost(telemetry, costRoll.project_ids)
     const paws = gatherPaws(core)
     const tasks = gatherScheduledTasks(core)
-    const events = gatherAgentEvents(telemetry, PERIOD_HOURS)
+    const events = gatherAgentEvents(telemetry, hours)
     const remediations = gatherRemediations(core)
     const agentSdkPool = gatherAgentSdkPool(telemetry)
+    const windowMs = hours * 60 * 60 * 1000
+    const needsYou = gatherNeedsYou(core, windowMs, DASHBOARD_URL)
+    const perProjectActivity = gatherProjectActivity(core, telemetry, windowMs)
 
     // Pick the largest monthly cap across projects as the headline MTD cap.
     const headlineCap = perProject.reduce<number | null>((max, p) => {
@@ -527,10 +567,10 @@ async function gatherReportData(): Promise<ReportData> {
     const base = {
       generated_at: Date.now(),
       period: {
-        hours: PERIOD_HOURS,
-        from: Date.now() - PERIOD_HOURS * 60 * 60 * 1000,
+        hours,
+        from: Date.now() - hours * 60 * 60 * 1000,
         to: Date.now(),
-        label: periodLabel(PERIOD_HOURS),
+        label: periodLabel(hours),
       },
       cost: {
         today_usd: costRoll.today_usd,
@@ -545,6 +585,9 @@ async function gatherReportData(): Promise<ReportData> {
       scheduled_tasks: tasks,
       agent_events: events,
       remediations_24h: remediations,
+      needs_you: needsYou,
+      per_project: perProjectActivity,
+      degraded_integrations: degradedIntegrations,
     }
 
     const anomalies = detectAnomalies(base)
@@ -568,9 +611,26 @@ async function gatherReportData(): Promise<ReportData> {
 // -----------------------------------------------------------------------------
 
 function subjectFor(data: ReportData): string {
-  const periodTag = PERIOD_HOURS === 24 ? 'Daily' : PERIOD_HOURS === 168 ? 'Weekly' : `${PERIOD_HOURS}h`
+  const periodTag = data.period.hours === 24 ? 'Daily' : data.period.hours === 168 ? 'Weekly' : `${data.period.hours}h`
   const date = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   return `ClaudePaw ${periodTag} Report - ${date}`
+}
+
+/**
+ * Weekly run only (C6, spec 5.3): append each project's health verdict so a
+ * dormant or dead project surfaces once a week instead of getting buried in
+ * the daily noise. Exported so both this CLI's main() and the bot's Sunday
+ * scheduler tick call the same logic on the same ReportData shape (mutates
+ * data.overall_issues in place). A no-op below 168 hours, so callers can
+ * always call it rather than re-checking the threshold themselves.
+ */
+export async function appendWeeklyVerdicts(data: ReportData): Promise<void> {
+  if (data.period.hours < 168) return
+  const { gatherProjectHealth, verdictFor } = await import('./project-health.js')
+  for (const h of gatherProjectHealth()) {
+    const verdict = verdictFor(h)
+    if (verdict !== 'ACTIVE') data.overall_issues.push(`${h.displayName}: ${verdict}`)
+  }
 }
 
 async function main() {
@@ -584,6 +644,8 @@ async function main() {
   }
 
   const data = await gatherReportData()
+  if (data.period.hours >= 168) await appendWeeklyVerdicts(data)
+
   const html = renderDailyHtml(data)
   const subject = subjectFor(data)
 
@@ -607,7 +669,12 @@ async function main() {
   console.log(`Sent to ${RECIPIENT} (message id ${res.messageId})`)
 }
 
-main().catch((err) => {
-  console.error('Report generation failed:', err)
-  process.exit(1)
-})
+// Only run when this file is the process entry point. gatherReportData is
+// exported for reuse (by the bot's scheduler tick); importing this module
+// must never trigger an email send as a side effect.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err) => {
+    console.error('Report generation failed:', err)
+    process.exit(1)
+  })
+}

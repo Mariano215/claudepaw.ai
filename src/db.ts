@@ -139,6 +139,7 @@ export interface ActionItem {
   last_run_at: number | null
   last_run_result: string | null
   last_run_session: string | null
+  external_ref: string | null
 }
 
 export interface ActionItemComment {
@@ -197,25 +198,6 @@ For each item include:
 
 Content pillars: BTS, festival journey, founders' story, industry insights, SV III on Prime, Example Film development.
 If a specific metric tab/range cannot be read, say exactly what succeeded and continue with the best grounded draft.`,
-  'fop-weekly-festival-scan': `You are the Festival Strategist for Example Company. Run the weekly festival scan.
-
-Use the structured festival tracker context provided in the prompt to avoid duplicates. Do not say the festival spreadsheet is unavailable unless the structured context explicitly reports an error.
-Use web research for FilmFreeway-equivalent discovery and public festival deadline checks.
-
-Produce a curated report of 5-10 upcoming festivals relevant to:
-- Example Film (short film, thriller/drama, 15 min)
-- Example Project III (short film, horror/thriller, on Amazon Prime)
-
-For each festival include:
-- Name and location
-- Submission deadline
-- Event dates
-- Submission fee and category
-- Industry presence
-- Strategic fit / ROI
-- URL
-
-Rank by strategic value, not just prestige, and connect recommendations back to the Example Film feature funding goal.`,
 }
 
 // SQLite does not support parameterized PRAGMA arguments, so we interpolate.
@@ -639,6 +621,19 @@ export function initDatabase(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_action_items_parent         ON action_items(parent_id);
     CREATE INDEX IF NOT EXISTS idx_action_items_archived       ON action_items(archived_at);
 
+    -- Paw Dev history log, spec section 6. One row per thing that happened
+    -- to a repo. Timestamps are milliseconds like everything else here.
+    CREATE TABLE IF NOT EXISTS repo_events (
+      id          TEXT PRIMARY KEY,
+      repo        TEXT NOT NULL,
+      kind        TEXT NOT NULL,
+      ref         TEXT,
+      actor       TEXT NOT NULL,
+      item_id     TEXT,
+      created_at  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_repo_events_repo_time ON repo_events(repo, created_at);
+
     CREATE TABLE IF NOT EXISTS action_item_comments (
       id         TEXT PRIMARY KEY,
       item_id    TEXT NOT NULL,
@@ -658,6 +653,21 @@ export function initDatabase(): Database.Database {
       created_at  INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_action_item_events_item ON action_item_events(item_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS action_audit (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts_ms         INTEGER NOT NULL,
+      project_id    TEXT NOT NULL,
+      actor         TEXT NOT NULL,
+      action_class  TEXT NOT NULL,
+      decision      TEXT NOT NULL,
+      policy_value  TEXT NOT NULL,
+      ref_table     TEXT,
+      ref_id        TEXT,
+      payload_hash  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_action_audit_project ON action_audit(project_id, ts_ms);
+    CREATE INDEX IF NOT EXISTS idx_action_audit_class   ON action_audit(action_class, ts_ms);
 
     -- ── Knowledge Graph (Layer 4) ──────────────────────────────────
     CREATE TABLE IF NOT EXISTS entities (
@@ -1222,6 +1232,23 @@ export function initDatabase(): Database.Database {
   }
   if (!hasColumn(db, 'projects', 'auto_archive_days')) {
     db.exec(`ALTER TABLE projects ADD COLUMN auto_archive_days INTEGER`)
+  }
+
+  // Shell v2: a workspace is either a plain project or a Paw (a project with
+  // an autonomy engine). The frontend used to infer this from the slug.
+  if (!hasColumn(db, 'projects', 'kind')) {
+    db.exec(`ALTER TABLE projects ADD COLUMN kind TEXT NOT NULL DEFAULT 'project' CHECK(kind IN ('project','paw'))`)
+    db.exec(`UPDATE projects SET kind = 'paw' WHERE id IN ('trader', 'broker')`)
+  }
+
+  // Paw Dev, spec 6.3. GitHub reference plus branch and PR url, as JSON.
+  if (!hasColumn(db, 'action_items', 'external_ref')) {
+    try {
+      db.exec(`ALTER TABLE action_items ADD COLUMN external_ref TEXT`)
+      logger.info('Added external_ref column to action_items')
+    } catch (err) {
+      logger.warn({ err }, 'action_items.external_ref migration skipped')
+    }
   }
 
   // Idempotent: add archived_at to project_credentials if missing
@@ -2106,6 +2133,10 @@ export function getKnob<T extends string | number | boolean>(projectId: string, 
     if (v === undefined || v === null || v === '') return fallback
     if (typeof fallback === 'number') { const n = Number(v); return (Number.isFinite(n) ? n : fallback) as T }
     if (typeof fallback === 'boolean') return (v === true || v === 'true') as T
+    // The dashboard Knobs card writes a nested knob (action_policy) as a real
+    // JSON object. String() would make that "[object Object]" and every caller
+    // that parses it would fall back to its defaults without saying so.
+    if (typeof v === 'object') return JSON.stringify(v) as T
     return String(v) as T
   } catch {
     return fallback
@@ -2237,12 +2268,12 @@ export function insertActionItem(item: ActionItem): void {
       (id, project_id, title, description, status, priority, source, proposed_by,
        assigned_to, executable_by_agent, parent_id, target_date,
        created_at, updated_at, completed_at, archived_at,
-       last_run_at, last_run_result, last_run_session)
+       last_run_at, last_run_result, last_run_session, external_ref)
     VALUES
       (@id, @project_id, @title, @description, @status, @priority, @source, @proposed_by,
        @assigned_to, @executable_by_agent, @parent_id, @target_date,
        @created_at, @updated_at, @completed_at, @archived_at,
-       @last_run_at, @last_run_result, @last_run_session)
+       @last_run_at, @last_run_result, @last_run_session, @external_ref)
   `).run(item)
 }
 

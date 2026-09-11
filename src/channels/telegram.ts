@@ -517,6 +517,39 @@ export class TelegramChannel implements Channel {
     bot.on('callback_query:data', async (ctx) => {
       const data = ctx.callbackQuery.data
 
+      // --- Paw Dev ask steps: pawdev:<reply|merge|mirror|close>:<cardId> ---
+      if (data.startsWith('pawdev:')) {
+        const pawdevParts = data.split(':')
+        if (pawdevParts.length !== 3) return
+        const [, action, cardId] = pawdevParts
+
+        const fromUserId = ctx.callbackQuery.from?.id
+        if (!fromUserId || !this.isAuthorised(fromUserId)) {
+          logger.warn({ action, cardId, fromUserId }, 'Paw Dev action rejected: unauthorized user')
+          try { await ctx.answerCallbackQuery({ text: 'Not authorized' }) } catch { /* expired */ }
+          return
+        }
+        const { runPawdevAction, isPawdevAction } = await import('../paws/pawdev/run-action.js')
+        if (!isPawdevAction(action)) {
+          logger.warn({ action, cardId }, 'Paw Dev action rejected: unknown action')
+          try { await ctx.answerCallbackQuery({ text: 'Unknown action' }) } catch { /* expired */ }
+          return
+        }
+        try { await ctx.answerCallbackQuery({ text: 'Running...' }) } catch { /* expired */ }
+
+        const pawdevChatId = String(ctx.chat?.id ?? ctx.callbackQuery.message?.chat?.id ?? '')
+        try {
+          const out = await runPawdevAction(action, cardId)
+          const label = out.ok ? out.message : `Not done: ${out.message}`
+          try { await ctx.editMessageText(label) } catch { if (pawdevChatId) await this.send(pawdevChatId, label).catch(() => {}) }
+        } catch (err) {
+          const msg = `Paw Dev ${action} failed: ${err instanceof Error ? err.message : String(err)}`
+          logger.error({ err, action, cardId }, 'Paw Dev action callback failed')
+          if (pawdevChatId) await this.send(pawdevChatId, msg).catch(() => {})
+        }
+        return
+      }
+
       // --- Paw approval/skip buttons ---
       if (data.startsWith('paw:')) {
         const parts = data.split(':')
@@ -557,6 +590,33 @@ export class TelegramChannel implements Channel {
           logger.error({ err, pawId, action }, 'Paw approval callback failed')
           const msg = `Failed to process ${action} for ${pawId}: ${err instanceof Error ? err.message : String(err)}`
           if (chatId) await this.send(chatId, msg).catch(() => {})
+        }
+        return
+      }
+
+      // --- Policy approval buttons: act:approve:<cardId> | act:deny:<cardId> ---
+      if (data.startsWith('act:')) {
+        const parts = data.split(':')
+        if (parts.length !== 3) return
+        const [, action, cardId] = parts
+        const approved = action === 'approve'
+
+        const fromUserId = ctx.callbackQuery.from?.id
+        if (!fromUserId || !this.isAuthorised(fromUserId)) {
+          logger.warn({ cardId, action, fromUserId }, 'Policy approval rejected: unauthorized user')
+          try { await ctx.answerCallbackQuery({ text: 'Not authorized' }) } catch { /* expired */ }
+          return
+        }
+
+        try { await ctx.answerCallbackQuery({ text: approved ? 'Approving...' : 'Denied.' }) } catch { /* expired */ }
+
+        const chatId = String(ctx.chat?.id ?? ctx.callbackQuery.message?.chat?.id ?? '')
+        const { handleActCallback } = await import('./act-callback.js')
+        const res = handleActCallback(cardId, approved, `telegram:${fromUserId}`)
+        try {
+          await ctx.editMessageText(res.message)
+        } catch {
+          if (chatId) await this.send(chatId, res.message).catch(() => {})
         }
         return
       }

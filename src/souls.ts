@@ -24,6 +24,11 @@ export interface AgentSoul {
   mode: 'always-on' | 'active' | 'on-demand'
   keywords: string[]
   capabilities: string[]
+  /** SDK tool set for this agent. Undefined keeps the SDK's default preset. */
+  tools?: string[]
+  /** Old ids this soul still answers to. Set during a rename so DB rows and
+   *  code sites can move one at a time. Remove an alias once nothing uses it. */
+  aliases?: string[]
   systemPrompt: string
   context_slice?: Record<string, SliceQuery>
 }
@@ -289,6 +294,8 @@ function loadAgentFiles(dir: string): AgentSoul[] {
         mode: modeRaw,
         keywords: asArray(meta['keywords']),
         capabilities: asArray(meta['capabilities']),
+        ...(asArray(meta['tools']).length > 0 ? { tools: asArray(meta['tools']) } : {}),
+        ...(asArray(meta['aliases']).length > 0 ? { aliases: asArray(meta['aliases']) } : {}),
         systemPrompt: body,
         ...(sliceConfig ? { context_slice: sliceConfig } : {}),
       })
@@ -373,15 +380,34 @@ export function getSoul(agentId: string, projectSlug?: string): AgentSoul | unde
     const projectDir = join(PROJECT_ROOT, 'projects', projectSlug, 'agents')
     if (existsSync(projectDir)) {
       const projectSouls = loadAgentFiles(projectDir)
+      // Non-default projects address agents by a composite id, `<slug>--<template>`,
+      // so rows in `paws` and `project.json` stay unique across projects. The
+      // agent file itself declares the bare template id, so accept either form.
+      // Without this, every broker routine (agent_id `broker--listing-finder`) resolved
+      // no agent at all and ran with no persona.
+      const bare = agentId.startsWith(`${projectSlug}--`)
+        ? agentId.slice(projectSlug.length + 2)
+        : agentId
       const match = projectSouls.find((s) => s.id === agentId)
+        ?? projectSouls.find((s) => s.id === bare)
+        ?? projectSouls.find((s) => (s.aliases ?? []).includes(agentId))
+        ?? projectSouls.find((s) => (s.aliases ?? []).includes(bare))
       if (match) {
         soulCache.set(cacheKey, match)
         return match
       }
     }
   }
-  // Fall back to cached base agents
-  return soulCache.get(agentId)
+  // Fall back to cached base agents, by id then by alias. Skip project-scoped
+  // cache entries (keys containing ':') so the alias fallback only matches
+  // base souls, not another project's cached lookup under the same old id.
+  const direct = soulCache.get(agentId)
+  if (direct) return direct
+  for (const [key, soul] of soulCache.entries()) {
+    if (key.includes(':')) continue
+    if ((soul.aliases ?? []).includes(agentId)) return soul
+  }
+  return undefined
 }
 
 export function getAllSouls(projectSlug?: string): AgentSoul[] {
@@ -476,13 +502,19 @@ land in proposed state and require human approval before anything runs.
 
 Always propose, never execute. The operator decides what runs.`
 
+// Spec 4.2: the Bash allowlist denies plain `gh` and `git push`, so an agent
+// that is not told about the wrappers has no GitHub path at all.
+const WRAPPER_INSTRUCTIONS = `To open or comment on GitHub, run scripts/gh-wrapper.sh <project> <gh args>; to push, run scripts/git-push-wrapper.sh <project> <args>.
+Put the gh subcommand first, then flags: scripts/gh-wrapper.sh <project> issue comment <n> -R <owner/repo> --body <text>. Allowed subcommands: issue comment, issue close, issue view, issue list, pr create, pr comment, pr diff, pr view, pr list, run list, run view.
+Plain gh and git push are denied.`
+
 export function buildAgentPrompt(soul: AgentSoul, projectId?: string): string {
   const header = `[Agent: ${soul.emoji} ${soul.name} -- ${soul.role}]`
-  const envSection = `[ClaudePaw Environment]\n${baseContext}`
+  const envSection = `[ClaudePaw Environment]\n${baseContext}\n\n${WRAPPER_INSTRUCTIONS}`
   let prompt = `${header}\n${soul.systemPrompt}\n\n${envSection}\n\n${ACTION_PLAN_INSTRUCTIONS}`
 
-  // Inject live security context for the auditor soul
-  if (soul.id === 'auditor' && _buildSecurityContext) {
+  // Inject live security context for the security-scanner soul
+  if (soul.id === 'security-scanner' && _buildSecurityContext) {
     try {
       const secCtx = _buildSecurityContext()
       if (secCtx) {

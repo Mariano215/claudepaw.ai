@@ -98,6 +98,9 @@ async function main() {
     ],
   }
 
+  // This send carries an approve/reject keyboard, so it stays a direct fetch
+  // for now; notifyOwner does not carry a keyboard. Moves to
+  // ChannelManager.sendWithKeyboard in Phase 2, when this CLI gets a manager handle.
   try {
     const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',

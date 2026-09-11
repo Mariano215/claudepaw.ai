@@ -5,11 +5,12 @@
  *
  * Assertions per spec:
  *  1. GET /api/v1/cost-gate/:projectId -- admin gets 200 CostGateStatus
- *  2. GET /api/v1/cost-gate/:projectId -- non-member gets 404 (foreign project)
- *  3. PUT /api/v1/cost-gate/:projectId/caps { monthly_cost_cap_usd: 150, daily_cost_cap_usd: 10 }
+ *  2. GET /api/v1/cost-gate/:projectId -- bot identity gets 200 without membership
+ *  3. GET /api/v1/cost-gate/:projectId -- non-member gets 404 (foreign project)
+ *  4. PUT /api/v1/cost-gate/:projectId/caps { monthly_cost_cap_usd: 150, daily_cost_cap_usd: 10 }
  *       -- persists and returns 200
- *  4. PUT with non-editor member -- 403
- *  5. PUT with negative number -- 400
+ *  5. PUT with bot or non-editor member -- 403
+ *  6. PUT with negative number -- 400
  */
 
 import { describe, it, expect, beforeAll, vi } from 'vitest'
@@ -338,6 +339,7 @@ function httpReq(
 
 let srv: ReturnType<typeof createServer>
 let adminToken: string
+let botToken: string
 let editorToken: string
 let viewerToken: string
 
@@ -353,6 +355,9 @@ beforeAll(async () => {
 
   const admin = createUser({ email: 'admin@cg.test', name: 'Admin', global_role: 'admin' })
   adminToken = createUserToken({ user_id: admin.id }).token
+
+  const bot = createUser({ email: 'bot@cg.test', name: 'Bot', global_role: 'bot' })
+  botToken = createUserToken({ user_id: bot.id }).token
 
   const editor = createUser({ email: 'editor@cg.test', name: 'Editor', global_role: 'member' })
   editorToken = createUserToken({ user_id: editor.id }).token
@@ -397,6 +402,11 @@ describe('GET /api/v1/cost-gate/:projectId', () => {
     expect(body).toHaveProperty('today_usd')
   })
 
+  it('bot gets 200 without project membership', async () => {
+    const res = await httpReq(srv, 'GET', `/api/v1/cost-gate/${PROJECT_A}`, { headers: tok(botToken) })
+    expect(res.status).toBe(200)
+  })
+
   it('member without project access gets 404 (foreign project)', async () => {
     // editor is NOT a member of PROJECT_B
     const res = await httpReq(srv, 'GET', `/api/v1/cost-gate/${PROJECT_B}`, { headers: tok(editorToken) })
@@ -405,6 +415,14 @@ describe('GET /api/v1/cost-gate/:projectId', () => {
 })
 
 describe('PUT /api/v1/cost-gate/:projectId/caps', () => {
+  it('bot cannot mutate project cost caps', async () => {
+    const res = await httpReq(srv, 'PUT', `/api/v1/cost-gate/${PROJECT_A}/caps`, {
+      headers: tok(botToken),
+      body: { monthly_cost_cap_usd: 150 },
+    })
+    expect(res.status).toBe(403)
+  })
+
   it('editor updates caps and gets 200 with persisted values', async () => {
     upsertCalls.length = 0
     const res = await httpReq(srv, 'PUT', `/api/v1/cost-gate/${PROJECT_A}/caps`, {

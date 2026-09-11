@@ -1,7 +1,7 @@
 // src/remediations/stale-approval-skip.ts
 //
-// Auto-skips paws that have been waiting for human approval longer than
-// APPROVAL_STALE_HOURS (default 48). Prevents the "forgot to click approve"
+// Auto-skips paws that have been waiting for human approval longer than the
+// `approval_stale_hours` knob (default 48). Prevents the "forgot to click approve"
 // backlog: the approval card eventually gets lost, the paw stays frozen,
 // no new cycles run. After the threshold we treat it as an implicit skip,
 // mark the stuck cycle as failed, and return the paw to `active`.
@@ -17,7 +17,7 @@
 //     (not immediate), so there's no storm of retries on stuck paws.
 
 import type Database from 'better-sqlite3'
-import { getDb } from '../db.js'
+import { getDb, getKnob } from '../db.js'
 import { logger } from '../logger.js'
 import { readEnvFile } from '../env.js'
 import type { RemediationDefinition, RemediationOutcome } from './types.js'
@@ -25,10 +25,17 @@ import type { RemediationDefinition, RemediationOutcome } from './types.js'
 const REMEDIATION_ID = 'stale-approval-skip'
 const DEFAULT_STALE_HOURS = 48
 
+/**
+ * Hours to wait before treating an unanswered approval as a skip.
+ *
+ * Operator setting, so it lives in the `approval_stale_hours` knob on the
+ * default project (dashboard Settings > Knobs) and applies on the next tick
+ * with no restart. APPROVAL_STALE_HOURS stays readable as the fallback only.
+ */
 function resolveStaleMs(): number {
-  const env = readEnvFile()
-  const raw = env.APPROVAL_STALE_HOURS
-  const hours = Number(raw)
+  const envHours = Number(readEnvFile().APPROVAL_STALE_HOURS)
+  const fallback = Number.isFinite(envHours) && envHours > 0 ? envHours : DEFAULT_STALE_HOURS
+  const hours = getKnob('default', 'approval_stale_hours', fallback)
   if (!Number.isFinite(hours) || hours <= 0) return DEFAULT_STALE_HOURS * 60 * 60 * 1000
   return Math.round(hours * 60 * 60 * 1000)
 }

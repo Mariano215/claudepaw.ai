@@ -31,6 +31,7 @@ import {
   getTask,
 } from './db.js'
 import { computeNextRun } from './scheduler.js'
+import { gateScheduleChange } from './policy-gates.js'
 
 // Ensure tables exist
 initDatabase()
@@ -80,133 +81,155 @@ function formatTimestamp(unix: number | null): string {
   return new Date(unix).toLocaleString()
 }
 
-switch (command) {
-  case 'create': {
-    const prompt = args[1]
-    const cron = args[2]
-    const chatId = args[3]
+async function main(): Promise<void> {
+  switch (command) {
+    case 'create': {
+      const prompt = args[1]
+      const cron = args[2]
+      const chatId = args[3]
 
-    if (!prompt || !cron || !chatId) {
-      console.error('Error: create requires <prompt> <cron> <chat_id>')
-      usage()
-      process.exit(1)
-    }
+      if (!prompt || !cron || !chatId) {
+        console.error('Error: create requires <prompt> <cron> <chat_id>')
+        usage()
+        process.exit(1)
+      }
 
-    // Validate cron expression
-    try {
-      cronParser.parseExpression(cron)
-    } catch {
-      console.error(`Error: invalid cron expression "${cron}"`)
-      process.exit(1)
-    }
+      // Validate cron expression
+      try {
+        cronParser.parseExpression(cron)
+      } catch {
+        console.error(`Error: invalid cron expression "${cron}"`)
+        process.exit(1)
+      }
 
-    const id = args[4] || slugify(prompt)
-    const nextRun = computeNextRun(cron)
+      const id = args[4] || slugify(prompt)
+      const nextRun = computeNextRun(cron)
 
-    // Check for duplicate ID
-    const existing = getTask(id)
-    if (existing) {
-      console.error(`Error: task with id "${id}" already exists. Pass a unique id as the 5th argument.`)
-      process.exit(1)
-    }
+      // Check for duplicate ID
+      const existing = getTask(id)
+      if (existing) {
+        console.error(`Error: task with id "${id}" already exists. Pass a unique id as the 5th argument.`)
+        process.exit(1)
+      }
 
-    const projectId = args[5] || 'default'
-    createTask(id, chatId, prompt, cron, nextRun, projectId)
+      const projectId = args[5] || 'default'
+      const allowed = await gateScheduleChange(projectId, 'create', id, () => {
+        createTask(id, chatId, prompt, cron, nextRun, projectId)
+      })
+      if (!allowed) {
+        console.error('Blocked by action policy: schedule.change')
+        process.exit(2)
+      }
 
-    console.log(`Created task: ${id}`)
-    console.log(`  Prompt:   ${prompt}`)
-    console.log(`  Schedule: ${cron}`)
-    console.log(`  Chat ID:  ${chatId}`)
-    console.log(`  Project:  ${projectId}`)
-    console.log(`  Next run: ${formatTimestamp(nextRun)}`)
-    break
-  }
-
-  case 'list': {
-    const tasks = listTasks()
-
-    if (tasks.length === 0) {
-      console.log('No scheduled tasks.')
+      console.log(`Created task: ${id}`)
+      console.log(`  Prompt:   ${prompt}`)
+      console.log(`  Schedule: ${cron}`)
+      console.log(`  Chat ID:  ${chatId}`)
+      console.log(`  Project:  ${projectId}`)
+      console.log(`  Next run: ${formatTimestamp(nextRun)}`)
       break
     }
 
-    console.log(
-      'ID'.padEnd(10) +
-        'Status'.padEnd(9) +
-        'Schedule'.padEnd(18) +
-        'Next Run'.padEnd(22) +
-        'Prompt',
-    )
-    console.log('-'.repeat(90))
+    case 'list': {
+      const tasks = listTasks()
 
-    for (const t of tasks) {
+      if (tasks.length === 0) {
+        console.log('No scheduled tasks.')
+        break
+      }
+
       console.log(
-        String(t.id).padEnd(10) +
-          String(t.status).padEnd(9) +
-          String(t.schedule).padEnd(18) +
-          formatTimestamp(t.next_run).padEnd(22) +
-          t.prompt.slice(0, 40),
+        'ID'.padEnd(10) +
+          'Status'.padEnd(9) +
+          'Schedule'.padEnd(18) +
+          'Next Run'.padEnd(22) +
+          'Prompt',
       )
-    }
-    break
-  }
+      console.log('-'.repeat(90))
 
-  case 'delete': {
-    const id = args[1]
-    if (!id) {
-      console.error('Error: delete requires <id>')
-      process.exit(1)
+      for (const t of tasks) {
+        console.log(
+          String(t.id).padEnd(10) +
+            String(t.status).padEnd(9) +
+            String(t.schedule).padEnd(18) +
+            formatTimestamp(t.next_run).padEnd(22) +
+            t.prompt.slice(0, 40),
+        )
+      }
+      break
     }
-    const deleted = deleteTask(id)
-    if (deleted) {
+
+    case 'delete': {
+      const id = args[1]
+      if (!id) {
+        console.error('Error: delete requires <id>')
+        process.exit(1)
+      }
+      const task = getTask(id)
+      if (!task) {
+        console.error(`Task not found: ${id}`)
+        process.exit(1)
+      }
+      const allowed = await gateScheduleChange(task.project_id, 'delete', id, () => { deleteTask(id) })
+      if (!allowed) {
+        console.error('Blocked by action policy: schedule.change')
+        process.exit(2)
+      }
       console.log(`Deleted task: ${id}`)
-    } else {
-      console.error(`Task not found: ${id}`)
-      process.exit(1)
+      break
     }
-    break
+
+    case 'pause': {
+      const id = args[1]
+      if (!id) {
+        console.error('Error: pause requires <id>')
+        process.exit(1)
+      }
+      const task = getTask(id)
+      if (!task) {
+        console.error(`Task not found: ${id}`)
+        process.exit(1)
+      }
+      const allowed = await gateScheduleChange(task.project_id, 'pause', id, () => { pauseTask(id) })
+      if (!allowed) {
+        console.error('Blocked by action policy: schedule.change')
+        process.exit(2)
+      }
+      console.log(`Paused task: ${id}`)
+      break
+    }
+
+    case 'resume': {
+      const id = args[1]
+      if (!id) {
+        console.error('Error: resume requires <id>')
+        process.exit(1)
+      }
+
+      const task = getTask(id)
+      if (!task) {
+        console.error(`Task not found: ${id}`)
+        process.exit(1)
+      }
+
+      const nextRun = computeNextRun(task.schedule)
+      const allowed = await gateScheduleChange(task.project_id, 'resume', id, () => { resumeTask(id, nextRun) })
+      if (!allowed) {
+        console.error('Blocked by action policy: schedule.change')
+        process.exit(2)
+      }
+      console.log(`Resumed task: ${id}`)
+      console.log(`  Next run: ${formatTimestamp(nextRun)}`)
+      break
+    }
+
+    default:
+      if (command) {
+        console.error(`Unknown command: ${command}`)
+      }
+      usage()
+      process.exit(command ? 1 : 0)
   }
-
-  case 'pause': {
-    const id = args[1]
-    if (!id) {
-      console.error('Error: pause requires <id>')
-      process.exit(1)
-    }
-    const task = getTask(id)
-    if (!task) {
-      console.error(`Task not found: ${id}`)
-      process.exit(1)
-    }
-    pauseTask(id)
-    console.log(`Paused task: ${id}`)
-    break
-  }
-
-  case 'resume': {
-    const id = args[1]
-    if (!id) {
-      console.error('Error: resume requires <id>')
-      process.exit(1)
-    }
-
-    const task = getTask(id)
-    if (!task) {
-      console.error(`Task not found: ${id}`)
-      process.exit(1)
-    }
-
-    const nextRun = computeNextRun(task.schedule)
-    resumeTask(id, nextRun)
-    console.log(`Resumed task: ${id}`)
-    console.log(`  Next run: ${formatTimestamp(nextRun)}`)
-    break
-  }
-
-  default:
-    if (command) {
-      console.error(`Unknown command: ${command}`)
-    }
-    usage()
-    process.exit(command ? 1 : 0)
 }
+
+await main()

@@ -21,6 +21,7 @@ import { postFacebook, postInstagram } from './meta.js'
 import { uploadToYouTube } from './youtube.js'
 import { resolveTwitterConfig, resolveLinkedInConfig, resolveMetaConfig, resolveYouTubeConfig } from './resolve.js'
 import { getProject } from '../db.js'
+import { checkAction } from '../policy.js'
 import type { DraftInput, SocialPost, Platform } from './types.js'
 
 export function initSocial(db: Database.Database): void {
@@ -58,20 +59,30 @@ export async function approveAndPublish(postId: string): Promise<{
 
 /**
  * Auto-publish entrypoint: mark a fresh draft approved and queue it for the
- * scheduler's publishDueSocialPosts() tick. No human tap. Returns the (updated)
- * post plus whether the transition happened (false if the row was not a draft).
+ * scheduler's publishDueSocialPosts() tick.
+ *
+ * The social.post policy gate lives here, not at the CLI, because this is the
+ * only writer of the approved-and-scheduled state that listDueApproved() picks
+ * up. Gating the caller instead would leave every future caller ungated.
  */
-export function autoApproveAndSchedule(
+export async function autoApproveAndSchedule(
   postId: string,
   scheduledAt: number = Date.now(),
-): { queued: boolean; post?: SocialPost } {
+): Promise<{ queued: boolean; post?: SocialPost; parked?: string }> {
   const post = getPost(postId)
   if (!post) return { queued: false }
   if (post.status !== 'draft') return { queued: false, post }
+
+  const decision = await checkAction(post.project_id, 'social.post', 'social-writer', {
+    post_id: post.id, platform: post.platform, preview: post.content.slice(0, 200),
+  })
+  if (decision === 'deny') return { queued: false, post }
+  if (decision.startsWith('pending:')) return { queued: false, post, parked: decision.slice('pending:'.length) }
+
   const queued = markApprovedScheduled(postId, scheduledAt)
   if (queued) {
-    reportFeedItem('social', 'Post auto-approved + queued', `[${post.platform}] ${post.id}`)
-    reportMetric('social', 'posts_auto_queued', 1)
+    reportFeedItem('social-writer', 'Post auto-approved + queued', `[${post.platform}] ${post.id}`)
+    reportMetric('social-writer', 'posts_auto_queued', 1)
   }
   return { queued, post: getPost(postId) }
 }

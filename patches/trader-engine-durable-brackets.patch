@@ -1,0 +1,174 @@
+--- a/src/trader_engine/execution/alpaca_adapter.py
++++ b/src/trader_engine/execution/alpaca_adapter.py
+@@ -186,8 +186,10 @@
+     Units: take_profit is the Alpaca take-profit limit_price (the target);
+     stop_loss is the Alpaca stop_price (the trigger). The brain sends absolute
+     price levels, not distances. All three prices are penny-rounded.
+-    Bracket entries are time_in_force=DAY and extended_hours=False (a bracket
+-    cannot be IOC/FOK; the resting child legs need a day/gtc parent).
++    Bracket entries are time_in_force=GTC and extended_hours=False so filled
++    positions retain native stop/target protection across sessions. The order
++    reconciler cancels a completely unfilled equity entry after 30 minutes so
++    a stale parent cannot remain open indefinitely.
+     """
+     rounded_limit = _round_limit_price(limit_price)
+     if '/' in symbol:
+@@ -200,7 +202,7 @@
+             symbol=symbol,
+             qty=qty,
+             side=order_side,
+-            time_in_force=TimeInForce.DAY,
++            time_in_force=TimeInForce.GTC,
+             limit_price=rounded_limit,
+             order_class=OrderClass.BRACKET,
+             take_profit=TakeProfitRequest(
+--- a/src/trader_engine/execution/order_reconciler.py
++++ b/src/trader_engine/execution/order_reconciler.py
+@@ -50,6 +50,12 @@
+ # network partition). Mirrors RECONCILE_ORPHAN_HORIZON_MS in the TS brain.
+ _ORPHAN_HORIZON_MS = 6 * 3600 * 1000  # 6 hours
+ 
++# GTC brackets keep their child protection alive across sessions. Bound the
++# parent-entry lifetime so an unfilled limit cannot become a surprise position
++# hours or days after its signal. Never auto-cancel a partially filled parent:
++# broker bracket-leg semantics must remain intact for the position already held.
++_GTC_ENTRY_MAX_AGE_MS = 30 * 60 * 1000
++
+ 
+ @dataclass
+ class OrderReconcileResult:
+@@ -58,6 +64,7 @@
+     adopted: int = 0
+     orphaned_failed: int = 0
+     positions_synced: int = 0
++    stale_entries_canceled: int = 0
+     anomalies: list[str] = field(default_factory=list)
+ 
+ 
+@@ -80,6 +87,7 @@
+         if o.client_order_id:
+             # open set wins on collision (most current view of a live order)
+             broker_by_coid.setdefault(o.client_order_id, o)
++    open_coids = {o.client_order_id for o in open_orders if o.client_order_id}
+ 
+     # 2. Load every local order keyed by client_order_id.
+     # Fetch updated_at + created_at:
+@@ -89,7 +97,8 @@
+     #     RECONCILE_ORPHAN_HORIZON_MS are spared (may still be in-flight).
+     local_rows = session.execute(
+         sa.text(
+-            "SELECT client_order_id, status, broker_order_id, updated_at, created_at "
++            "SELECT client_order_id, status, broker_order_id, updated_at, created_at, "
++            "asset, side, order_type, filled_qty "
+             "FROM engine_orders"
+         )
+     ).fetchall()
+@@ -107,6 +116,31 @@
+ 
+     # 3. Reconcile each broker order into local state.
+     for coid, bo in broker_by_coid.items():
++        local = local_by_coid.get(coid)
++        if (
++            local is not None
++            and coid in open_coids
++            and local.side == "buy"
++            and local.order_type == "limit"
++            and "/" not in local.asset
++            and float(bo.filled_qty or 0) == 0
++            and now_ms - int(local.created_at or 0) >= _GTC_ENTRY_MAX_AGE_MS
++            and bo.broker_order_id
++        ):
++            if await adapter.cancel_order(broker_order_id=bo.broker_order_id):
++                session.execute(
++                    sa.text(
++                        "UPDATE engine_orders SET status='pending_cancel', updated_at=:now "
++                        "WHERE client_order_id=:coid"
++                    ),
++                    {"now": now_ms, "coid": coid},
++                )
++                result.matched += 1
++                result.stale_entries_canceled += 1
++                result.anomalies.append(
++                    f"canceled stale unfilled equity entry {coid} ({local.asset})"
++                )
++                continue
+         if coid in local_by_coid:
+             stored_updated = local_by_coid[coid].updated_at or 0
+             # I4: None -> 0 (conservative epoch), not now_ms. Using now_ms
+@@ -254,5 +288,6 @@
+         adopted=result.adopted,
+         orphaned_failed=result.orphaned_failed,
+         positions_synced=result.positions_synced,
++        stale_entries_canceled=result.stale_entries_canceled,
+     )
+     return result
+--- a/tests/test_alpaca_adapter.py
++++ b/tests/test_alpaca_adapter.py
+@@ -423,7 +423,7 @@
+ 
+ 
+ def test_build_entry_request_bracket_when_both_exits():
+-    """Both exits present -> bracket order with nested tp/sl, DAY, no ext hours."""
++    """Both exits present -> bracket order with nested tp/sl, GTC, no ext hours."""
+     from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
+     from trader_engine.execution.alpaca_adapter import _build_entry_limit_request
+ 
+@@ -434,7 +434,7 @@
+     assert req.order_class == OrderClass.BRACKET
+     assert req.take_profit.limit_price == 200.0
+     assert req.stop_loss.stop_price == 170.0
+-    assert req.time_in_force == TimeInForce.DAY
++    assert req.time_in_force == TimeInForce.GTC
+     assert req.extended_hours is False
+ 
+ 
+--- a/tests/test_order_reconciler.py
++++ b/tests/test_order_reconciler.py
+@@ -127,6 +127,47 @@
+     await reconcile_orders(session, adapter)
+ 
+     assert session.query(EngineFill).count() == 1
++
++
++@pytest.mark.asyncio
++async def test_stale_unfilled_equity_entry_is_canceled(session, adapter):
++    _seed_order(session, "stale-entry", "new", broker_id="b-stale")
++    old = int(time.time() * 1000) - (31 * 60 * 1000)
++    session.execute(text(
++        "UPDATE engine_orders SET created_at=:old WHERE client_order_id='stale-entry'"
++    ), {"old": old})
++    session.commit()
++    broker = _broker_order("stale-entry", "new", "b-stale", 0.0, None)
++    adapter.get_orders.side_effect = lambda **kw: [broker] if kw["status"] == "open" else []
++    adapter.cancel_order = AsyncMock(return_value=True)
++
++    from trader_engine.execution.order_reconciler import reconcile_orders
++    result = await reconcile_orders(session, adapter)
++
++    adapter.cancel_order.assert_awaited_once_with(broker_order_id="b-stale")
++    assert result.stale_entries_canceled == 1
++    assert session.execute(text(
++        "SELECT status FROM engine_orders WHERE client_order_id='stale-entry'"
++    )).scalar() == "pending_cancel"
++
++
++@pytest.mark.asyncio
++async def test_stale_partially_filled_entry_keeps_bracket_intact(session, adapter):
++    _seed_order(session, "partial-entry", "partially_filled", broker_id="b-partial", filled_qty=0.5)
++    old = int(time.time() * 1000) - (31 * 60 * 1000)
++    session.execute(text(
++        "UPDATE engine_orders SET created_at=:old WHERE client_order_id='partial-entry'"
++    ), {"old": old})
++    session.commit()
++    broker = _broker_order("partial-entry", "partially_filled", "b-partial", 0.5, 100.0)
++    adapter.get_orders.side_effect = lambda **kw: [broker] if kw["status"] == "open" else []
++    adapter.cancel_order = AsyncMock(return_value=True)
++
++    from trader_engine.execution.order_reconciler import reconcile_orders
++    result = await reconcile_orders(session, adapter)
++
++    adapter.cancel_order.assert_not_awaited()
++    assert result.stale_entries_canceled == 0
+ 
+ 
+ @pytest.mark.asyncio

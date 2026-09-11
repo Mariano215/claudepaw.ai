@@ -32,17 +32,12 @@
 // insert_deal fields: id (slug), address, zip, list_price, deal_type, severity, notes
 // Optional: est_arv, est_rehab, est_rent_monthly, est_str_adr, est_str_occupancy
 //
-// notify fields: message (plain text, sent via notify.sh to ALLOWED_CHAT_ID)
+// notify fields: message (plain text, sent to ALLOWED_CHAT_ID via notifyOwner)
 
-import { execFileSync } from 'node:child_process'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { getDb } from '../../db.js'
 import { logger } from '../../logger.js'
+import { notifyOwner } from '../../notify.js'
 import type { PostActHandler } from './index.js'
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const NOTIFY_SH = path.resolve(__dirname, '../../../scripts/notify.sh')
 const PROJECT_ID = 'broker'
 const SOURCE_PAW_ID = 're-property-scout'
 
@@ -172,11 +167,11 @@ export const brokerPropertyPersistHandler: PostActHandler = async (
       }
     } else if (action.type === 'notify' && !notified) {
       try {
-        execFileSync('/bin/bash', [NOTIFY_SH, action.message], { timeout: 10_000 })
+        await notifyOwner(action.message, PROJECT_ID)
         notified = true
         logger.info({ cycleId }, '[broker-property-persist] Telegram notification sent')
       } catch (err) {
-        logger.warn({ cycleId, err }, '[broker-property-persist] notify.sh failed')
+        logger.warn({ cycleId, err }, '[broker-property-persist] notify failed')
       }
     }
   }
@@ -189,10 +184,6 @@ export const brokerPropertyPersistHandler: PostActHandler = async (
   // If agent gave us no notify action but we inserted deals, send a fallback summary
   if (inserted > 0 && !notified) {
     const msg = `Broker Scout (handler): ${inserted} deal${inserted === 1 ? '' : 's'} persisted from cycle ${cycleId.slice(0, 8)}.`
-    try {
-      execFileSync('/bin/bash', [NOTIFY_SH, msg], { timeout: 10_000 })
-    } catch {
-      // Non-fatal
-    }
+    await notifyOwner(msg, PROJECT_ID).catch(() => { /* non-fatal */ })
   }
 }

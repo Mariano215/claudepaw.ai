@@ -79,6 +79,7 @@ function makeApp(db: Database.Database): express.Express {
   app.get('/api/v1/project/:id/editor', requireProjectRole('editor'), (_req, res) => res.json({ ok: true }))
   // Route without :id param to trigger missing-pid 400
   app.get('/api/v1/no-pid/editor', requireProjectRole('editor'), (_req, res) => res.json({ ok: true }))
+  app.post('/api/v1/project-post/editor', requireProjectRole('editor'), (_req, res) => res.json({ ok: true }))
   return app
 }
 
@@ -637,6 +638,30 @@ describe('requireProjectRole middleware', () => {
     })
     expect(res.status).toBe(400)
     expect((res.body as { error: string }).error).toBe('project_id required')
+  })
+
+  it('POST: role is checked against body.project_id, not query', async () => {
+    const res = await httpReq(server, 'POST', '/api/v1/project-post/editor', {
+      headers: { 'x-dashboard-token': editorToken },
+      body: { project_id: 'other' },
+    })
+    expect(res.status).toBe(403)
+  })
+
+  it('POST: query and body that disagree is a 400 (admin)', async () => {
+    const res = await httpReq(server, 'POST', '/api/v1/project-post/editor?project_id=other', {
+      headers: { 'x-dashboard-token': adminToken },
+      body: { project_id: 'pr' },
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('POST: query and body that disagree is a 400 (non-admin)', async () => {
+    const res = await httpReq(server, 'POST', '/api/v1/project-post/editor?project_id=pr', {
+      headers: { 'x-dashboard-token': editorToken },
+      body: { project_id: 'other' },
+    })
+    expect(res.status).toBe(400)
   })
 })
 

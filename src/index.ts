@@ -24,6 +24,9 @@ import os from 'node:os'
 import { runDecaySweep } from './memory.js'
 import { cleanupOldUploads } from './media.js'
 import { initScheduler, stopScheduler } from './scheduler.js'
+import { setPolicySender } from './policy.js'
+import { setPawdevCardSender } from './paws/pawdev/actions.js'
+import { setOutboundSender } from './notify.js'
 import { connectDashboard, disconnectDashboard, reportFeedItem, reportBotHealth, reportPlugins, setDashboardSendFn } from './dashboard.js'
 import { initSecurity } from './security/index.js'
 import { initWebhookDb, startPruneTimer } from './webhooks/index.js'
@@ -211,6 +214,30 @@ function buildChannelManager(): ChannelManager {
     )
   }
 
+  // The policy layer sends its approval keyboard through the same manager as
+  // every other unprompted message (kill switch, quiet hours, channel_log).
+  // Route to the card's own project chat when one is configured (mirrors the
+  // project Telegram bot registration above); fall back to the default chat
+  // id checkAction passes in.
+  setPolicySender((projectId, chatId, text, keyboard) => {
+    const creds = getServiceCredentials(projectId, 'telegram')
+    const projectChatId = creds.allowed_chat_ids
+      ?.split(',').map((s: string) => s.trim()).filter(Boolean)[0]
+    return manager.sendWithKeyboard(
+      manager.getChannelForProject(projectId),
+      projectChatId || chatId,
+      text,
+      keyboard,
+    )
+  })
+
+  // CLI processes have no ChannelManager, so bypass senders (rentcast quota
+  // alert, broker post-ACT notices, the Ollama-down alert, ...) call
+  // notifyOwner and fall back to the routine buffer; once the bot is running,
+  // route them through the same gated exit as everything else.
+  setOutboundSender((channelId, chatId, text, projectId) =>
+    manager.send(channelId, chatId, text, { projectId }))
+
   return manager
 }
 
@@ -395,22 +422,18 @@ async function main(): Promise<void> {
   const PAW_SEND_TIMEOUT_MS = 15_000 // 15 s — Telegram API should respond in < 2 s; anything longer is a hung bot token
   const pawSendFn: import('./paws/types.js').PawSender = async (chatId, text, keyboard, projectId) => {
     const channelId = projectId ? channelManager.getChannelForProject(projectId) : 'telegram'
-    if (keyboard) {
-      const ch = channelManager.getChannel(channelId)
-      if (ch && typeof (ch as any).sendWithKeyboard === 'function') {
-        try {
-          const timeout = new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('sendWithKeyboard timed out')), PAW_SEND_TIMEOUT_MS),
-          )
-          await Promise.race([(ch as any).sendWithKeyboard(chatId, text, keyboard), timeout])
-          return
-        } catch { /* fall through to plain text */ }
-      }
-    }
+    // Always go through ChannelManager. Reaching into the raw channel skipped
+    // the kill-switch gate and wrote no channel_log row, so no approval card
+    // was auditable and a locked system could still send one.
+    // The manager already falls back to plain text when the channel has no
+    // keyboard support or the keyboard send throws.
     const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('channelManager.send timed out')), PAW_SEND_TIMEOUT_MS),
+      setTimeout(() => reject(new Error('paw send timed out')), PAW_SEND_TIMEOUT_MS),
     )
-    await Promise.race([channelManager.send(channelId, chatId, text), timeout])
+    const send = keyboard
+      ? channelManager.sendWithKeyboard(channelId, chatId, text, keyboard)
+      : channelManager.send(channelId, chatId, text)
+    await Promise.race([send, timeout])
   }
 
   // Legacy approval sender kept for scheduled-task paths that still use it.
@@ -424,8 +447,35 @@ async function main(): Promise<void> {
     await pawSendFn(chatId, text, keyboard, projectId)
   }
 
-  initScheduler(sendFn, sendApprovalFn, pawSendFn)
+  // Digest sender bypasses quiet hours; only the scheduler's date-guarded
+  // 08:00 tick uses it (src/scheduler.ts, B4).
+  const sendDigestFn = async (channelId: string, chatId: string, text: string): Promise<void> => {
+    await channelManager.send(channelId, chatId, text, { bypassQuiet: true })
+  }
 
+  initScheduler(sendFn, sendApprovalFn, pawSendFn, sendDigestFn)
+
+  // The builder's merge approval card goes out through the identical
+  // PawSender the routine's own cycle approval uses, never a new Telegram
+  // path (Task 9 fix round 1, item 1).
+  setPawdevCardSender(pawSendFn)
+
+
+  // Forward-only Bitcoin research feed. Independent of engine credentials and
+  // intentionally incapable of creating signals, cohorts, decisions, or orders.
+  try {
+    const {startBitcoinOrderFlowCollector} = await import('./trader/bitcoin-order-flow-collector.js')
+    const {syncTraderTablesToServer} = await import('./trader/server-sync.js')
+    const {registerTraderCollectorTelemetry} = await import('./trader/operational-events.js')
+    startBitcoinOrderFlowCollector(getDb(), {
+      onStatusChange: () => syncTraderTablesToServer(getDb()),
+    })
+    // Trader watchdog collector runs land in the operational ledger. Registered
+    // here so the generic paws engine does not import a trader module.
+    registerTraderCollectorTelemetry(getDb())
+  } catch (err) {
+    logger.warn({err}, 'Failed to init Bitcoin order-flow research collection')
+  }
 
 
 
@@ -442,6 +492,10 @@ async function main(): Promise<void> {
     reportFeedItem('system', 'ClaudePaw shutting down', signal)
     clearInterval(healthInterval)
     stopScheduler()
+    try {
+      const {stopBitcoinOrderFlowCollector} = await import('./trader/bitcoin-order-flow-collector.js')
+      stopBitcoinOrderFlowCollector()
+    } catch { /* collector may have been disabled or failed before initialization */ }
     stopSidecar()
     disconnectDashboard()
     await channelManager.stopAll()

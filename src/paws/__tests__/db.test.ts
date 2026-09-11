@@ -164,4 +164,21 @@ describe('paw_cycles table', () => {
     expect(getPaw(db, 'p1')!.status).toBe('waiting_approval')
     expect(getCycle(db, cycleId)!.phase).toBe('decide')
   })
+
+  it('does not fail a cycle that is waiting for approval, even past maxAgeMs', () => {
+    createPaw(db, { id: 'p-appr', project_id: 'default', name: 'P', agent_id: 'auditor', cron: '0 9 * * *',
+      config: { approval_threshold: 4, chat_id: '1', approval_timeout_sec: 7200 } })
+    const cycleId = createCycle(db, 'p-appr')
+    const state = { observe_raw: '', analysis: null, decisions: null, approval_requested: true,
+      approval_requested_at: Date.now() - 40 * 60 * 1000, approval_granted: null, act_result: null }
+    updateCycle(db, cycleId, { phase: 'decide', state: state as PawCycleState })
+    db.prepare('UPDATE paw_cycles SET started_at = ? WHERE id = ?').run(Date.now() - 45 * 60 * 1000, cycleId)
+    updatePawStatus(db, 'p-appr', 'waiting_approval')
+
+    const out = reapStalePawCycles(db, 30 * 60 * 1000)
+
+    expect(out.cyclesReaped).toBe(0)
+    expect(getCycle(db, cycleId)!.phase).toBe('decide')
+    expect(getPaw(db, 'p-appr')!.status).toBe('waiting_approval')
+  })
 })

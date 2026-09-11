@@ -88,11 +88,14 @@ describe('ollama grace period — alert suppression on restart', () => {
     vi.advanceTimersByTime(60_000)
     await _embedWithProvider('test', 'http://localhost:11434', 'nomic-embed-text', 'ollama')
 
-    // Telegram sendMessage should NOT have been called yet.
-    const telegramCalls = fetchSpy.mock.calls.filter(([url]: [RequestInfo | URL]) =>
-      url.toString().includes('api.telegram.org'),
-    )
-    expect(telegramCalls).toHaveLength(0)
+    // The Ollama outage alert should NOT have been sent yet. Other subsystems
+    // (such as the fallback kill-switch check) may independently alert Telegram.
+    const ollamaAlertCalls = fetchSpy.mock.calls.filter((call: unknown[]) => {
+      const [url, init] = call as [RequestInfo | URL, RequestInit?]
+      return url.toString().includes('api.telegram.org')
+        && String(init?.body).includes('Ollama embedding unreachable')
+    })
+    expect(ollamaAlertCalls).toHaveLength(0)
   })
 
   it('fires Telegram alert after grace window expires', async () => {

@@ -24,9 +24,8 @@
 //   1 — invalid args / missing API key
 //   2 — upstream HTTP error (non-2xx, still logs to call_log)
 
-import { execFile } from 'node:child_process'
-import path from 'node:path'
 import { initDatabase, getDb, checkpointAndCloseDatabase } from './db.js'
+import { notifyOwner } from './notify.js'
 import { getCredential, initCredentialStore } from './credentials.js'
 
 // Cap is configurable via env but defaults to 45 (headroom under the
@@ -151,8 +150,8 @@ function logCall(endpoint: string, query: string, statusCode: number, bytes: num
 // month_key for schema compatibility, but it now holds the period start date
 // (YYYY-MM-DD) rather than YYYY-MM: two billing periods can start in the same
 // calendar month view otherwise, and a truncated key would swallow the second
-// period's alert. The shell-out to notify.sh is fire-and-forget; failures here
-// must never break the CLI's primary contract (returning the Rentcast response).
+// period's alert. notifyOwner is fire-and-forget; failures here must never
+// break the CLI's primary contract (returning the Rentcast response).
 function maybeFireThresholdAlert(callsThisPeriod: number): void {
   if (!ALERT_PCT || ALERT_PCT <= 0) return
   const threshold = Math.ceil(MONTHLY_CAP * ALERT_PCT)
@@ -167,19 +166,12 @@ function maybeFireThresholdAlert(callsThisPeriod: number): void {
     .run(periodKey, threshold, Date.now(), callsThisPeriod)
   if (result.changes === 0) return // already alerted this period at this threshold
 
-  const notifyScript = path.resolve(process.cwd(), 'scripts/notify.sh')
   const remaining = Math.max(0, MONTHLY_CAP - callsThisPeriod)
   const msg = `Rentcast: ${callsThisPeriod}/${MONTHLY_CAP} calls this billing period (since ${periodKey}, >= ${threshold} = ${Math.round(ALERT_PCT * 100)}% cap). ${remaining} remaining before refusal.`
-  // Detach -- never block the CLI on an alert send.
-  try {
-    execFile('/bin/bash', [notifyScript, msg], { timeout: 10_000 }, () => {
-      /* swallow stdout/stderr/exit; the row is already written so we
-         won't retry, but a failed send is acceptable -- the budget gate
-         still protects us regardless of notification delivery. */
-    })
-  } catch {
-    /* notify is best-effort */
-  }
+  // Detach -- never block the CLI on an alert send. The row is already
+  // written so we won't retry; a failed send is acceptable, the budget gate
+  // still protects us regardless of notification delivery.
+  void notifyOwner(msg, 'broker').catch(() => { /* notify is best-effort */ })
 }
 
 function buildQuery(params: Record<string, string | undefined>): string {

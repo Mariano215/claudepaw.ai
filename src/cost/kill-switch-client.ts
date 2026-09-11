@@ -49,6 +49,10 @@ export async function checkKillSwitch(): Promise<KillSwitchInfo | null> {
       headers: { 'x-dashboard-token': token },
     })
 
+    if (!res.ok) {
+      throw new Error(`kill-switch endpoint returned HTTP ${res.status}`)
+    }
+
     const body = await res.json() as { active: boolean; reason?: string; set_at?: number }
     const value: KillSwitchInfo | null = body.active
       ? { reason: body.reason ?? '', set_at: body.set_at ?? 0 }

@@ -358,7 +358,8 @@ function makeSchema(db: Database.Database) {
       archived_at INTEGER,
       last_run_at INTEGER,
       last_run_result TEXT,
-      last_run_session TEXT
+      last_run_session TEXT,
+      external_ref TEXT
     );
     CREATE TABLE IF NOT EXISTS action_item_comments (
       id TEXT PRIMARY KEY,
@@ -383,6 +384,15 @@ function makeSchema(db: Database.Database) {
       direction TEXT NOT NULL,
       content TEXT NOT NULL,
       created_at INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS repo_events (
+      id          TEXT PRIMARY KEY,
+      repo        TEXT NOT NULL,
+      kind        TEXT NOT NULL,
+      ref         TEXT,
+      actor       TEXT NOT NULL,
+      item_id     TEXT,
+      created_at  INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS architecture_decisions (
       id TEXT PRIMARY KEY,
@@ -1455,5 +1465,106 @@ describe('Bot callback endpoints -- requireBotOrAdmin gate', () => {
     // 201 or 404 (if research item not found in mock db) -- either way, 403 is not returned
     expect(res.status).not.toBe(403)
     expect(res.status).not.toBe(401)
+  })
+})
+
+// ===========================================================================
+// N. POST /action-items/sync -- external_ref round trip (Phase 3 Task 4, B7)
+// ===========================================================================
+
+describe('POST /api/v1/action-items/sync -- external_ref carries through', () => {
+  it('syncs an item with external_ref and reads it back on GET /action-items', async () => {
+    const item = {
+      id: 'ai-ext-1',
+      project_id: 'proj-a',
+      title: 'Paw Dev card',
+      description: null,
+      status: 'proposed',
+      priority: 'medium',
+      source: 'pawdev-triage',
+      proposed_by: 'triage',
+      assigned_to: null,
+      executable_by_agent: 0,
+      parent_id: null,
+      target_date: null,
+      created_at: 1000,
+      updated_at: 1000,
+      completed_at: null,
+      archived_at: null,
+      last_run_at: null,
+      last_run_result: null,
+      last_run_session: null,
+      external_ref: JSON.stringify({ issue: 'github:example-org/paw-trader#42' }),
+    }
+
+    const syncRes = await httpReq(server, 'POST', '/api/v1/action-items/sync', {
+      headers: tok(editorToken),
+      body: { project_id: 'proj-a', items: [item], comments: [], events: [] },
+    })
+    expect(syncRes.status).toBe(200)
+
+    const getRes = await httpReq(server, 'GET', '/api/v1/action-items?project_id=proj-a', { headers: tok(editorToken) })
+    expect(getRes.status).toBe(200)
+    const found = (getRes.body as { items: Array<{ id: string; external_ref: string | null }> }).items.find(i => i.id === 'ai-ext-1')
+    expect(found?.external_ref).toBe(item.external_ref)
+  })
+
+  it('syncs an item with no external_ref key at all (pre-migration bot snapshot)', async () => {
+    const item = {
+      id: 'ai-ext-2',
+      project_id: 'proj-a',
+      title: 'Old-shape card',
+      description: null,
+      status: 'proposed',
+      priority: 'medium',
+      source: 'pawdev-triage',
+      proposed_by: 'triage',
+      assigned_to: null,
+      executable_by_agent: 0,
+      parent_id: null,
+      target_date: null,
+      created_at: 2000,
+      updated_at: 2000,
+      completed_at: null,
+      archived_at: null,
+      last_run_at: null,
+      last_run_result: null,
+      last_run_session: null,
+      // external_ref intentionally omitted
+    }
+
+    const syncRes = await httpReq(server, 'POST', '/api/v1/action-items/sync', {
+      headers: tok(editorToken),
+      body: { project_id: 'proj-a', items: [item], comments: [], events: [] },
+    })
+    expect(syncRes.status).toBe(200)
+
+    const getRes = await httpReq(server, 'GET', '/api/v1/action-items?project_id=proj-a', { headers: tok(editorToken) })
+    expect(getRes.status).toBe(200)
+    const found = (getRes.body as { items: Array<{ id: string; external_ref: string | null }> }).items.find(i => i.id === 'ai-ext-2')
+    expect(found?.external_ref).toBeNull()
+  })
+})
+
+// ===========================================================================
+// O. POST /internal/repo-events -- kind validation (Phase 3 Task 4 fix round 1)
+// ===========================================================================
+
+describe('POST /api/v1/internal/repo-events -- kind validation', () => {
+  it('accepts a row with a valid kind', async () => {
+    const res = await httpReq(server, 'POST', '/api/v1/internal/repo-events', {
+      headers: tok(botToken),
+      body: { rows: [{ id: 're-1', repo: 'a/b', kind: 'issue_opened', actor: 'external:someone', created_at: 1 }] },
+    })
+    expect(res.status).toBe(200)
+    expect((res.body as { inserted: number }).inserted).toBe(1)
+  })
+
+  it('rejects a row with an invalid kind', async () => {
+    const res = await httpReq(server, 'POST', '/api/v1/internal/repo-events', {
+      headers: tok(botToken),
+      body: { rows: [{ id: 're-2', repo: 'a/b', kind: 'made_up_kind', actor: 'external:someone', created_at: 1 }] },
+    })
+    expect(res.status).toBe(400)
   })
 })

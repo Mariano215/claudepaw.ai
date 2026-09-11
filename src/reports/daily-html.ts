@@ -4,7 +4,8 @@
 // Uses inline styles and table layout so it renders correctly in Gmail,
 // Apple Mail, Outlook, mobile clients. No external CSS, no web fonts, no JS.
 
-import type { ReportData, ProjectCost, PawFailure, TaskFailure, TopAgent, Anomaly, RemediationRow } from './types.js'
+import type { ReportData, ProjectCost, PawFailure, TaskFailure, TopAgent, Anomaly, RemediationRow, DegradedIntegration } from './types.js'
+import { age as ageLabel, money as reportMoney } from './format.js'
 
 const COLORS = {
   bg: '#0e1220',
@@ -159,7 +160,8 @@ function agentSdkPoolCard(data: ReportData): string {
 
 function costCard(data: ReportData): string {
   const { cost } = data
-  const rows = cost.per_project.map(renderProjectCostRow).join('')
+  const usageHref = dashLink(data, 'usage')
+  const rows = cost.per_project.map((p) => renderProjectCostRow(p, usageHref)).join('')
   const deltaLabel = deltaBadge(cost.today_usd, cost.yesterday_usd)
 
   return `
@@ -212,13 +214,13 @@ function costCard(data: ReportData): string {
 </table>`
 }
 
-function renderProjectCostRow(p: ProjectCost): string {
+function renderProjectCostRow(p: ProjectCost, usageHref: string): string {
   const capBar = p.pct_of_cap === null
     ? `<span style="color:${COLORS.textMuted};font-size:12px;">no cap</span>`
     : renderCapBar(p.pct_of_cap, p.action)
   return `
   <tr style="border-top:1px solid ${COLORS.border};color:${COLORS.text};">
-    <td style="padding:10px 0;">${escapeHtml(p.project_id)}</td>
+    <td style="padding:10px 0;">${linked(usageHref, p.project_id)}</td>
     <td style="padding:10px 0;text-align:right;font-variant-numeric:tabular-nums;">${fmtMoney(p.today)}</td>
     <td style="padding:10px 0;text-align:right;font-variant-numeric:tabular-nums;">${fmtMoney(p.mtd)}</td>
     <td style="padding:10px 0;text-align:right;">${capBar}</td>
@@ -267,7 +269,7 @@ function pawsCard(data: ReportData): string {
   const failures = paws.failed_cycles_24h.length > 0
     ? `<div style="margin-top:14px;border-top:1px solid ${COLORS.border};padding-top:14px;">
         <div style="font-size:12px;color:${COLORS.red};text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Failed cycles (last 24h)</div>
-        ${paws.failed_cycles_24h.map(renderPawFailure).join('')}
+        ${paws.failed_cycles_24h.map((f) => renderPawFailure(f, dashLink(data, 'usage'))).join('')}
        </div>`
     : ''
 
@@ -287,10 +289,10 @@ function pawsCard(data: ReportData): string {
 </table>`
 }
 
-function renderPawFailure(f: PawFailure): string {
+function renderPawFailure(f: PawFailure, usageHref: string): string {
   return `
     <div style="background:${COLORS.bgSoft};padding:10px 14px;border-radius:8px;margin-bottom:8px;border-left:3px solid ${COLORS.red};">
-      <div style="font-size:13px;color:${COLORS.text};font-weight:600;">${escapeHtml(f.paw_id)}</div>
+      <div style="font-size:13px;color:${COLORS.text};font-weight:600;">${linked(usageHref, f.paw_id)}</div>
       <div style="font-size:12px;color:${COLORS.textMuted};margin-top:3px;">${fmtTimestamp(f.failed_at)}</div>
       <div style="font-size:12px;color:${COLORS.textMuted};margin-top:5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(f.error.slice(0, 200))}${f.error.length > 200 ? '...' : ''}</div>
     </div>`
@@ -303,7 +305,7 @@ function tasksCard(data: ReportData): string {
   const failures = scheduled_tasks.failures_24h.length > 0
     ? `<div style="margin-top:14px;">
         <div style="font-size:12px;color:${COLORS.yellow};text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Failures (last 24h)</div>
-        ${scheduled_tasks.failures_24h.map(renderTaskFailure).join('')}
+        ${scheduled_tasks.failures_24h.map((f) => renderTaskFailure(f, dashLink(data, 'usage'))).join('')}
        </div>`
     : `<div style="color:${COLORS.textMuted};font-size:13px;">No scheduled task failures in the last 24h.</div>`
 
@@ -323,12 +325,41 @@ function tasksCard(data: ReportData): string {
 </table>`
 }
 
-function renderTaskFailure(f: TaskFailure): string {
+function renderTaskFailure(f: TaskFailure, usageHref: string): string {
   return `
     <div style="background:${COLORS.bgSoft};padding:10px 14px;border-radius:8px;margin-bottom:8px;border-left:3px solid ${COLORS.yellow};">
-      <div style="font-size:13px;color:${COLORS.text};font-weight:600;">${escapeHtml(f.id)}</div>
+      <div style="font-size:13px;color:${COLORS.text};font-weight:600;">${linked(usageHref, f.id)}</div>
       <div style="font-size:12px;color:${COLORS.textMuted};margin-top:3px;">${escapeHtml(f.project_id)} &nbsp;•&nbsp; ${fmtTimestamp(f.last_run)}</div>
       <div style="font-size:12px;color:${COLORS.textMuted};margin-top:5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(f.error.slice(0, 200))}${f.error.length > 200 ? '...' : ''}</div>
+    </div>`
+}
+
+function degradedIntegrationsCard(data: ReportData): string {
+  const { degraded_integrations } = data
+  if (degraded_integrations.length === 0) return ''
+
+  const integrationsHref = dashLink(data, 'integrations')
+  return `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${COLORS.bgCard};border:1px solid ${COLORS.border};border-radius:12px;margin-bottom:20px;">
+  <tr>
+    <td style="padding:18px 24px;border-bottom:1px solid ${COLORS.border};">
+      <div style="font-size:11px;letter-spacing:1.5px;color:${COLORS.textMuted};text-transform:uppercase;">Degraded Integrations</div>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:20px 24px;">
+      ${degraded_integrations.map((d) => renderDegradedIntegration(d, integrationsHref)).join('')}
+    </td>
+  </tr>
+</table>`
+}
+
+function renderDegradedIntegration(d: DegradedIntegration, integrationsHref: string): string {
+  return `
+    <div style="background:${COLORS.bgSoft};padding:10px 14px;border-radius:8px;margin-bottom:8px;border-left:3px solid ${COLORS.yellow};">
+      <div style="font-size:13px;color:${COLORS.text};font-weight:600;">${linked(integrationsHref, d.platform)}</div>
+      <div style="font-size:12px;color:${COLORS.textMuted};margin-top:3px;">${escapeHtml(d.project_id)} &nbsp;•&nbsp; ${escapeHtml(d.status)}, ${d.attempts} attempts</div>
+      ${d.reason ? `<div style="font-size:12px;color:${COLORS.textMuted};margin-top:5px;">${escapeHtml(d.reason)}</div>` : ''}
     </div>`
 }
 
@@ -512,6 +543,84 @@ function renderAnomaly(a: Anomaly): string {
     </div>`
 }
 
+// Everything across every project waiting on the owner (spec 5.2). Always
+// renders, even empty, so the digest states plainly that nothing is waiting.
+function needsYouCard(data: ReportData): string {
+  const rows = data.needs_you ?? []
+  if (rows.length === 0) {
+    return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;background:${COLORS.bgCard};border:1px solid ${COLORS.border};border-radius:10px;">
+  <tr><td style="padding:16px;">
+    <div style="font-size:15px;font-weight:700;color:${COLORS.text};">Needs you</div>
+    <div style="font-size:13px;color:${COLORS.textMuted};margin-top:6px;">Nothing is waiting on you.</div>
+  </td></tr></table>`
+  }
+  const items = rows.map((r) => {
+    const overdue = r.age_ms >= 12 * 3_600_000
+    const color = overdue ? COLORS.yellow : COLORS.textMuted
+    return `<tr><td style="padding:8px 0;border-top:1px solid ${COLORS.border};">
+      <a href="${escapeHtml(r.url)}" style="color:${COLORS.accent};text-decoration:none;font-weight:600;">${escapeHtml(r.title)}</a>
+      <div style="font-size:12px;color:${color};margin-top:2px;">${escapeHtml(r.project_id)} &nbsp;•&nbsp; waiting ${escapeHtml(ageLabel(r.age_ms))}${overdue ? ' &nbsp;•&nbsp; auto-skipped at 48h' : ''}</div>
+    </td></tr>`
+  }).join('')
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;background:${COLORS.bgCard};border:1px solid ${COLORS.accent};border-radius:10px;">
+  <tr><td style="padding:16px;">
+    <div style="font-size:15px;font-weight:700;color:${COLORS.text};">Needs you (${rows.length})</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">${items}</table>
+  </td></tr></table>`
+}
+
+// Spec 5.2 wants every row to link to the dashboard, not only the needs-you
+// rows. The SPA is a hash router with no per-project URL, so a project row
+// points at the project overview page and the money and failure rows point at
+// the Inbox page that holds their detail.
+const DEFAULT_DASHBOARD_URL = 'http://localhost:3000/#dashboard'
+
+function dashLink(data: ReportData, hash: string): string {
+  const base = (data.dashboard_url || DEFAULT_DASHBOARD_URL).replace(/#.*$/, '').replace(/\/$/, '')
+  return `${base}/#${hash}`
+}
+
+function linked(href: string, label: string): string {
+  return `<a href="${escapeHtml(href)}" style="color:${COLORS.accent};text-decoration:none;">${escapeHtml(label)}</a>`
+}
+
+// What each project did in the window (spec 5.2). Always renders, even empty.
+function handledCard(data: ReportData): string {
+  const rows = data.per_project ?? []
+  if (rows.length === 0) {
+    return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;background:${COLORS.bgCard};border:1px solid ${COLORS.border};border-radius:10px;">
+  <tr><td style="padding:16px;">
+    <div style="font-size:15px;font-weight:700;color:${COLORS.text};">Handled without you</div>
+    <div style="font-size:13px;color:${COLORS.textMuted};margin-top:6px;">Nothing ran.</div>
+  </td></tr></table>`
+  }
+  const projectHref = dashLink(data, 'dashboard')
+  const items = rows.map((p) => `<tr>
+    <td style="padding:8px 0;border-top:1px solid ${COLORS.border};font-size:13px;color:${COLORS.text};">${linked(projectHref, p.project_id)}</td>
+    <td style="padding:8px 0;border-top:1px solid ${COLORS.border};font-size:13px;color:${COLORS.textMuted};">${escapeHtml(p.note)}</td>
+    <td style="padding:8px 0;border-top:1px solid ${COLORS.border};font-size:13px;color:${COLORS.textMuted};text-align:right;">${escapeHtml(reportMoney(p.cost_usd))}</td>
+  </tr>`).join('')
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;background:${COLORS.bgCard};border:1px solid ${COLORS.border};border-radius:10px;">
+  <tr><td style="padding:16px;">
+    <div style="font-size:15px;font-weight:700;color:${COLORS.text};">Handled without you</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">${items}</table>
+  </td></tr></table>`
+}
+
+// Weekly run only (C6, spec 5.2): the roll-up totals across the week. Empty
+// string on a daily report, so it drops out of the body cleanly.
+function thisWeekCard(data: ReportData): string {
+  if (data.period.hours < 168) return ''
+  const cycles = data.per_project.reduce((n, p) => n + p.cycles, 0)
+  const cronTasksRan = data.per_project.reduce((n, p) => n + p.cron_tasks_run, 0)
+  const cardsShipped = data.per_project.reduce((n, p) => n + p.cards_shipped, 0)
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;background:${COLORS.bgCard};border:1px solid ${COLORS.border};border-radius:10px;">
+  <tr><td style="padding:16px;">
+    <div style="font-size:15px;font-weight:700;color:${COLORS.text};">This week</div>
+    <div style="font-size:13px;color:${COLORS.textMuted};margin-top:6px;">Routine cycles: ${cycles}. Cron tasks ran: ${cronTasksRan}. Cards shipped: ${cardsShipped}.</div>
+  </td></tr></table>`
+}
+
 export function renderDailyHtml(data: ReportData): string {
   const generated = fmtTimestamp(data.generated_at)
   const periodLabel = data.period.label
@@ -538,12 +647,16 @@ export function renderDailyHtml(data: ReportData): string {
     </tr>
   </table>
 
+  ${needsYouCard(data)}
+  ${handledCard(data)}
+  ${thisWeekCard(data)}
   ${killSwitchCard(data)}
   ${statusBanner(data)}
   ${agentSdkPoolCard(data)}
   ${costCard(data)}
   ${pawsCard(data)}
   ${tasksCard(data)}
+  ${degradedIntegrationsCard(data)}
   ${providersCard(data)}
   ${topAgentsCard(data)}
   ${topToolsCard(data)}

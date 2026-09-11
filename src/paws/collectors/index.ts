@@ -21,8 +21,11 @@
 //   3. Set `observe_collector: 'my-collector'` on the paw config in DB
 
 import { logger } from '../../logger.js'
-import { competitiveLandscapeCollector } from './competitive-landscape.js'
 import { githubCommunityCollector } from './github-community.js'
+import { githubDevCollector } from './github-dev.js'
+import { securityStatusCollector } from './security-status.js'
+import { foFestivalsCollector } from './fo-festivals.js'
+import { brokerSourcedDealsCollector } from './broker-sourced-deals.js'
 export interface CollectorContext {
   pawId: string
   projectId: string
@@ -42,7 +45,47 @@ export interface CollectorResult {
 
 export type Collector = (ctx: CollectorContext) => Promise<CollectorResult>
 
+/** What an observer is told after every collector run, successful or not. */
+export interface CollectorObservation {
+  collector: string
+  pawId: string
+  projectId: string
+  /** Date.now() when the run started */
+  startedAt: number
+  durationMs: number
+  errorCount: number
+  /** True when the collector threw rather than returning errors */
+  threw: boolean
+}
+
+export type CollectorObserver = (obs: CollectorObservation) => void
+
 const collectors = new Map<string, Collector>()
+const observers: CollectorObserver[] = []
+
+/**
+ * Subscribe to collector completions.
+ *
+ * This exists so project subsystems can record their own telemetry without the
+ * generic paws engine importing them. The trader ledger uses it; previously
+ * src/paws/engine.ts imported src/trader/operational-events.js directly and
+ * branched on a hardcoded project id, which made generic infrastructure depend
+ * on one project.
+ */
+export function registerCollectorObserver(fn: CollectorObserver): void {
+  observers.push(fn)
+}
+
+function notifyObservers(obs: CollectorObservation): void {
+  for (const fn of observers) {
+    try {
+      fn(obs)
+    } catch (err) {
+      // Telemetry must never break data collection.
+      logger.warn({ err, collector: obs.collector }, '[paws] Collector observer threw')
+    }
+  }
+}
 
 export function registerCollector(name: string, fn: Collector): void {
   if (collectors.has(name)) {
@@ -84,10 +127,28 @@ export async function runCollector(
       { collector: name, pawId: ctx.pawId, elapsedMs: Date.now() - started, hasErrors: Boolean(result.errors?.length) },
       '[paws] Collector finished',
     )
+    notifyObservers({
+      collector: name,
+      pawId: ctx.pawId,
+      projectId: ctx.projectId,
+      startedAt: started,
+      durationMs: Date.now() - started,
+      errorCount: result.errors?.length ?? 0,
+      threw: false,
+    })
     return result
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     logger.error({ err, collector: name, pawId: ctx.pawId }, '[paws] Collector threw')
+    notifyObservers({
+      collector: name,
+      pawId: ctx.pawId,
+      projectId: ctx.projectId,
+      startedAt: started,
+      durationMs: Date.now() - started,
+      errorCount: 1,
+      threw: true,
+    })
     return {
       raw_data: null,
       collected_at: Date.now(),
@@ -102,5 +163,7 @@ export async function runCollector(
 // -----------------------------------------------------------------------------
 
 registerCollector('github-community', githubCommunityCollector)
-registerCollector('competitive-landscape', competitiveLandscapeCollector)
+registerCollector('github-dev', githubDevCollector)
+registerCollector('security-status', securityStatusCollector)
+registerCollector('fo-festivals', foFestivalsCollector)
 

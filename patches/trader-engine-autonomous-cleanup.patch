@@ -1,0 +1,404 @@
+--- a/src/trader_engine/execution/order_reconciler.py
++++ b/src/trader_engine/execution/order_reconciler.py
+@@ -50,10 +50,11 @@
+ # network partition). Mirrors RECONCILE_ORPHAN_HORIZON_MS in the TS brain.
+ _ORPHAN_HORIZON_MS = 6 * 3600 * 1000  # 6 hours
+ 
+-# GTC brackets keep their child protection alive across sessions. Bound the
+-# parent-entry lifetime so an unfilled limit cannot become a surprise position
+-# hours or days after its signal. Never auto-cancel a partially filled parent:
+-# broker bracket-leg semantics must remain intact for the position already held.
++# GTC brackets keep their child protection alive across sessions. Bound stale
++# engine-owned orders so they cannot become surprise positions later. Never
++# auto-cancel a partially filled BUY parent: broker bracket-leg semantics must
++# remain intact for the position already held. A stale sell remainder is safe
++# to cancel because leaving it open can oversell the current holding.
+ _GTC_ENTRY_MAX_AGE_MS = 30 * 60 * 1000
+ 
+ 
+@@ -98,7 +99,7 @@
+     local_rows = session.execute(
+         sa.text(
+             "SELECT client_order_id, status, broker_order_id, updated_at, created_at, "
+-            "asset, side, order_type, filled_qty "
++            "asset, side, order_type, filled_qty, decision_id "
+             "FROM engine_orders"
+         )
+     ).fetchall()
+@@ -107,12 +108,18 @@
+     # Resolve uncertain acceptance by stable ID, even after the rolling REST
+     # window has moved on. Absence is never permission to submit a replacement.
+     for coid, row in local_by_coid.items():
+-        if coid not in broker_by_coid and row.status in ('pending', 'unknown'):
++        age_ms = now_ms - int(row.created_at or 0)
++        needs_stable_lookup = row.status in ('pending', 'unknown') or (
++            row.status in _LIVE_LOCAL_STATUSES and age_ms >= _ORPHAN_HORIZON_MS
++        )
++        if coid not in broker_by_coid and needs_stable_lookup:
+             lookup = getattr(adapter, 'get_order_by_client_id', None)
+             if lookup is not None:
+                 order = await lookup(coid)
+                 if isinstance(order, BrokerOrder):
+                     broker_by_coid[coid] = order
++                    if order.status in _LIVE_LOCAL_STATUSES:
++                        open_coids.add(coid)
+ 
+     # 3. Reconcile each broker order into local state.
+     for coid, bo in broker_by_coid.items():
+@@ -120,10 +127,11 @@
+         if (
+             local is not None
+             and coid in open_coids
+-            and local.side == "buy"
+-            and local.order_type == "limit"
+-            and "/" not in local.asset
+-            and float(bo.filled_qty or 0) == 0
++            and not str(local.decision_id or "").startswith("adopted:")
++            and (
++                (local.side == "buy" and float(bo.filled_qty or 0) == 0)
++                or local.side == "sell"
++            )
+             and now_ms - int(local.created_at or 0) >= _GTC_ENTRY_MAX_AGE_MS
+             and bo.broker_order_id
+         ):
+@@ -138,7 +146,7 @@
+                 result.matched += 1
+                 result.stale_entries_canceled += 1
+                 result.anomalies.append(
+-                    f"canceled stale unfilled equity entry {coid} ({local.asset})"
++                    f"canceled stale engine-owned order {coid} ({local.asset})"
+                 )
+                 continue
+         if coid in local_by_coid:
+--- a/src/trader_engine/api/routes/positions.py
++++ b/src/trader_engine/api/routes/positions.py
+@@ -1,11 +1,13 @@
+ from __future__ import annotations
++import re
+ import sys
+ import time
+ import uuid
+ from typing import Any, Generator
+ from fastapi import APIRouter, Depends, HTTPException
+ from pydantic import BaseModel
+-from trader_engine.db.models import EnginePosition, EngineReconcileLog
++from trader_engine.config import settings
++from trader_engine.db.models import EngineOrder, EnginePosition, EngineReconcileLog
+ from trader_engine.db.session import get_session
+ 
+ router = APIRouter()
+@@ -49,6 +51,22 @@
+     reconcile_cleared: bool
+ 
+ 
++class CoverPaperShortOut(BaseModel):
++    asset: str
++    prior_qty: float
++    client_order_id: str | None
++    broker_order_id: str | None
++    status: str
++    submitted: bool
++
++
++_LIVE_ORDER_STATUSES = (
++    "pending", "placed", "unknown", "new", "pending_new", "accepted",
++    "partially_filled", "pending_cancel", "pending_replace",
++)
++_EQUITY_SYMBOL = re.compile(r"^[A-Z][A-Z0-9.-]{0,14}$")
++
++
+ @router.get("/positions", response_model=list[PositionOut])
+ async def list_positions(session: Any = Depends(_session_dep)) -> list[PositionOut]:
+     return [
+@@ -59,6 +77,103 @@
+         )
+         for r in session.query(EnginePosition).all()
+     ]
++
++
++@router.post("/positions/{asset}/cover-paper-short", response_model=CoverPaperShortOut)
++async def cover_paper_short(
++    asset: str,
++    session: Any = Depends(_session_dep),
++) -> CoverPaperShortOut:
++    """Idempotently buy to cover one unexpected Alpaca paper short.
++
++    The caller keeps normal entries blocked until broker quantity reaches zero.
++    Persisting the repair intent before submission plus returning an existing
++    live repair order prevents duplicate covers after retries or transport loss.
++    """
++    symbol = asset.strip().upper()
++    if not _EQUITY_SYMBOL.fullmatch(symbol):
++        raise HTTPException(status_code=422, detail="invalid equity symbol")
++    if not settings.alpaca_paper:
++        raise HTTPException(status_code=403, detail="automatic short covering is paper-only")
++
++    adapter = _get_adapter()
++    broker_positions = await adapter.get_positions()
++    position = next((p for p in broker_positions if p.asset.upper() == symbol), None)
++    prior_qty = float(position.qty) if position is not None else 0.0
++    if prior_qty >= -1e-9:
++        return CoverPaperShortOut(
++            asset=symbol, prior_qty=prior_qty, client_order_id=None,
++            broker_order_id=None, status="already_flat", submitted=False,
++        )
++
++    existing = (
++        session.query(EngineOrder)
++        .filter(
++            EngineOrder.asset == symbol,
++            EngineOrder.side == "buy",
++            EngineOrder.source == "auto-repair",
++            EngineOrder.status.in_(_LIVE_ORDER_STATUSES),
++        )
++        .order_by(EngineOrder.created_at.desc())
++        .first()
++    )
++    if existing is not None:
++        return CoverPaperShortOut(
++            asset=symbol, prior_qty=prior_qty,
++            client_order_id=existing.client_order_id,
++            broker_order_id=existing.broker_order_id,
++            status=existing.status, submitted=False,
++        )
++
++    now_ms = int(time.time() * 1000)
++    client_order_id = f"repair-cover-{uuid.uuid4().hex[:24]}"
++    qty = abs(prior_qty)
++    row = EngineOrder(
++        client_order_id=client_order_id,
++        broker_order_id=None,
++        decision_id=client_order_id,
++        asset=symbol,
++        side="buy",
++        qty=qty,
++        order_type="market",
++        limit_price=None,
++        status="pending",
++        filled_qty=0.0,
++        filled_avg_price=None,
++        source="auto-repair",
++        created_at=now_ms,
++        updated_at=now_ms,
++    )
++    session.add(row)
++    session.commit()
++
++    try:
++        broker_order = await adapter.place_order(
++            client_order_id=client_order_id,
++            asset=symbol,
++            side="buy",
++            qty=qty,
++            order_type="market",
++        )
++    except Exception as exc:
++        row.status = "unknown"
++        row.updated_at = int(time.time() * 1000)
++        session.commit()
++        raise HTTPException(status_code=503, detail="paper short-cover submission uncertain") from exc
++
++    row.broker_order_id = broker_order.broker_order_id
++    row.status = broker_order.status
++    row.filled_qty = float(broker_order.filled_qty or 0)
++    row.filled_avg_price = broker_order.filled_avg_price
++    row.updated_at = broker_order.updated_at or int(time.time() * 1000)
++    session.commit()
++    return CoverPaperShortOut(
++        asset=symbol, prior_qty=prior_qty,
++        client_order_id=client_order_id,
++        broker_order_id=broker_order.broker_order_id,
++        status=broker_order.status,
++        submitted=True,
++    )
+ 
+ 
+ @router.post("/positions/{asset}/adopt-from-broker", response_model=AdoptPositionOut)
+--- a/tests/test_order_reconciler.py
++++ b/tests/test_order_reconciler.py
+@@ -171,6 +171,45 @@
+ 
+ 
+ @pytest.mark.asyncio
++async def test_stale_partial_sell_remainder_is_canceled(session, adapter):
++    _seed_order(session, "partial-sell", "partially_filled", broker_id="b-sell", filled_qty=0.5)
++    session.execute(text(
++        "UPDATE engine_orders SET side='sell', created_at=:old WHERE client_order_id='partial-sell'"
++    ), {"old": int(time.time() * 1000) - (31 * 60 * 1000)})
++    session.commit()
++    broker = _broker_order("partial-sell", "partially_filled", "b-sell", 0.5, 100.0)
++    broker.side = "sell"
++    adapter.get_orders.side_effect = lambda **kw: [broker] if kw["status"] == "open" else []
++    adapter.cancel_order = AsyncMock(return_value=True)
++
++    from trader_engine.execution.order_reconciler import reconcile_orders
++    result = await reconcile_orders(session, adapter)
++
++    adapter.cancel_order.assert_awaited_once_with(broker_order_id="b-sell")
++    assert result.stale_entries_canceled == 1
++
++
++@pytest.mark.asyncio
++async def test_stale_placed_order_uses_stable_lookup_outside_rolling_window(session, adapter):
++    _seed_order(session, "old-placed", "placed", broker_id="b-old")
++    session.execute(text(
++        "UPDATE engine_orders SET created_at=:old WHERE client_order_id='old-placed'"
++    ), {"old": int(time.time() * 1000) - (7 * 3600 * 1000)})
++    session.commit()
++    adapter.get_order_by_client_id.return_value = _broker_order(
++        "old-placed", "canceled", "b-old", 0.0, None,
++    )
++
++    from trader_engine.execution.order_reconciler import reconcile_orders
++    await reconcile_orders(session, adapter)
++
++    adapter.get_order_by_client_id.assert_awaited_once_with("old-placed")
++    assert session.execute(text(
++        "SELECT status FROM engine_orders WHERE client_order_id='old-placed'"
++    )).scalar() == "canceled"
++
++
++@pytest.mark.asyncio
+ async def test_orphaned_pending_stays_unknown_not_deleted(session, adapter):
+     """A local 'pending' row older than the 6h horizon with no broker record
+     -> 'failed', row kept (never deleted -- it is the audit trail)."""
+@@ -209,6 +248,25 @@
+         text("SELECT status FROM engine_orders WHERE client_order_id='coid-c'")
+     ).fetchone()
+     assert row.status == "canceled"
++
++
++@pytest.mark.asyncio
++async def test_stale_open_order_found_by_stable_lookup_is_canceled(session, adapter):
++    _seed_order(session, "old-open", "placed", broker_id="b-open")
++    session.execute(text(
++        "UPDATE engine_orders SET created_at=:old WHERE client_order_id='old-open'"
++    ), {"old": int(time.time() * 1000) - (7 * 3600 * 1000)})
++    session.commit()
++    adapter.get_order_by_client_id.return_value = _broker_order(
++        "old-open", "new", "b-open", 0.0, None,
++    )
++    adapter.cancel_order = AsyncMock(return_value=True)
++
++    from trader_engine.execution.order_reconciler import reconcile_orders
++    result = await reconcile_orders(session, adapter)
++
++    adapter.cancel_order.assert_awaited_once_with(broker_order_id="b-open")
++    assert result.stale_entries_canceled == 1
+     assert session.query(EngineFill).count() == 0
+ 
+ 
+--- a/tests/test_positions_adopt.py
++++ b/tests/test_positions_adopt.py
+@@ -13,8 +13,10 @@
+ from sqlalchemy import create_engine as sqla_engine
+ from sqlalchemy.orm import Session
+ from sqlalchemy.pool import StaticPool
++from unittest.mock import AsyncMock
+ 
+-from trader_engine.db.models import Base, EnginePosition, EngineReconcileLog
++from trader_engine.db.models import Base, EngineOrder, EnginePosition, EngineReconcileLog
++from trader_engine.execution.broker_adapter import BrokerOrder
+ 
+ TOKEN = "t" * 32
+ HEADERS = {"X-Engine-Token": TOKEN}
+@@ -32,9 +34,21 @@
+ class _StubAdapter:
+     def __init__(self, positions):
+         self._positions = positions
++        self.placed = []
+ 
+     async def get_positions(self):
+         return self._positions
++
++    async def place_order(self, **kwargs):
++        self.placed.append(kwargs)
++        now_ms = int(time.time() * 1000)
++        return BrokerOrder(
++            client_order_id=kwargs["client_order_id"], broker_order_id="cover-broker-1",
++            asset=kwargs["asset"], side=kwargs["side"], qty=kwargs["qty"],
++            order_type=kwargs["order_type"], limit_price=None, status="pending_new",
++            filled_qty=0.0, filled_avg_price=None, source="alpaca",
++            created_at=now_ms, updated_at=now_ms,
++        )
+ 
+ 
+ @pytest.fixture
+@@ -61,11 +75,12 @@
+     return mem_session
+ 
+ 
+-def _client(session, monkeypatch, broker_positions):
++def _client(session, monkeypatch, broker_positions, adapter=None):
+     monkeypatch.setenv("ENGINE_AUTH_TOKEN", TOKEN)
+     import trader_engine.api.routes.positions as pos_mod
+     pos_mod._get_session = lambda: session
+-    monkeypatch.setattr(pos_mod, "_get_adapter", lambda: _StubAdapter(broker_positions))
++    adapter = adapter or _StubAdapter(broker_positions)
++    monkeypatch.setattr(pos_mod, "_get_adapter", lambda: adapter)
+     from trader_engine.api.main import create_app
+     return TestClient(create_app())
+ 
+@@ -105,3 +120,62 @@
+     assert resp.json()["adopted"]["qty"] == 0.5
+     row = seeded.query(EnginePosition).filter_by(asset="QQQ").first()
+     assert row is not None and row.qty == 0.5
++
++
++def test_cover_paper_short_persists_one_market_buy(seeded, monkeypatch):
++    adapter = _StubAdapter([_StubBrokerPosition("IWM", -3, 294.16, -879, 3.5)])
++    client = _client(seeded, monkeypatch, adapter._positions, adapter)
++
++    first = client.post("/positions/IWM/cover-paper-short", headers=HEADERS)
++    second = client.post("/positions/IWM/cover-paper-short", headers=HEADERS)
++
++    assert first.status_code == 200
++    assert first.json()["submitted"] is True
++    assert first.json()["prior_qty"] == -3
++    assert second.status_code == 200
++    assert second.json()["submitted"] is False
++    assert second.json()["client_order_id"] == first.json()["client_order_id"]
++    assert len(adapter.placed) == 1
++    assert adapter.placed[0]["side"] == "buy"
++    assert adapter.placed[0]["qty"] == 3
++    row = seeded.query(EngineOrder).filter_by(source="auto-repair").one()
++    assert row.status == "pending_new"
++
++
++def test_cover_short_is_refused_outside_paper_mode(seeded, monkeypatch):
++    import trader_engine.api.routes.positions as pos_mod
++    monkeypatch.setattr(pos_mod.settings, "alpaca_paper", False)
++    client = _client(
++        seeded, monkeypatch,
++        [_StubBrokerPosition("IWM", -3, 294.16, -879, 3.5)],
++    )
++
++    resp = client.post("/positions/IWM/cover-paper-short", headers=HEADERS)
++
++    assert resp.status_code == 403
++
++
++def test_cover_short_requires_engine_auth_and_valid_symbol(seeded, monkeypatch):
++    client = _client(
++        seeded, monkeypatch,
++        [_StubBrokerPosition("IWM", -3, 294.16, -879, 3.5)],
++    )
++
++    assert client.post("/positions/IWM/cover-paper-short").status_code == 401
++    assert client.post("/positions/BAD%24/cover-paper-short", headers=HEADERS).status_code == 422
++
++
++def test_uncertain_cover_submission_is_not_duplicated(seeded, monkeypatch):
++    adapter = _StubAdapter([_StubBrokerPosition("IWM", -3, 294.16, -879, 3.5)])
++    adapter.place_order = AsyncMock(side_effect=RuntimeError("transport lost"))
++    client = _client(seeded, monkeypatch, adapter._positions, adapter)
++
++    first = client.post("/positions/IWM/cover-paper-short", headers=HEADERS)
++    second = client.post("/positions/IWM/cover-paper-short", headers=HEADERS)
++
++    assert first.status_code == 503
++    assert first.json()["detail"] == "paper short-cover submission uncertain"
++    assert second.status_code == 200
++    assert second.json()["submitted"] is False
++    assert second.json()["status"] == "unknown"
++    assert adapter.place_order.await_count == 1

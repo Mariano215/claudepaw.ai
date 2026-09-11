@@ -6,6 +6,8 @@
 //   - Only retries cycles that failed in the last 30 min (no ancient retries)
 //   - Must wait 10+ min after failure before retrying
 //   - No more than 3 retries per paw per 24h
+//   - Never retries a 4xx, unsupported CLI, fetch failed or crash-reaped cycle
+//   - Never retries when the error repeats the previous failed cycle
 //   - Advances next_run to now so the scheduler picks it up on the next tick
 //
 // This is auto-safe: bumping next_run is reversible and cheap.
@@ -27,6 +29,11 @@ const NON_RETRYABLE_ERROR_PATTERNS = [
   /kill switch/i,
   /cost cap/i,
   /refused to run/i,
+  /API Error: 4\d\d/i,
+  /does not support this model/i,
+  /bot crashed mid-cycle/i,
+  /fetch failed/i,
+  /invalid cron/i,
 ]
 
 interface FailedCycleRow {
@@ -36,6 +43,7 @@ interface FailedCycleRow {
   completed_at: number
   error: string | null
   next_run: number
+  previous_error: string | null
 }
 
 function isRetryableError(error: string | null): boolean {
@@ -66,7 +74,10 @@ export const pawRetryRemediation: RemediationDefinition = {
              p.status AS paw_status,
              c.completed_at AS completed_at,
              c.error AS error,
-             p.next_run AS next_run
+             p.next_run AS next_run,
+             (SELECT error FROM paw_cycles prev
+               WHERE prev.paw_id = c.paw_id AND prev.id != c.id AND prev.phase = 'failed'
+               ORDER BY prev.started_at DESC LIMIT 1) AS previous_error
         FROM paw_cycles c
         JOIN latest l ON l.paw_id = c.paw_id AND l.max_started = c.started_at
         JOIN paws p    ON p.id = c.paw_id
@@ -88,6 +99,11 @@ export const pawRetryRemediation: RemediationDefinition = {
     for (const row of rows) {
       if (!isRetryableError(row.error)) {
         skipped.push({ paw_id: row.paw_id, reason: `non-retryable error: ${row.error}` })
+        continue
+      }
+
+      if (row.previous_error && row.error && row.previous_error.slice(0, 120) === row.error.slice(0, 120)) {
+        skipped.push({ paw_id: row.paw_id, reason: 'repeat of previous failure, not retrying' })
         continue
       }
 

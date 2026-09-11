@@ -170,8 +170,8 @@ export async function generateCrossPostCopy(
   const { runAgent } = await import('../agent.js')
   const { getSoul, buildAgentPrompt } = await import('../souls.js')
 
-  // Project-aware soul lookup: default has its own 'producer' agent.
-  const soul = getSoul('producer', projectId)
+  // Project-aware soul lookup: default has its own 'video-producer' agent.
+  const soul = getSoul('video-producer', projectId)
   const systemPrompt = soul ? buildAgentPrompt(soul, projectId) : ''
   const fullPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt
 
@@ -182,7 +182,7 @@ export async function generateCrossPostCopy(
     true,      // guardHarden
     undefined, // onEvent
     { projectId, source: 'social-copywriter' },
-    { projectId, agentId: 'producer' },
+    { projectId, agentId: 'video-producer' },
   )
 
   if (!res.text) {

@@ -2,13 +2,13 @@ import cronParser from 'cron-parser'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { getDueTasks, updateTaskAfterRun, listTasks, getProject, clearStaleRunningTasks, archiveStaleActionItems, purgeArchivedActionItems, getDb, getKvSetting, setKvSetting, getBacklogTasks } from './db.js'
-import { reapStalePawCycles, getBacklogPaws, updatePawNextRun } from './paws/db.js'
+import { reapStalePawCycles, getBacklogPaws, updatePawNextRun, LIVE_CYCLE_MAX_AGE_MS } from './paws/db.js'
 import { reportAgentStatus, reportFeedItem, reportScheduledTasks, reportPawsState } from './dashboard.js'
 import { getAllSouls, getSoul, buildAgentPrompt } from './souls.js'
 import { executeSecurityScan } from './security/index.js'
 import { generateAndSendNewsletter } from './newsletter/index.js'
 import { logger } from './logger.js'
-import { BOT_API_TOKEN, DASHBOARD_URL } from './config.js'
+import { BOT_API_TOKEN, DASHBOARD_URL, ALLOWED_CHAT_ID } from './config.js'
 import { startRequest, recordError } from './telemetry.js'
 import { postEventToServer } from './event-sync.js'
 import { fireTaskCompleted } from './webhooks/index.js'
@@ -17,6 +17,7 @@ import { parseActionItemsFromAgentOutput, ingestParsedItems } from './action-ite
 import { buildExampleCompanyTaskContext } from './projects/example-company/task-context.js'
 import { buildDefaultTaskContext } from './projects/default/task-context.js'
 import { getDuePaws, triggerPaw } from './paws/index.js'
+import { makePawAgentRunner } from './paws/agent-runner.js'
 import { publishDueSocialPosts } from './social/index.js'
 import { checkAndUpgrade } from './system-update.js'
 
@@ -163,6 +164,9 @@ let intervalHandle: ReturnType<typeof setInterval> | null = null
 let credentialSweepHandle: ReturnType<typeof setInterval> | null = null
 let storedSendApproval: ((chatId: string, text: string, pawId: string) => Promise<void>) | undefined
 let storedPawSend: import('./paws/types.js').PawSender | undefined
+/** Bypasses quiet hours (ChannelManager.send with bypassQuiet true), for the 08:00 digest only. */
+type DigestSender = (channelId: string, chatId: string, text: string) => Promise<void>
+let storedSendDigest: DigestSender | undefined
 const runningTasks = new Set<string>()  // per-task lock to prevent overlap
 const runningPaws = new Set<string>()   // per-paw lock to prevent concurrent cycles
 
@@ -226,6 +230,54 @@ function maybeRunAutoPurge(): void {
   }
 }
 
+/**
+ * Advance every task and paw whose next_run is older than the backlog window
+ * instead of firing them. Runs at boot and at the top of every tick so a
+ * sleep/wake or a long kill-switch outage cannot fire the whole day at once.
+ */
+// Gap detector for the backlog skip: only an outage (sleep, kill switch held
+// closed, crash) should advance missed work; a late tick should run it.
+let lastTickAt: number | null = null
+
+export function _resetTickClockForTest(value: number | null): void {
+  lastTickAt = value
+}
+
+function backlogWindowMs(): number {
+  return Number(process.env.SCHEDULER_MAX_BACKLOG_MS ?? '') || 15 * 60 * 1000
+}
+
+export function skipBacklog(): void {
+  try {
+    const windowMs = backlogWindowMs()
+    const backlogTasks = getBacklogTasks(windowMs)
+    for (const task of backlogTasks) {
+      try {
+        const nextRun = task.schedule ? computeNextRun(task.schedule) : Date.now() + windowMs
+        updateTaskAfterRun(task.id, 'skipped (backlog)', nextRun)
+      } catch {
+        // Unparseable cron; push it an hour out so it stops blocking every
+        // other backlog task on this tick instead of aborting the loop.
+        updateTaskAfterRun(task.id, 'skipped (backlog, invalid cron)', Date.now() + 60 * 60 * 1000)
+      }
+    }
+    const backlogPaws = getBacklogPaws(getDb(), windowMs)
+    for (const paw of backlogPaws) {
+      try {
+        updatePawNextRun(getDb(), paw.id, computeNextRun(paw.cron))
+      } catch {
+        // Unparseable cron; leave alone so the operator sees it not firing
+      }
+    }
+    if (backlogTasks.length > 0 || backlogPaws.length > 0) {
+      logger.warn({ tasksSkipped: backlogTasks.length, pawsSkipped: backlogPaws.length, backlogWindowMs: windowMs },
+        'Skipped backlog: advanced next_run to the next future occurrence')
+    }
+  } catch (err) {
+    logger.warn({ err }, 'backlog skip failed (non-fatal)')
+  }
+}
+
 // ── Public API ─────────────────────────────────────────────────────────
 
 /**
@@ -235,6 +287,7 @@ export function initScheduler(
   send: Sender,
   sendApproval?: (chatId: string, text: string, pawId: string) => Promise<void>,
   pawSend?: import('./paws/types.js').PawSender,
+  sendDigest?: DigestSender,
 ): void {
   if (intervalHandle) {
     logger.warn('Scheduler already running — skipping duplicate init')
@@ -243,6 +296,7 @@ export function initScheduler(
 
   storedSendApproval = sendApproval
   storedPawSend = pawSend
+  storedSendDigest = sendDigest
 
   // Clean up tasks stuck in 'running...' from a previous crash/restart
   const cleared = clearStaleRunningTasks()
@@ -266,36 +320,12 @@ export function initScheduler(
 
   // Skip-missed for backlog protection. If the bot was offline for hours (or
   // the Mac was asleep overnight), a naive scheduler fires ALL missed tasks
-  // + Paws at once when it resumes — that's a "thundering herd" of LLM calls
-  // hitting cost caps and rate limits simultaneously. Instead, advance each
-  // backlogged item's next_run to its next future occurrence and log the
-  // skip. Tunable via SCHEDULER_MAX_BACKLOG_MS (default 15 minutes).
-  try {
-    const backlogWindowMs = Number(process.env.SCHEDULER_MAX_BACKLOG_MS ?? '') || 15 * 60 * 1000
-    const backlogTasks = getBacklogTasks(backlogWindowMs)
-    for (const task of backlogTasks) {
-      const nextRun = task.schedule ? computeNextRun(task.schedule) : Date.now() + backlogWindowMs
-      updateTaskAfterRun(task.id, 'skipped (backlog)', nextRun)
-    }
-    const backlogPaws = getBacklogPaws(getDb(), backlogWindowMs)
-    for (const paw of backlogPaws) {
-      try {
-        const nextRun = computeNextRun(paw.cron)
-        updatePawNextRun(getDb(), paw.id, nextRun)
-      } catch {
-        // Unparseable cron — leave alone; operator will notice it's not firing
-      }
-    }
-    if (backlogTasks.length > 0 || backlogPaws.length > 0) {
-      logger.warn({
-        tasksSkipped: backlogTasks.length,
-        pawsSkipped: backlogPaws.length,
-        backlogWindowMs,
-      }, 'Skipped backlog from previous outage — advanced next_run to next future occurrence')
-    }
-  } catch (err) {
-    logger.warn({ err }, 'backlog skip-missed failed (non-fatal)')
-  }
+  // + Paws at once when it resumes, that's a "thundering herd" of LLM calls
+  // hitting cost caps and rate limits simultaneously. skipBacklog() runs here
+  // unconditionally, and again mid-tick only when the gap since the last tick
+  // exceeds the backlog window, so a sleep/wake mid-day is caught but a tick
+  // merely running late is not.
+  skipBacklog()
 
   // Restore archive/purge gate timestamps so restarts don't reset the 12-hour guard
   loadArchiveState()
@@ -304,14 +334,14 @@ export function initScheduler(
 
   logger.info('Scheduler started — polling every 60 s')
   intervalHandle = setInterval(() => {
-    runDueTasks(send).catch((err) => {
+    runDueTasks(send, storedSendDigest).catch((err) => {
       logger.error({ err }, 'Scheduler tick failed')
       recordError('scheduler', 'error', err instanceof Error ? err.message : String(err), err instanceof Error ? err.stack : undefined, { context: 'tick' })
     })
   }, 60_000)
 
   // Run once immediately on startup
-  runDueTasks(send).catch((err) => {
+  runDueTasks(send, storedSendDigest).catch((err) => {
     logger.error({ err }, 'Scheduler initial run failed')
     recordError('scheduler', 'error', err instanceof Error ? err.message : String(err), err instanceof Error ? err.stack : undefined, { context: 'tick' })
   })
@@ -342,7 +372,7 @@ export function stopScheduler(): void {
  * Tasks run concurrently via Promise.allSettled; per-task deduplication is
  * handled by the runningTasks Set to prevent overlap with manual triggers.
  */
-export async function runDueTasks(send: Sender): Promise<void> {
+export async function runDueTasks(send: Sender, sendDigest?: DigestSender): Promise<void> {
   // T3-C: skip the entire tick when kill switch is tripped
   const { checkKillSwitch } = await import('./cost/kill-switch-client.js')
   const sw = await checkKillSwitch()
@@ -374,6 +404,50 @@ export async function runDueTasks(send: Sender): Promise<void> {
       }
     }
   }
+  // Daily digest at 08:00 (America/New_York), gated the same way as the 2am
+  // upgrade: shouldDrainNow's once-per-day check persisted via kv_settings,
+  // so a restart or a lagged tick within the hour does not resend it. Same
+  // ReportData gathers as the email job; the Telegram half plus the routine
+  // buffer drain happen from the bot so they can bypass quiet hours and go
+  // through ChannelManager (B4). The email keeps its own 08:05 launchd job.
+  if (sendDigest && ALLOWED_CHAT_ID) {
+    try {
+      const { shouldDrainNow, LAST_DRAIN_KEY, LAST_DRAIN_ATTEMPT_KEY, flushHeld } =
+        await import('./channels/quiet-hours.js')
+      const lastDrain = Number(getKvSetting(LAST_DRAIN_KEY) ?? 0) || null
+      const lastAttempt = Number(getKvSetting(LAST_DRAIN_ATTEMPT_KEY) ?? 0) || null
+      if (shouldDrainNow(Date.now(), lastDrain, lastAttempt)) {
+        // Recorded before the work, so a failure backs off instead of
+        // rebuilding the report on every 60s tick until midnight.
+        setKvSetting(LAST_DRAIN_ATTEMPT_KEY, String(Date.now()))
+        try {
+          const { gatherReportData, appendWeeklyVerdicts } = await import('./reports/daily-usage-report.js')
+          const { renderDigestText } = await import('./reports/digest-text.js')
+          // Sunday (America/New_York) gets the weekly window (spec 5.3). The
+          // bot process never has DAILY_REPORT_PERIOD_HOURS set (that env var
+          // only exists in the separate weekly launchd job), so this must be
+          // computed here rather than trusting gatherReportData's own default.
+          const weekly = isSundayLocal(Date.now())
+          const data = await gatherReportData(weekly ? 168 : 24)
+          if (weekly) await appendWeeklyVerdicts(data)
+          await sendDigest('telegram', ALLOWED_CHAT_ID, renderDigestText(data))
+          // Only now. Marking the day done before the send meant one failure
+          // cost that day's digest with no retry.
+          setKvSetting(LAST_DRAIN_KEY, String(Date.now()))
+        } catch (err) {
+          logger.error({ err }, 'daily digest send failed')
+        }
+        try {
+          await flushHeld(sendDigest)
+        } catch (err) {
+          logger.error({ err }, 'daily digest buffer drain failed')
+        }
+      }
+    } catch (err) {
+      logger.warn({ err }, 'daily digest tick failed (non-fatal)')
+    }
+  }
+
   // Housekeeping only. A failure here must never stop due tasks from running,
   // so it is caught the same way the reaper below is.
   try {
@@ -387,7 +461,7 @@ export async function runDueTasks(send: Sender): Promise<void> {
   // user never responds gets unstuck within one tick of hitting its configured
   // approval_timeout_sec -- without requiring a bot restart.
   try {
-    const reaped = reapStalePawCycles(getDb())
+    const reaped = reapStalePawCycles(getDb(), LIVE_CYCLE_MAX_AGE_MS)
     if (reaped.cyclesReaped > 0 || reaped.pawsUnstuck > 0) {
       logger.info(reaped, 'Reaper unstuck Paws mid-tick (approval timeout or orphan cycle)')
     }
@@ -395,26 +469,52 @@ export async function runDueTasks(send: Sender): Promise<void> {
     logger.warn({ err }, 'reapStalePawCycles mid-tick failed (non-fatal)')
   }
 
+  // Approved, agent-executable cards. Kept in the same try/catch shape as the
+  // reaper: a card failure must never stop due tasks from running.
+  try {
+    const { runApprovedCards } = await import('./card-runner.js')
+    await runApprovedCards()
+  } catch (err) {
+    logger.warn({ err }, 'card runner tick failed (non-fatal)')
+  }
+
   await executeDueTasks(send)
 }
 
+// ponytail: fixed cap of 3, make it a knob if a project ever needs more parallel runs
+const MAX_PARALLEL_RUNS = 3
+
+async function runLimited<T>(items: T[], fn: (item: T) => Promise<unknown>): Promise<void> {
+  const queue = [...items]
+  const workers = Array.from({ length: Math.min(MAX_PARALLEL_RUNS, queue.length) }, async () => {
+    while (queue.length > 0) {
+      const item = queue.shift()!
+      try { await fn(item) } catch { /* fn logs its own failures */ }
+    }
+  })
+  await Promise.all(workers)
+}
+
 async function executeDueTasks(send: Sender): Promise<void> {
+  const now = Date.now()
+  const gapMs = lastTickAt === null ? Infinity : now - lastTickAt
+  lastTickAt = now
+  if (gapMs > backlogWindowMs()) skipBacklog()
+
   const tasks: ScheduledTask[] = getDueTasks()
 
   if (tasks.length > 0) {
     logger.info({ count: tasks.length }, 'Running due scheduled tasks')
 
-    const taskPromises = tasks
-      .filter((task) => {
-        if (runningTasks.has(task.id)) {
-          logger.info({ taskId: task.id }, 'Skipping due task — already running (manual trigger)')
-          return false
-        }
-        return true
-      })
-      .map((task) => runSingleScheduledTask(task, send))
+    const runnableTasks = tasks.filter((task) => {
+      if (runningTasks.has(task.id)) {
+        logger.info({ taskId: task.id }, 'Skipping due task — already running (manual trigger)')
+        return false
+      }
+      return true
+    })
 
-    await Promise.allSettled(taskPromises)
+    await runLimited(runnableTasks, (task) => runSingleScheduledTask(task, send))
   }
 
   // ── Paws Mode: run due paws ──
@@ -422,42 +522,25 @@ async function executeDueTasks(send: Sender): Promise<void> {
     const duePaws = getDuePaws()
     if (duePaws.length > 0) {
       logger.info({ count: duePaws.length }, 'Running due paws')
-      const pawPromises = duePaws
-        .filter((paw) => {
-          if (runningPaws.has(paw.id)) {
-            logger.info({ pawId: paw.id }, 'Paw already running, skipping')
-            return false
-          }
-          return true
-        })
-        .map(async (paw) => {
-          runningPaws.add(paw.id)
-          try {
-            const { runAgent: importedRunAgent } = await import('./agent.js')
-            const agentRunner = async (prompt: string): Promise<{ text: string | null; emptyReason?: string; resultSubtype?: string }> => {
-              const soul = getSoul(paw.agent_id)
-              let fullPrompt = prompt
-              if (soul) {
-                fullPrompt = `${buildAgentPrompt(soul, paw.project_id)}\n\n---\n\n${prompt}`
-              }
-              const { text, emptyReason, resultSubtype } = await importedRunAgent(fullPrompt, undefined, undefined, undefined, undefined, {
-                projectId: paw.project_id,
-                source: paw.agent_id,
-              }, {
-                projectId: paw.project_id,
-                agentId: paw.agent_id,
-              })
-              return { text, emptyReason, resultSubtype }
-            }
-            await triggerPaw(paw.id, agentRunner, send, storedSendApproval, storedPawSend)
-          } catch (err) {
-            logger.error({ err, pawId: paw.id }, 'Paw cycle failed')
-            recordError('paws', 'error', `Paw "${paw.name}" cycle failed: ${err instanceof Error ? err.message : String(err)}`, err instanceof Error ? err.stack : undefined, { pawId: paw.id })
-          } finally {
-            runningPaws.delete(paw.id)
-          }
-        })
-      await Promise.allSettled(pawPromises)
+      const runnablePaws = duePaws.filter((paw) => {
+        if (runningPaws.has(paw.id)) {
+          logger.info({ pawId: paw.id }, 'Paw already running, skipping')
+          return false
+        }
+        return true
+      })
+      await runLimited(runnablePaws, async (paw) => {
+        runningPaws.add(paw.id)
+        try {
+          const agentRunner = makePawAgentRunner(paw)
+          await triggerPaw(paw.id, agentRunner, send, storedSendApproval, storedPawSend)
+        } catch (err) {
+          logger.error({ err, pawId: paw.id }, 'Paw cycle failed')
+          recordError('paws', 'error', `Paw "${paw.name}" cycle failed: ${err instanceof Error ? err.message : String(err)}`, err instanceof Error ? err.stack : undefined, { pawId: paw.id })
+        } finally {
+          runningPaws.delete(paw.id)
+        }
+      })
       reportPawsState()
     }
   } catch (err) {
@@ -493,7 +576,16 @@ async function runSingleScheduledTask(task: ScheduledTask, send: Sender): Promis
   // Pre-compute next_run so the catch block always has a valid value
   // (previously was initialized to 0, causing permanently stuck tasks
   // if a bypass branch threw after its await)
-  const nextRun = computeNextRun(task.schedule)
+  let nextRun: number
+  try {
+    nextRun = computeNextRun(task.schedule)
+  } catch (err) {
+    runningTasks.delete(task.id)
+    const msg = `ERROR: invalid cron "${task.schedule}": ${err instanceof Error ? err.message : String(err)}`
+    updateTaskAfterRun(task.id, msg, Date.now() + 60 * 60 * 1000)
+    recordError('scheduler', 'error', `Task ${task.id}: ${msg}`, undefined, { taskId: task.id })
+    return
+  }
 
   // Tracker is only set in the general LLM path (bypass paths return early before it's created)
   let tracker: ReturnType<typeof startRequest> | undefined
@@ -520,6 +612,8 @@ async function runSingleScheduledTask(task: ScheduledTask, send: Sender): Promis
       return
     }
 
+    // Kept in Phase 4 (spec 8): deterministic, no LLM, and the only daily
+    // metrics writer the dashboard has.
     // ── Metrics collection bypass: deterministic HTTP call, no LLM ──
     if (task.id === 'metrics-daily-collection') {
       updateTaskAfterRun(task.id, 'running...', nextRun)
@@ -548,7 +642,7 @@ async function runSingleScheduledTask(task: ScheduledTask, send: Sender): Promis
       // nextRun already computed above
       updateTaskAfterRun(task.id, 'running...', nextRun)
 
-      const agentId = 'scout'
+      const agentId = 'content-researcher'
       reportAgentStatus(agentId, 'active', 'Newsletter generation', task.project_id)
       reportFeedItem(agentId, 'Newsletter started', task.id, task.project_id)
 
@@ -880,6 +974,12 @@ export async function runTaskNow(task: ScheduledTask, send: Sender): Promise<voi
  */
 const CRON_TZ = process.env.CRON_TZ || 'America/New_York'
 
+/** True when it is Sunday in CRON_TZ (America/New_York by default). Drives the weekly digest window (spec 5.3). */
+function isSundayLocal(nowMs: number): boolean {
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: CRON_TZ, weekday: 'short' }).format(new Date(nowMs))
+  return weekday === 'Sun'
+}
+
 export function computeNextRun(cronExpression: string): number {
   const now = Date.now()
   const interval = cronParser.parseExpression(cronExpression, { tz: CRON_TZ })
@@ -898,29 +998,20 @@ function mapTaskToAgent(taskId: string, projectSlug?: string): string {
   for (const soul of getAllSouls(projectSlug)) {
     if (taskId.includes(soul.id)) return soul.id
   }
-  // Legacy fallback mappings
+  // Legacy fallback mappings. Only ids that still exist as a scheduled task
+  // belong here; every dead key was removed in the Shell v2 rename pass.
   const legacy: Record<string, string> = {
-    'youtube-trend-scanner': 'scout',
-    'youtube-weekly-pipeline': 'producer',
-    'youtube-linkedin-monitor': 'sentinel',
-    'security-daily-scan': 'auditor',
-    'security-weekly-audit': 'auditor',
-    'newsletter-monday': 'scout',
-    'newsletter-thursday': 'scout',
-    'metrics-daily-collection': 'scout',
-    'daily-backup': 'system',
-    'fop-weekly-briefing': 'researcher',
-    'fop-weekly-grant-scan': 'researcher',
-    'fop-weekly-screenplay-pipeline': 'researcher',
-    'fop-weekly-festival-scan': 'festival-strategist',
+    'security-weekly-audit': 'security-scanner',
+    'metrics-daily-collection': 'content-researcher',
+    'fop-weekly-briefing': 'briefing-researcher',
+    'fop-weekly-grant-scan': 'briefing-researcher',
+    'fop-weekly-screenplay-pipeline': 'briefing-researcher',
     'fop-weekly-content-plan': 'marketing-lead',
     'fop-weekly-social-report': 'social-manager',
-    'fop-weekly-blog-post': 'content-creator',
     'fop-weekly-blog-draft': 'content-creator',
     'fop-social-crossposter': 'social-manager',
     'fop-monthly-newsletter': 'content-creator',
-    'fop-hourly-health-check': 'orchestrator',
-    'fop-board-meeting': 'orchestrator',
+    'fop-board-meeting': 'team-coordinator',
   }
   return legacy[taskId] ?? 'system'
 }

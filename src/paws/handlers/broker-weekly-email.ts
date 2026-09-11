@@ -18,18 +18,16 @@
 // }
 // ```
 //
-// Falls back to a Telegram summary via notify.sh if email fails.
+// Falls back to a Telegram summary via notifyOwner if email fails.
 // If no deals this week, outputs: {"actions":[]} (no email sent, no Telegram).
 
-import { execFileSync } from 'node:child_process'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { sendEmail } from '../../google/gmail.js'
 import { logger } from '../../logger.js'
+import { notifyOwner } from '../../notify.js'
+import { gateEmailSend } from '../../policy-gates.js'
 import type { PostActHandler } from './index.js'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const NOTIFY_SH = path.resolve(__dirname, '../../../scripts/notify.sh')
+const PROJECT_ID = 'broker'
 const RECIPIENT = process.env.DAILY_REPORT_TO || ''
 
 interface SendEmailAction {
@@ -74,7 +72,7 @@ function extractJson(text: string): ActOutput | null {
 export const brokerWeeklyEmailHandler: PostActHandler = async (
   cycleId,
   pawId,
-  _projectId,
+  projectId,
   actOutput,
 ) => {
   logger.info({ cycleId, pawId }, '[broker-weekly-email] Running post-ACT handler')
@@ -88,27 +86,32 @@ export const brokerWeeklyEmailHandler: PostActHandler = async (
   for (const action of parsed.actions) {
     if (action.type === 'send_email') {
       logger.info({ cycleId, subject: action.subject }, '[broker-weekly-email] Sending email')
-      const result = await sendEmail({
-        to: RECIPIENT,
-        subject: action.subject,
-        htmlBody: action.html_body,
-      })
+      const gated = await gateEmailSend(
+        projectId,
+        { to: RECIPIENT, subject: action.subject },
+        () => sendEmail({ to: RECIPIENT, subject: action.subject, htmlBody: action.html_body }),
+      )
+      // A gate refusal (denied or parked) is not a send failure, so it never
+      // falls back to the Telegram notice below. Only a real send failure does.
+      if (gated.kind === 'denied') {
+        logger.warn({ cycleId }, '[broker-weekly-email] Email refused by action policy (email.send = never)')
+        continue
+      }
+      if (gated.kind === 'parked') {
+        logger.warn({ cycleId, cardId: gated.cardId }, '[broker-weekly-email] Email held by action policy')
+        continue
+      }
+      const result = gated.result
       if (result.success) {
         logger.info({ cycleId, messageId: result.messageId }, '[broker-weekly-email] Email sent')
         // Telegram ping on success
-        try {
-          execFileSync('/bin/bash', [NOTIFY_SH, `Broker weekly digest sent to ${RECIPIENT}. ${action.subject}`], { timeout: 10_000 })
-        } catch { /* non-fatal */ }
+        await notifyOwner(`Broker weekly digest sent to ${RECIPIENT}. ${action.subject}`, PROJECT_ID).catch(() => { /* non-fatal */ })
       } else {
         logger.error({ cycleId, err: result.error }, '[broker-weekly-email] Email failed — sending Telegram fallback')
-        try {
-          execFileSync('/bin/bash', [NOTIFY_SH, `Broker weekly digest email failed: ${result.error ?? 'unknown'}. Check dashboard for this week's deals.`], { timeout: 10_000 })
-        } catch { /* non-fatal */ }
+        await notifyOwner(`Broker weekly digest email failed: ${result.error ?? 'unknown'}. Check dashboard for this week's deals.`, PROJECT_ID).catch(() => { /* non-fatal */ })
       }
     } else if (action.type === 'notify') {
-      try {
-        execFileSync('/bin/bash', [NOTIFY_SH, action.message], { timeout: 10_000 })
-      } catch { /* non-fatal */ }
+      await notifyOwner(action.message, PROJECT_ID).catch(() => { /* non-fatal */ })
     }
   }
 }

@@ -4,7 +4,8 @@ import { getDb } from '../db.js'
 import { logger } from '../logger.js'
 import { computeNextRun } from '../scheduler.js'
 import * as pawsDb from './db.js'
-import { runPawCycle, resumePawCycle } from './engine.js'
+import { makePawAgentRunner } from './agent-runner.js'
+import { runPawCycle, resumePawCycle, clampThreshold } from './engine.js'
 import type { Paw, PawConfig, PawCycle, ApprovalSender, PawSender } from './types.js'
 
 type Sender = (chatId: string, text: string) => Promise<void>
@@ -117,24 +118,7 @@ export async function processPawApproval(
   const paw = getPaw(pawId)
   if (!paw) throw new Error(`Paw not found: ${pawId}`)
 
-  const { runAgent } = await import('../agent.js')
-  const { getSoul, buildAgentPrompt } = await import('../souls.js')
-
-  const agentRunner = async (prompt: string): Promise<{ text: string | null; emptyReason?: string; resultSubtype?: string }> => {
-    const soul = paw.agent_id ? getSoul(paw.agent_id) : undefined
-    let fullPrompt = prompt
-    if (soul) {
-      fullPrompt = `${buildAgentPrompt(soul, paw.project_id)}\n\n---\n\n${prompt}`
-    }
-    const { text, emptyReason, resultSubtype } = await runAgent(fullPrompt, undefined, undefined, undefined, undefined, {
-      projectId: paw.project_id,
-      source: paw.agent_id ?? 'paw',
-    }, {
-      projectId: paw.project_id,
-      agentId: paw.agent_id ?? 'paw',
-    })
-    return { text, emptyReason, resultSubtype }
-  }
+  const agentRunner = makePawAgentRunner(paw)
 
   await handleApproval(pawId, approved, agentRunner, send, pawSend)
 }

@@ -176,6 +176,36 @@ describe('runAgent gate enforcement', () => {
   })
 
 
+  it('trader pool-gate outage refuses safely with an availability message', async () => {
+    vi.mocked(costGateMod.getPoolGateStatus).mockResolvedValue({
+      action: 'refuse', spend_usd: 0, cap_usd: 200, percent_of_pool: 0,
+      override_threshold_pct: 80, hardstop_threshold_pct: 95, projected_eom_usd: 0,
+      unavailable: true,
+    })
+
+    const result = await runAgent('trade decision', undefined, undefined, false, undefined, {
+      projectId: 'trader', source: 'committee',
+    })
+
+    expect(result.text).toMatch(/credit-pool gate is unavailable/i)
+    expect(runtime.runAgentWithResolvedExecution).not.toHaveBeenCalled()
+  })
+
+  it('trader project-gate outage refuses safely with an availability message', async () => {
+    vi.mocked(costGateMod.getCostGateStatus).mockResolvedValue({
+      action: 'refuse', percent_of_cap: 0, mtd_usd: 0, today_usd: 0,
+      monthly_cap_usd: null, daily_cap_usd: null, triggering_cap: null,
+      unavailable: true,
+    })
+
+    const result = await runAgent('trade decision', undefined, undefined, false, undefined, {
+      projectId: 'trader', source: 'committee',
+    })
+
+    expect(result.text).toMatch(/project cost gate is unavailable/i)
+    expect(runtime.runAgentWithResolvedExecution).not.toHaveBeenCalled()
+  })
+
   it('pool gate refuse runs BEFORE per-project gate (account exhaust beats project allowance)', async () => {
     // Pool says refuse; project says allow — pool wins.
     vi.mocked(costGateMod.getPoolGateStatus).mockResolvedValue({

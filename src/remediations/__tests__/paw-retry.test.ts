@@ -64,7 +64,7 @@ afterEach(() => {
 
 describe('paw-retry remediation', () => {
   it('retries transient failures by bumping next_run to now', async () => {
-    seedFailedCycle('fetch failed')
+    seedFailedCycle('ECONNRESET while calling engine')
 
     const outcome = await pawRetryRemediation.run({ now: Date.now(), dryRun: false })
 
@@ -75,6 +75,30 @@ describe('paw-retry remediation', () => {
 
   it('skips non-retryable failures like empty responses', async () => {
     seedFailedCycle('Agent returned no text for decide phase. Agent finished successfully but produced an empty result.')
+
+    const outcome = await pawRetryRemediation.run({ now: Date.now(), dryRun: false })
+
+    expect(outcome.acted).toBe(false)
+    expect(outcome.summary).toContain('Skipped 1')
+    expect(getPaw(getDb(), 'retry-paw')!.next_run).toBe(Date.now() + 86_400_000)
+  })
+
+  it('skips deterministic errors: API 4xx, unsupported CLI, bot crashed, fetch failed', async () => {
+    seedFailedCycle('ANALYZE phase failed: Claude Code returned an error result: API Error: 400 Claude Code 2.1.141 does not support this model')
+
+    const outcome = await pawRetryRemediation.run({ now: Date.now(), dryRun: false })
+
+    expect(outcome.acted).toBe(false)
+    expect(getPaw(getDb(), 'retry-paw')!.next_run).toBe(Date.now() + 86_400_000)
+  })
+
+  it('does not retry a failure that repeats the previous failed cycle error', async () => {
+    const db = getDb()
+    seedFailedCycle('ECONNRESET while calling engine')
+    // Older cycle with the same error, completed 25 minutes ago
+    const older = createCycle(db, 'retry-paw')
+    db.prepare('UPDATE paw_cycles SET started_at = ? WHERE id = ?').run(Date.now() - 26 * 60 * 1000, older)
+    updateCycle(db, older, { phase: 'failed', completed_at: Date.now() - 25 * 60 * 1000, error: 'ECONNRESET while calling engine' })
 
     const outcome = await pawRetryRemediation.run({ now: Date.now(), dryRun: false })
 

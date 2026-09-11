@@ -585,12 +585,13 @@ export async function processMessage(
     const {
       text: responseText,
       newSessionId,
-      canary,
-      delimiterID,
       requestedProvider,
       executedProvider,
       providerFallbackApplied,
       emptyReason,
+      blocked,
+      blockReason,
+      blockedLayers,
     } = await runAgent(
       message,
       sessionId,
@@ -615,6 +616,27 @@ export async function processMessage(
       logger.warn({ compositeId, executedProvider }, 'no session id returned, Layer 5 will reconstruct next turn')
     }
 
+    // runAgent already ran the guard's post-process pass (L6 output
+    // validation plus L7 ML output scan) internally; consume its verdict
+    // instead of calling guardChain.postProcess a second time, which would
+    // run the L7 sidecar twice per turn and lose the specific guard
+    // messaging behind the generic "no output" branch below.
+    if (blocked) {
+      logger.warn({
+        layers: blockedLayers,
+        reason: blockReason,
+      }, 'Guard blocked response')
+      reportFeedItem('guard', 'Response BLOCKED', blockReason ?? 'Unknown')
+      fireGuardBlocked({
+        chat_id: compositeId,
+        triggered_layers: blockedLayers ?? [],
+        block_reason: blockReason ?? null,
+        phase: 'post',
+      }, projectId)
+      await channel.send(msg.chatId, GUARD_CONFIG.fallbackResponse)
+      return
+    }
+
     if (!responseText) {
       await channel.send(msg.chatId, `Agent finished with no output: ${emptyReason ?? 'unknown reason'}`)
       return
@@ -627,41 +649,6 @@ export async function processMessage(
     extractAndLogFindings(responseText, dashboardAgent, projectId).catch((err) => {
       logger.warn({ err }, 'Research finding extraction failed')
     })
-
-    // Guard: Post-process (L6-L7) -- validate agent output
-    if (guardResult) {
-      try {
-        const postResult = await guardChain.postProcess(
-          responseText,
-          guardedText,
-          {
-            requestId: guardResult.requestId,
-            canary: canary ?? '',
-            delimiterID: delimiterID ?? '',
-            chatId: msg.chatId,
-          },
-        )
-
-        if (postResult.blocked) {
-          logger.warn({
-            requestId: guardResult.requestId,
-            layers: postResult.triggeredLayers,
-            reason: postResult.blockReason,
-          }, 'Guard blocked response')
-          reportFeedItem('guard', 'Response BLOCKED', postResult.blockReason ?? 'Unknown')
-          fireGuardBlocked({
-            chat_id: compositeId,
-            triggered_layers: postResult.triggeredLayers,
-            block_reason: postResult.blockReason,
-            phase: 'post',
-          }, projectId)
-          await channel.send(msg.chatId, GUARD_CONFIG.fallbackResponse)
-          return
-        }
-      } catch (err) {
-        logger.error({ err }, 'Guard post-process failed, sending response anyway')
-      }
-    }
 
     // 10. Save memory
     try {

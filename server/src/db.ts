@@ -9,7 +9,9 @@ import { PERSONAL_AGENTS, getAgentsForProject } from './agents.js'
 import { runServerMigrations } from './migrations.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const DB_PATH = path.join(__dirname, '..', 'store', 'claudepaw-server.db')
+// SERVER_DB_PATH is a test-harness override (e2e/shell.spec.ts isolates its
+// own run into a temp file); production never sets it.
+const DB_PATH = process.env.SERVER_DB_PATH || path.join(__dirname, '..', 'store', 'claudepaw-server.db')
 const TELEMETRY_DB_PATH = path.join(__dirname, '..', 'store', 'telemetry.db')
 const REPO_BOT_DB_PATH = path.join(__dirname, '..', '..', 'store', 'claudepaw.db')
 const LEGACY_BOT_DB_PATH = path.join(__dirname, '..', 'store', 'claudepaw.db')
@@ -71,6 +73,10 @@ export function ensureActionItemsResearchLink(dbh: Database.Database): void {
     dbh.exec(`ALTER TABLE action_items ADD COLUMN research_item_id TEXT DEFAULT NULL`)
   }
   dbh.exec(`CREATE INDEX IF NOT EXISTS idx_action_items_research ON action_items(research_item_id)`)
+  // Paw Dev, spec 6.3. GitHub reference plus branch and PR url, as JSON.
+  if (!hasColumn(dbh, 'action_items', 'external_ref')) {
+    dbh.exec(`ALTER TABLE action_items ADD COLUMN external_ref TEXT DEFAULT NULL`)
+  }
 }
 
 function ensureBotProjectLifecycleSchema(dbh: Database.Database): void {
@@ -89,6 +95,12 @@ function ensureBotProjectLifecycleSchema(dbh: Database.Database): void {
   }
   if (!hasColumn(dbh, 'projects', 'auto_archive_days')) {
     dbh.exec(`ALTER TABLE projects ADD COLUMN auto_archive_days INTEGER`)
+  }
+  // Shell v2: a workspace is either a plain project or a Paw (a project with
+  // an autonomy engine). The frontend used to infer this from the slug.
+  if (!hasColumn(dbh, 'projects', 'kind')) {
+    dbh.exec(`ALTER TABLE projects ADD COLUMN kind TEXT NOT NULL DEFAULT 'project' CHECK(kind IN ('project','paw'))`)
+    dbh.exec(`UPDATE projects SET kind = 'paw' WHERE id IN ('trader', 'broker')`)
   }
   if (!hasColumn(dbh, 'project_settings', 'execution_provider')) {
     dbh.exec(`ALTER TABLE project_settings ADD COLUMN execution_provider TEXT`)
@@ -155,6 +167,7 @@ interface CanonicalProject {
   display_name: string
   icon?: string | null
   status?: 'active' | 'paused' | 'archived'
+  kind?: 'project' | 'paw'
   settings?: CanonicalProjectSettings
 }
 interface CanonicalProjectsManifest {
@@ -228,9 +241,9 @@ function seedCanonicalProjects(dbh: Database.Database): void {
 
   const insertProject = dbh.prepare(`
     INSERT OR IGNORE INTO projects (
-      id, name, slug, display_name, icon, status, created_at, updated_at,
+      id, name, slug, display_name, icon, status, kind, created_at, updated_at,
       paused_at, archived_at, auto_archive_days
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   const insertSettings = settingsExists
     ? dbh.prepare(`
@@ -252,6 +265,7 @@ function seedCanonicalProjects(dbh: Database.Database): void {
         proj.display_name,
         proj.icon ?? null,
         proj.status ?? 'active',
+        proj.kind ?? 'project',
         now,
         now,
         null,
@@ -962,7 +976,7 @@ export function initDatabase(): Database.Database {
       pipeline TEXT DEFAULT '' CHECK(pipeline IN ('','idea','draft','scheduled','live','considering','analyzed','passed','offer')),
       competitor TEXT DEFAULT '',
       notes TEXT DEFAULT '',
-      found_by TEXT DEFAULT 'scout',
+      found_by TEXT DEFAULT 'content-researcher',
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -1263,6 +1277,38 @@ export function initDatabase(): Database.Database {
       UNIQUE (remediation_id, started_at)
     );
     CREATE INDEX IF NOT EXISTS idx_remediations_started ON remediations(started_at DESC);
+
+    -- Paw Dev history log: mirrored from the bot via POST /api/v1/internal/repo-events.
+    -- Bot is the source of truth; this is a read-only cache for the dashboard.
+    CREATE TABLE IF NOT EXISTS repo_events (
+      id          TEXT PRIMARY KEY,
+      repo        TEXT NOT NULL,
+      kind        TEXT NOT NULL,
+      ref         TEXT,
+      actor       TEXT NOT NULL,
+      item_id     TEXT,
+      created_at  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_repo_events_repo_time ON repo_events(repo, created_at);
+
+    -- Action audit log: mirrored from the bot via POST /api/v1/internal/action-audit.
+    -- Bot is the source of truth; this is a read-only cache for the dashboard.
+    CREATE TABLE IF NOT EXISTS action_audit (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts_ms         INTEGER NOT NULL,
+      project_id    TEXT    NOT NULL,
+      actor         TEXT    NOT NULL,
+      action_class  TEXT    NOT NULL,
+      decision      TEXT    NOT NULL,
+      policy_value  TEXT    NOT NULL,
+      ref_table     TEXT,
+      ref_id        TEXT,
+      payload_hash  TEXT,
+      bot_row_id    INTEGER,
+      synced_at     INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (project_id, ts_ms, action_class, actor)
+    );
+    CREATE INDEX IF NOT EXISTS idx_action_audit_ts ON action_audit(ts_ms DESC);
 
     -- =====================================================================
     -- Paw Broker (project_id='broker') domain tables.
@@ -2366,7 +2412,7 @@ export function upsertResearchItem(item: Record<string, unknown>): void {
   const pipeline = (item.pipeline ?? '') as string
   const competitor = (item.competitor ?? '') as string
   const notes = (item.notes ?? '') as string
-  const foundBy = (item.found_by ?? item.foundBy ?? 'scout') as string
+  const foundBy = (item.found_by ?? item.foundBy ?? 'content-researcher') as string
   const projectId = (item.project_id ?? item.projectId ?? 'default') as string
   const now = Date.now()
   const createdAt = (item.created_at ?? item.createdAt ?? now) as number
@@ -2636,6 +2682,7 @@ export interface Project {
   display_name: string
   icon: string | null
   status: 'active' | 'paused' | 'archived'
+  kind?: 'project' | 'paw'
   created_at: number
   updated_at: number
   paused_at: number | null

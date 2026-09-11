@@ -18,7 +18,7 @@ import {
   sendMessage, getMessagesForAgent, markDelivered, markCompleted, getRecentMessages,
   addFeedItem, getRecentFeed,
   recordMetric, getMetrics,
-  getDb, getBotDb, getBotDbWrite,
+  getDb, getServerDb, getBotDb, getBotDbWrite,
   upsertSecurityFinding, getSecurityFindings, updateSecurityFindingStatus,
   recordSecurityScan, getSecurityScans,
   upsertSecurityScore, getSecurityScore,
@@ -175,6 +175,7 @@ interface ActionItemRow {
   last_run_at: number | null
   last_run_result: string | null
   last_run_session: string | null
+  external_ref: string | null
 }
 
 interface ActionItemCommentRow {
@@ -757,7 +758,7 @@ function resolveAgentFilePath(id: string): string | null {
   const projectsDir = join(PROJECT_ROOT, 'projects')
   if (existsSync(projectsDir)) {
     for (const dir of readdirSync(projectsDir, { withFileTypes: true })) {
-      if (!dir.isDirectory()) continue
+      if (!dir.isDirectory() || dir.name.startsWith('_')) continue
       const hit = safeExists(join(projectsDir, dir.name, 'agents', `${id}.md`))
       if (hit) return hit
     }
@@ -1157,6 +1158,11 @@ router.get('/health', (_req: Request, res: Response) => {
     connected_clients: getConnectedClients(),
     warnings,
     timestamp: Date.now(),
+    // Boolean only, never a filesystem path: present when SERVER_DB_PATH is
+    // set (an e2e-only test harness override), so e2e/shell.spec.ts can
+    // confirm it landed on its own isolated temp DBs. Never set in
+    // production.
+    ...(process.env.SERVER_DB_PATH ? { db_isolated: true } : {}),
   })
 })
 
@@ -1221,6 +1227,88 @@ router.post('/internal/remediations', requireBotOrAdmin, (req: Request, res: Res
     inserted++
   }
   res.json({ ok: true, inserted })
+})
+
+// Bot mirror for repo_events. Same contract as /internal/remediations: the bot
+// owns the row, the server keeps a copy so the History page can read it.
+// Mirrors src/repo-events.ts RepoEventKind. Kept as a local list rather than an
+// import: the server does not otherwise import from the bot's src/ tree.
+const REPO_EVENT_KINDS = new Set([
+  'issue_opened', 'issue_closed', 'pr_opened', 'pr_merged',
+  'ci_failed', 'ci_fixed', 'mirror_synced', 'reply_posted',
+])
+
+router.post('/internal/repo-events', requireBotOrAdmin, (req: Request, res: Response) => {
+  const body = req.body
+  const rows = Array.isArray(body?.rows) ? body.rows : Array.isArray(body) ? body : [body]
+
+  const hasRequiredFields = (r: Record<string, unknown>): boolean =>
+    Boolean(r?.id && r?.repo && r?.kind && r?.actor) && typeof r.created_at === 'number'
+
+  for (const r of rows) {
+    if (hasRequiredFields(r) && !REPO_EVENT_KINDS.has(r.kind as string)) {
+      return res.status(400).json({ error: `invalid kind: ${r.kind}` })
+    }
+  }
+
+  const stmt = getDb().prepare(
+    `INSERT OR IGNORE INTO repo_events (id, repo, kind, ref, actor, item_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  )
+  let inserted = 0
+  for (const r of rows) {
+    if (!hasRequiredFields(r)) continue
+    stmt.run(r.id, r.repo, r.kind, r.ref ?? null, r.actor, r.item_id ?? null, r.created_at)
+    inserted++
+  }
+  res.json({ ok: true, inserted })
+})
+
+interface IncomingActionAudit {
+  ts_ms?: number
+  project_id?: string
+  actor?: string
+  action_class?: string
+  decision?: string
+  policy_value?: string
+  ref_table?: string | null
+  ref_id?: string | null
+  payload_hash?: string | null
+  bot_row_id?: number | null
+}
+
+router.post('/internal/action-audit', requireBotOrAdmin, (req: Request, res: Response) => {
+  const body = req.body
+  const rows: IncomingActionAudit[] = Array.isArray(body?.rows)
+    ? body.rows
+    : Array.isArray(body)
+      ? body
+      : [body]
+
+  const stmt = getDb().prepare(`
+    INSERT INTO action_audit
+      (ts_ms, project_id, actor, action_class, decision, policy_value, ref_table, ref_id, payload_hash, bot_row_id, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (project_id, ts_ms, action_class, actor) DO UPDATE SET
+      decision = excluded.decision,
+      policy_value = excluded.policy_value,
+      ref_table = excluded.ref_table,
+      ref_id = excluded.ref_id,
+      payload_hash = excluded.payload_hash,
+      bot_row_id = excluded.bot_row_id,
+      synced_at = excluded.synced_at
+  `)
+  const now = Date.now()
+  let auditInserted = 0
+  for (const r of rows) {
+    if (typeof r?.ts_ms !== 'number' || !r.project_id || !r.actor || !r.action_class || !r.decision || !r.policy_value) continue
+    stmt.run(
+      r.ts_ms, r.project_id, r.actor, r.action_class, r.decision, r.policy_value,
+      r.ref_table ?? null, r.ref_id ?? null, r.payload_hash ?? null, r.bot_row_id ?? null, now,
+    )
+    auditInserted++
+  }
+  res.json({ ok: true, inserted: auditInserted })
 })
 
 // --- Health Report (mirror of daily email, for the dashboard Health page) ---
@@ -1724,7 +1812,7 @@ router.post('/research', requireProjectRole('editor'), (req: Request, res: Respo
     return
   }
   upsertResearchItem(body)
-  addFeedItem(body.found_by as string ?? 'scout', 'research_added', `New research: ${(body.topic as string).slice(0, 80)}`)
+  addFeedItem(body.found_by as string ?? 'content-researcher', 'research_added', `New research: ${(body.topic as string).slice(0, 80)}`)
   res.status(201).json(getResearchItem(body.id as string))
 })
 
@@ -1919,7 +2007,7 @@ router.post(
 
   bdb.prepare(`
     INSERT INTO action_items (id, project_id, title, description, priority, status, source, proposed_by, research_item_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 'medium', 'todo', 'research', 'scout', ?, ?, ?)
+    VALUES (?, ?, ?, ?, 'medium', 'todo', 'research', 'content-researcher', ?, ?, ?)
   `).run(
     actionItemId,
     projectId,
@@ -2390,6 +2478,242 @@ router.get('/projects/:id', requireProjectRead('id'), (req: Request, res: Respon
   }
   const settings = getProjectSettingsById(id)
   res.json({ ...project, settings })
+})
+
+// Shell v2 section 3.6. One call per workspace switch (and one poll while a
+// Paw is open) answers: is this a Paw, what is its engine doing, and the one
+// number that matters for that kind. Cycle and mode come from the bot DB;
+// the broker deal count reads getServerDb() (the same source the Deals page
+// reads) since `deals` is a server-owned table, not a bot-DB one. A null
+// `number` for trader (no NAV snapshot yet, e.g. freshly deployed) is
+// expected and the frontend renders the badge without it.
+router.get('/projects/:id/paw-state', requireProjectRead('id'), (req: Request, res: Response) => {
+  const id = param(req, 'id')
+  const bdb = getBotDb()
+  if (!bdb) { res.status(503).json({ error: 'bot database unavailable' }); return }
+
+  const proj = bdb.prepare('SELECT id, kind FROM projects WHERE id = ?').get(id) as
+    { id: string; kind: string | null } | undefined
+  if (!proj) { res.status(404).json({ error: 'Project not found' }); return }
+
+  const kind = proj.kind === 'paw' ? 'paw' : 'project'
+  const now = Date.now()
+  if (kind !== 'paw') {
+    res.json({
+      is_paw: false, kind, mode: null, phase: null,
+      cycle_id: null, number: null, label: null, updated_at: now,
+    })
+    return
+  }
+
+  const cycle = bdb.prepare(`
+    SELECT c.id AS cycle_id, c.phase AS phase, c.started_at AS started_at,
+           c.completed_at AS completed_at, p.status AS paw_status
+      FROM paw_cycles c
+      JOIN paws p ON p.id = c.paw_id
+     WHERE p.project_id = ?
+     ORDER BY c.started_at DESC, c.rowid DESC
+     LIMIT 1
+  `).get(id) as
+    { cycle_id: string; phase: string; started_at: number; completed_at: number | null; paw_status: string } | undefined
+
+  const phase = !cycle
+    ? null
+    : cycle.paw_status === 'waiting_approval'
+      ? 'WAITING'
+      : String(cycle.phase).toUpperCase()
+
+  let mode: string | null = null
+  let number: number | null = null
+  let label: string | null = null
+
+  if (id === 'trader') {
+    label = 'NAV'
+    try {
+      const row = bdb.prepare("SELECT value FROM kv_settings WHERE key = 'trader.progress.last'")
+        .get() as { value: string } | undefined
+      const snapshot = row ? JSON.parse(row.value) as { mode?: string } : null
+      mode = snapshot?.mode === 'live' ? 'LIVE' : snapshot?.mode === 'paper' ? 'PAPER' : null
+    } catch { mode = null }
+    try {
+      const nav = bdb.prepare('SELECT account_nav FROM trader_pnl_snapshots ORDER BY date DESC LIMIT 1')
+        .get() as { account_nav: number } | undefined
+      number = nav && Number.isFinite(nav.account_nav) ? nav.account_nav : null
+    } catch { number = null }
+  } else if (id === 'broker') {
+    label = 'deals in pipeline'
+    try {
+      const open = getServerDb().prepare(
+        `SELECT COUNT(*) AS c FROM deals
+          WHERE project_id = ? AND status IN ('sourced','under-review','under-contract')`,
+      ).get(id) as { c: number }
+      number = open.c
+    } catch { number = null }
+  } else {
+    // Spec 3.6: the Dev badge shows the work parked on the owner. A card is
+    // `blocked` exactly when a pull request is open and merge is waiting.
+    label = 'PRs waiting on you'
+    try {
+      const row = bdb.prepare(
+        `SELECT COUNT(*) AS c FROM action_items WHERE project_id = ? AND status = 'blocked'`,
+      ).get(id) as { c: number }
+      number = row.c
+    } catch { number = 0 }
+  }
+
+  res.json({
+    is_paw: true,
+    kind,
+    mode,
+    phase,
+    cycle_id: cycle?.cycle_id ?? null,
+    number,
+    label,
+    updated_at: cycle?.completed_at ?? cycle?.started_at ?? now,
+  })
+})
+
+// Shell v2 Task 4: the Activity page's Audit tab. action_audit is a
+// read-only cache mirrored from the bot (see server/src/db.ts); the bot is
+// the source of truth.
+router.get(
+  '/action-audit',
+  requireProjectRole('viewer', (req) => (req.query.project_id as string) || null),
+  (req: Request, res: Response) => {
+    const projectId = req.query.project_id as string | undefined
+    if (!projectId) {
+      res.status(400).json({ error: 'project_id is required' })
+      return
+    }
+    const rows = getServerDb().prepare(
+      `SELECT ts_ms, project_id, actor, action_class, decision, policy_value, ref_table, ref_id
+         FROM action_audit
+        WHERE project_id = ?
+        ORDER BY ts_ms DESC
+        LIMIT 200`,
+    ).all(projectId)
+    res.json(rows)
+  },
+)
+
+type NeedsYouRow = { kind: string; title: string; project_id: string; url: string; age_ms: number }
+
+// Shell v2 section 3.3. The single cross-project queue of things waiting on
+// the owner. Shared by /needs-you/count (badge + capped preview rows) and
+// /needs-you (the full row list the page renders for every reader).
+// Scoped by the caller's readable projects: null means admin (no filter).
+function collectNeedsYou(
+  bdb: ReturnType<typeof getBotDb>,
+  allowedProjectIds: string[] | null,
+  perKindLimit: number,
+): { rows: NeedsYouRow[]; count: Record<'approvals' | 'cards' | 'trader_decisions' | 'failures' | 'stale_integrations', number> } {
+  // ponytail: "since last view" is a rolling 24 hours, not a per-user
+  // watermark. Add a watermark table only if the owner asks for one.
+  const since = Date.now() - 24 * 60 * 60 * 1000
+  const scoped = Array.isArray(allowedProjectIds)
+  const ids = scoped ? allowedProjectIds : []
+  const placeholders = ids.map(() => '?').join(', ')
+  const filter = (column: string) =>
+    scoped ? (ids.length ? ` AND ${column} IN (${placeholders})` : ' AND 1 = 0') : ''
+  const args = (extra: unknown[] = []) => (scoped && ids.length ? [...extra, ...ids] : extra)
+  // For a query where the filter's placeholders sit before a trailing LIMIT ?.
+  const argsThenLimit = (extra: unknown[] = [], limit: number) =>
+    (scoped && ids.length ? [...extra, ...ids, limit] : [...extra, limit])
+
+  const rows: NeedsYouRow[] = []
+  const now = Date.now()
+  const count = { approvals: 0, cards: 0, trader_decisions: 0, failures: 0, stale_integrations: 0 }
+
+  const push = (kind: string, title: string, projectId: string, url: string, at: number) => {
+    rows.push({ kind, title, project_id: projectId, url, age_ms: Math.max(0, now - at) })
+  }
+
+  try {
+    const approvals = bdb!.prepare(
+      `SELECT id, project_id, name FROM paws WHERE status = 'waiting_approval'${filter('project_id')} LIMIT ?`,
+    ).all(...argsThenLimit([], perKindLimit)) as Array<{ id: string; project_id: string; name: string }>
+    count.approvals = approvals.length
+    approvals.forEach(p => push('approval', p.name + ' is waiting on you', p.project_id, '#automations', now))
+  } catch { /* paws table missing on a fresh DB */ }
+
+  try {
+    const cardCount = bdb!.prepare(
+      `SELECT COUNT(*) as n FROM action_items WHERE status = 'proposed'${filter('project_id')}`,
+    ).get(...args()) as { n: number }
+    count.cards = cardCount.n
+    const cards = bdb!.prepare(
+      `SELECT id, project_id, title, created_at FROM action_items
+        WHERE status = 'proposed'${filter('project_id')}
+        ORDER BY created_at DESC LIMIT ?`,
+    ).all(...argsThenLimit([], perKindLimit)) as Array<{ id: string; project_id: string; title: string; created_at: number }>
+    cards.forEach(c => push('card', c.title, c.project_id, '#work', c.created_at))
+  } catch { /* action_items missing */ }
+
+  if (!scoped || ids.includes('trader')) {
+    try {
+      // Terminal states per DECISION_STATUS in src/trader/order-lifecycle.ts.
+      // server/ has its own rootDir and cannot import that file, so this
+      // list is kept in sync by hand; do not add a status DECISION_STATUS
+      // does not define, or a stuck decision could silently drop off this badge.
+      const TERMINAL = ['executed', 'closed', 'failed', 'committee_abstain']
+      const open = bdb!.prepare(
+        `SELECT id, asset, decided_at FROM trader_decisions
+          WHERE status NOT IN (${TERMINAL.map(() => '?').join(', ')})
+          ORDER BY decided_at DESC LIMIT ?`,
+      ).all(...TERMINAL, perKindLimit) as Array<{ id: string; asset: string; decided_at: number }>
+      count.trader_decisions = open.length
+      open.forEach(d => push('trader_decision', 'Decision open on ' + d.asset, 'trader', '#trader', d.decided_at))
+    } catch { /* trader_decisions missing */ }
+  }
+
+  try {
+    const failed = bdb!.prepare(
+      `SELECT id, project_id, last_run FROM scheduled_tasks
+        WHERE last_run IS NOT NULL AND last_run >= ? AND last_result IS NOT NULL
+          AND (
+            last_result LIKE '%Agent error%'
+            OR last_result LIKE '%agent returned%'
+            OR last_result LIKE '%TIMEOUT%'
+            OR last_result LIKE '%timed out%'
+            OR last_result LIKE '%error_during_execution%'
+            OR last_result LIKE '%rate_limit%'
+            OR last_result LIKE '%exceeded%cap%'
+          )${filter('project_id')}
+        ORDER BY last_run DESC LIMIT ?`,
+    ).all(...argsThenLimit([since], perKindLimit)) as Array<{ id: string; project_id: string; last_run: number }>
+    count.failures = failed.length
+    failed.forEach(t => push('failure', t.id + ' failed', t.project_id ?? 'default', '#activity', t.last_run))
+  } catch { /* scheduled_tasks missing */ }
+
+  try {
+    const stale = getDegradedMetricHealth().filter(
+      m => !scoped || ids.includes(m.project_id),
+    )
+    count.stale_integrations = stale.length
+    stale.forEach(m => push('stale_integration', m.platform + ' is ' + m.status, m.project_id, '#integrations', m.last_check))
+  } catch { /* metric_health missing */ }
+
+  return { rows, count }
+}
+
+router.get('/needs-you/count', (req: Request, res: Response) => {
+  const { allowedProjectIds } = resolveProjectScope(req)
+  const bdb = getBotDb()
+  if (!bdb) { res.status(503).json({ error: 'bot database unavailable' }); return }
+  const { rows, count } = collectNeedsYou(bdb, allowedProjectIds, 50)
+  const total = count.approvals + count.cards + count.trader_decisions + count.failures + count.stale_integrations
+  res.json({ total, by_kind: count, rows })
+})
+
+// The Needs you page's row list, for every reader (member scoped to their
+// projects, admin sees all). Newest first, 200 max overall.
+router.get('/needs-you', (req: Request, res: Response) => {
+  const { allowedProjectIds } = resolveProjectScope(req)
+  const bdb = getBotDb()
+  if (!bdb) { res.status(503).json({ error: 'bot database unavailable' }); return }
+  const { rows } = collectNeedsYou(bdb, allowedProjectIds, 200)
+  rows.sort((a, b) => a.age_ms - b.age_ms)
+  res.json({ rows: rows.slice(0, 200) })
 })
 
 router.post('/projects', requireAdmin, (req: Request, res: Response) => {
@@ -3111,18 +3435,17 @@ router.get('/graph', requireAdmin, (req: Request, res: Response) => {
     linkMemory: 'rgba(167,139,250,0.25)',
   }
 
-  // --- keyword map: patterns in task id/prompt -> agent id ---
+  // keyword map: patterns in a task id or prompt -> agent id.
+  // Only live souls appear here; the rename pass dropped every dead key.
   const agentKeywords: Record<string, string[]> = {
-    auditor: ['security', 'audit', 'scan', 'npm-audit', 'tailscale-health', 'vulnerability', 'auditor'],
-    scout: ['trend', 'research', 'youtube-trend', 'content scout', 'topic', 'scout'],
-    producer: ['video', 'pipeline', 'producer', 'production', 'youtube-weekly'],
-    social: ['linkedin', 'social', 'engagement', 'post'],
-    sentinel: ['monitor', 'mention', 'alert', 'sentinel'],
-    analyst: ['analytics', 'metric', 'performance', 'analyst'],
-    brand: ['brand', 'newsletter', 'asymmetry'],
-    advocate: ['advocate', 'devil', 'challenge'],
-    builder: ['builder', 'deploy', 'backup', 'infrastructure', 'build'],
-    qa: ['test', 'quality', 'review', 'qa'],
+    'security-scanner':    ['security', 'audit', 'scan', 'npm-audit', 'tailscale-health', 'vulnerability'],
+    'content-researcher':  ['trend', 'research', 'youtube-trend', 'topic', 'newsletter'],
+    'video-producer':      ['video', 'producer', 'production', 'youtube-weekly'],
+    'social-writer':       ['linkedin', 'social', 'engagement', 'post'],
+    'signal-analyst':      ['signal', 'trader', 'strategy'],
+    'platform-developer':  ['deploy', 'backup', 'infrastructure', 'build'],
+    triage:                ['triage', 'issue', 'classify', 'label'],
+    reviewer:              ['review', 'diff', 'port', 'contributor'],
   }
 
   function matchAgent(text: string): string | null {
@@ -3197,7 +3520,7 @@ router.get('/graph', requireAdmin, (req: Request, res: Response) => {
     }
   } catch (err) { logger.warn({ err }, 'graph query failed') }
 
-  // 4. Security findings -- connect to auditor, fall back to project
+  // 4. Security findings -- connect to security-scanner, fall back to project
   try {
     const findings = pid
       ? db.prepare('SELECT id, scanner_id, severity, title, status, target FROM security_findings WHERE project_id = ? ORDER BY rowid DESC LIMIT 100').all(pid) as Array<{ id: number; scanner_id: string; severity: string; title: string; status: string; target: string }>
@@ -3208,7 +3531,7 @@ router.get('/graph', requireAdmin, (req: Request, res: Response) => {
       nodes.push({ id: nid, type: 'finding', label: f.title?.substring(0, 35) || `Finding #${f.id}`, color: C.finding, val: sevSize, meta: { severity: f.severity, status: f.status, target: f.target, scanner: f.scanner_id } })
       nodeIds.add(nid)
 
-      // All findings connect to auditor (or via scanner_id keyword match)
+      // All findings connect to security-scanner (or via scanner_id keyword match)
       const agentId = matchAgent(f.scanner_id || 'security')
       if (agentId && nodeIds.has(`agent:${agentId}`)) {
         links.push({ source: `agent:${agentId}`, target: nid, rel: 'found', color: C.linkFinding, width: 1 })
@@ -3884,6 +4207,40 @@ router.get('/action-items', (req: Request, res: Response) => {
   res.json({ items })
 })
 
+// Paw Dev History page. Scoped like /action-items above: resolveProjectScope
+// reads project_id from the query string directly (B5), since middleware that
+// only reads req.params cannot see it.
+router.get('/repo-events', (req: Request, res: Response) => {
+  const { allowedProjectIds } = resolveProjectScope(req)
+  if (Array.isArray(allowedProjectIds) && !allowedProjectIds.includes('pawdev')) {
+    return res.json({ events: [], stats: [] })
+  }
+
+  const repo = typeof req.query.repo === 'string' ? req.query.repo : undefined
+  const sinceParam = Number(req.query.since_ms)
+  const sinceMs = Number.isFinite(sinceParam) ? sinceParam : Date.now() - 30 * 24 * 60 * 60 * 1000
+  const limitParam = Number(req.query.limit)
+  const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 1000) : 200
+
+  const where = ['created_at >= ?']
+  const params: unknown[] = [sinceMs]
+  if (repo) { where.push('repo = ?'); params.push(repo) }
+
+  const events = getDb().prepare(
+    `SELECT * FROM repo_events WHERE ${where.join(' AND ')} ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+  ).all(...params, limit)
+
+  const stats = getDb().prepare(
+    `SELECT repo, kind,
+            CASE WHEN actor LIKE 'external:%' THEN 'external' ELSE 'self' END AS actor_class,
+            COUNT(*) AS n
+       FROM repo_events WHERE created_at >= ?
+      GROUP BY repo, kind, actor_class ORDER BY repo, kind`,
+  ).all(sinceMs)
+
+  res.json({ events, stats, since_ms: sinceMs })
+})
+
 router.get(
   '/action-items/:id',
   requireProjectRoleForResource('viewer', (id) => {
@@ -3952,12 +4309,12 @@ router.post('/action-items/sync', requireProjectRole('editor'), (req: Request, r
         (id, project_id, title, description, status, priority, source, proposed_by,
          assigned_to, executable_by_agent, parent_id, target_date,
          created_at, updated_at, completed_at, archived_at,
-         last_run_at, last_run_result, last_run_session)
+         last_run_at, last_run_result, last_run_session, external_ref)
       VALUES
         (@id, @project_id, @title, @description, @status, @priority, @source, @proposed_by,
          @assigned_to, @executable_by_agent, @parent_id, @target_date,
          @created_at, @updated_at, @completed_at, @archived_at,
-         @last_run_at, @last_run_result, @last_run_session)
+         @last_run_at, @last_run_result, @last_run_session, @external_ref)
     `)
     const insertComment = bdb.prepare(`
       INSERT INTO action_item_comments (id, item_id, author, body, created_at)
@@ -3968,7 +4325,24 @@ router.post('/action-items/sync', requireProjectRole('editor'), (req: Request, r
       VALUES (@id, @item_id, @actor, @event_type, @old_value, @new_value, @created_at)
     `)
 
-    for (const item of items) insertItem.run(item)
+    // A bot still on pre-migration code sends items without newer optional
+    // columns at all; better-sqlite3 throws "Missing named parameter" on an
+    // absent key, so every nullable column gets a default before binding.
+    const normalizeItem = (item: ActionItemRow): ActionItemRow => ({
+      ...item,
+      description: item.description ?? null,
+      assigned_to: item.assigned_to ?? null,
+      parent_id: item.parent_id ?? null,
+      target_date: item.target_date ?? null,
+      completed_at: item.completed_at ?? null,
+      archived_at: item.archived_at ?? null,
+      last_run_at: item.last_run_at ?? null,
+      last_run_result: item.last_run_result ?? null,
+      last_run_session: item.last_run_session ?? null,
+      external_ref: item.external_ref ?? null,
+    })
+
+    for (const item of items) insertItem.run(normalizeItem(item))
     for (const comment of comments) insertComment.run(comment)
     for (const event of events) insertEvent.run(event)
   })
@@ -4015,18 +4389,19 @@ router.post('/action-items', requireProjectRole('editor'), (req: Request, res: R
     last_run_at: null,
     last_run_result: null,
     last_run_session: null,
+    external_ref: null,
   }
   bdb.prepare(`
     INSERT INTO action_items
       (id, project_id, title, description, status, priority, source, proposed_by,
        assigned_to, executable_by_agent, parent_id, target_date,
        created_at, updated_at, completed_at, archived_at,
-       last_run_at, last_run_result, last_run_session)
+       last_run_at, last_run_result, last_run_session, external_ref)
     VALUES
       (@id, @project_id, @title, @description, @status, @priority, @source, @proposed_by,
        @assigned_to, @executable_by_agent, @parent_id, @target_date,
        @created_at, @updated_at, @completed_at, @archived_at,
-       @last_run_at, @last_run_result, @last_run_session)
+       @last_run_at, @last_run_result, @last_run_session, @external_ref)
   `).run(item)
   bdb.prepare(`INSERT INTO action_item_events (id, item_id, actor, event_type, old_value, new_value, created_at)
                VALUES (?, ?, ?, 'created', NULL, ?, ?)`).run(

@@ -51,12 +51,13 @@ const STATUS_CLASSES = ['online', 'active', 'idle', 'sleeping'];
 let AGENT_NAME_TO_ID = {};
 
 const TEMPLATE_ICON_MAP = {
-  scout: 'search', producer: 'clapperboard', qa: 'check-circle',
-  social: 'megaphone', sentinel: 'eye', analyst: 'bar-chart-3',
-  brand: 'target', advocate: 'scale', auditor: 'shield-check',
-  builder: 'hammer', researcher: 'book-open', 'content-creator': 'pen-tool',
-  critic: 'message-square-warning', 'marketing-lead': 'trending-up',
-  orchestrator: 'git-branch', 'social-manager': 'share-2',
+  'content-researcher': 'search', 'ecosystem-researcher': 'search', 'briefing-researcher': 'book-open',
+  'listing-finder': 'search', 'video-producer': 'clapperboard', 'test-reviewer': 'check-circle',
+  'social-writer': 'megaphone', 'social-manager': 'share-2', 'signal-analyst': 'bar-chart-3',
+  'brand-strategist': 'target', 'security-scanner': 'shield-check', 'metric-healer': 'activity',
+  'platform-developer': 'hammer', 'content-creator': 'pen-tool', 'marketing-lead': 'trending-up',
+  'team-coordinator': 'git-branch', 'orchestrator': 'git-branch', 'deal-analyzer': 'home',
+  'community-manager': 'users', 'repo-maintainer': 'wrench', 'api-monitor': 'radio',
 };
 function templateIcon(templateId) {
   return TEMPLATE_ICON_MAP[templateId] || 'bot';
@@ -145,6 +146,11 @@ async function fetchProjects() {
       else localStorage.removeItem('cp_project');
     }
 
+    // The workspace is settled (restored, auto-selected in
+    // renderProjectSelector, or left as All Projects) -- safe to let the
+    // ownership gate start enforcing and to replay a bookmarked deep link.
+    finishInitialNav();
+
     // First agent fetch -- runs AFTER project restore so agents match the active project.
     await fetchAgentStatuses();
     // Full data refresh for all project-scoped pages.
@@ -155,6 +161,11 @@ async function fetchProjects() {
     if (typeof renderProjectsPage === 'function') renderProjectsPage();
   } catch (e) {
     console.warn('Failed to fetch projects:', e);
+  } finally {
+    // The workspace is settled (restored, auto-selected, or left as All
+    // Projects) either way -- safe to let the ownership gate start
+    // enforcing and to replay a deep link. No-op after the first call.
+    finishInitialNav();
   }
 }
 
@@ -200,27 +211,39 @@ function renderProjectSelector() {
     dropdown.appendChild(allBtn);
   }
 
-  // Individual projects
-  for (const p of activeProjects) {
-    const btn = document.createElement('button');
-    btn.className = 'project-selector__option' + (currentProject.id === p.id ? ' active' : '');
-    btn.dataset.projectId = p.id;
-    btn.dataset.projectSlug = p.slug;
+  // Individual projects, grouped Projects / Paws by projects.kind.
+  [
+    { label: 'Projects', kind: 'project' },
+    { label: 'Paws', kind: 'paw' },
+  ].forEach((group) => {
+    const members = activeProjects.filter(p => (p.kind === 'paw' ? 'paw' : 'project') === group.kind);
+    if (!members.length) return;
+    const groupLabel = document.createElement('span');
+    groupLabel.className = 'project-selector__group';
+    groupLabel.textContent = group.label;
+    dropdown.appendChild(groupLabel);
 
-    const [icon, name] = makeProjectOption(p.icon || 'folder', p.display_name);
-    btn.appendChild(icon);
-    btn.appendChild(name);
+    for (const p of members) {
+      const btn = document.createElement('button');
+      btn.className = 'project-selector__option' + (currentProject.id === p.id ? ' active' : '');
+      btn.dataset.projectId = p.id;
+      btn.dataset.projectSlug = p.slug;
 
-    if (p.primary_color) {
-      const dot = document.createElement('span');
-      dot.className = 'project-option__dot';
-      dot.style.background = p.primary_color;
-      btn.appendChild(dot);
+      const [icon, name] = makeProjectOption(p.icon || 'folder', p.display_name);
+      btn.appendChild(icon);
+      btn.appendChild(name);
+
+      if (p.primary_color) {
+        const dot = document.createElement('span');
+        dot.className = 'project-option__dot';
+        dot.style.background = p.primary_color;
+        btn.appendChild(dot);
+      }
+
+      btn.addEventListener('click', () => selectProject(p));
+      dropdown.appendChild(btn);
     }
-
-    btn.addEventListener('click', () => selectProject(p));
-    dropdown.appendChild(btn);
-  }
+  });
 
   // Activate Lucide icons in the dropdown
   if (typeof lucide !== 'undefined') lucide.createIcons({ attrs: { class: 'project-option__icon' }, nameAttr: 'data-lucide' });
@@ -266,8 +289,8 @@ function selectProject(project, opts) {
   // Apply project theme colors
   applyProjectTheme(currentProject.settings);
 
-  // Apply per-project sidebar page visibility
-  applyPageVisibility(currentProject.slug, currentProject.settings && currentProject.settings.page_overrides);
+  // Apply the Paw-only sidebar group for this workspace
+  applySidebar(currentProject);
 
   // Update header subtitle
   const subtitle = document.querySelector('.header-subtitle');
@@ -373,70 +396,6 @@ function hexToRgb(hex) {
   };
 }
 
-function applyThemeToRoot(theme) {
-  const root = document.documentElement;
-  if (!theme || !theme.colors) return;
-
-  // Apply color variables
-  for (const [key, cssVar] of Object.entries(THEME_CSS_MAP)) {
-    if (theme.colors[key]) {
-      root.style.setProperty(cssVar, theme.colors[key]);
-    }
-  }
-
-  // Derive accent opacity variants from the accent hex
-  const accent = theme.colors.accent;
-  if (accent && accent.startsWith('#')) {
-    const { r, g, b } = hexToRgb(accent);
-    root.style.setProperty('--accent-faint', `rgba(${r},${g},${b},0.03)`);
-    root.style.setProperty('--accent-subtle', `rgba(${r},${g},${b},0.10)`);
-    root.style.setProperty('--accent-medium', `rgba(${r},${g},${b},0.28)`);
-    root.style.setProperty('--accent-strong', `rgba(${r},${g},${b},0.60)`);
-    root.style.setProperty('--accent-grid', `rgba(${r},${g},${b},0.010)`);
-    // Also set dim/glow/soft if not in theme already
-    if (!theme.colors.accentDim) root.style.setProperty('--accent-dim', `rgba(${r},${g},${b},0.13)`);
-    if (!theme.colors.accentGlow) root.style.setProperty('--accent-glow', `rgba(${r},${g},${b},0.32)`);
-    if (!theme.colors.accentSoft) root.style.setProperty('--accent-soft', `rgba(${r},${g},${b},0.07)`);
-  }
-
-  // Derive dim variants for semantic colors
-  ['magenta', 'cyan', 'green', 'amber', 'red', 'purple'].forEach(name => {
-    const hex = theme.colors[name];
-    if (hex && hex.startsWith('#')) {
-      const { r, g, b } = hexToRgb(hex);
-      root.style.setProperty('--' + name + '-dim', `rgba(${r},${g},${b},0.13)`);
-    }
-  });
-
-  // Apply font overrides
-  if (theme.fonts) {
-    if (theme.fonts.heading) root.style.setProperty('--font-heading', theme.fonts.heading);
-    if (theme.fonts.body) root.style.setProperty('--font-body', theme.fonts.body);
-    if (theme.fonts.mono) root.style.setProperty('--font-mono', theme.fonts.mono);
-  }
-
-  // Apply gradient overrides
-  if (theme.gradients) {
-    if (theme.gradients.card) root.style.setProperty('--card-gradient', theme.gradients.card);
-    if (theme.gradients.cardHover) root.style.setProperty('--card-gradient-hover', theme.gradients.cardHover);
-  }
-
-  // Apply shadow overrides
-  if (theme.shadows) {
-    if (theme.shadows.card) root.style.setProperty('--shadow-card', theme.shadows.card);
-    if (theme.shadows.hover) root.style.setProperty('--shadow-hover', theme.shadows.hover);
-    if (theme.shadows.glow) root.style.setProperty('--shadow-glow', theme.shadows.glow);
-  }
-
-  // Apply sidebar and header backgrounds directly
-  const sidebar = document.querySelector('.sidebar-nav');
-  const header = document.querySelector('.header-bar');
-  if (sidebar && theme.colors.sidebarBg) sidebar.style.background = theme.colors.sidebarBg;
-  if (header && theme.colors.headerBg) header.style.background = theme.colors.headerBg;
-
-  // Store active theme id for settings page
-  root.dataset.activeTheme = theme.id || '';
-}
 
 function clearThemeOverrides() {
   const root = document.documentElement;
@@ -467,65 +426,19 @@ function applyProjectTheme(settings) {
   // Stash settings so we can reapply when switching back from light mode
   window._currentProjectSettings = settings;
 
-  // Clear previous overrides first
+  // Strip anything a previous build set inline, then set the accent only.
   clearThemeOverrides();
 
-  if (!settings) return;
-
-  // In light mode, don't apply dark theme inline styles (CSS handles it)
+  // In light mode, CSS handles the palette; no inline overrides.
   if (document.documentElement.getAttribute('data-theme') === 'light') return;
 
-  // If a theme_id is set, apply the full theme
-  if (settings.theme_id) {
-    const theme = getThemeById(settings.theme_id);
-    if (theme) {
-      applyThemeToRoot(theme);
-
-      // Then apply any per-project color overrides on top
-      const root = document.documentElement;
-      if (settings.primary_color) {
-        root.style.setProperty('--accent', settings.primary_color);
-        const { r, g, b } = hexToRgb(settings.primary_color);
-        root.style.setProperty('--accent-dim', `rgba(${r},${g},${b},0.13)`);
-        root.style.setProperty('--accent-glow', `rgba(${r},${g},${b},0.32)`);
-        root.style.setProperty('--accent-soft', `rgba(${r},${g},${b},0.07)`);
-        root.style.setProperty('--accent-faint', `rgba(${r},${g},${b},0.03)`);
-        root.style.setProperty('--accent-subtle', `rgba(${r},${g},${b},0.10)`);
-        root.style.setProperty('--accent-medium', `rgba(${r},${g},${b},0.28)`);
-        root.style.setProperty('--accent-strong', `rgba(${r},${g},${b},0.60)`);
-        root.style.setProperty('--border-color', `rgba(${r},${g},${b},0.14)`);
-      }
-      if (settings.accent_color) root.style.setProperty('--cyan', settings.accent_color);
-      if (settings.sidebar_color) {
-        document.querySelector('.sidebar-nav')?.style.setProperty('background', settings.sidebar_color);
-      }
-      return;
-    }
-  }
-
-  // Fallback: derive a full color scheme from project colors without a named theme
+  const theme = settings && settings.theme_id ? getThemeById(settings.theme_id) : null;
+  const tokens = shellAccentTokens(shellAccentFor(settings, theme));
   const root = document.documentElement;
-  if (settings.primary_color) {
-    const { r, g, b } = hexToRgb(settings.primary_color);
-    root.style.setProperty('--accent', settings.primary_color);
-    root.style.setProperty('--accent-dim', `rgba(${r},${g},${b},0.13)`);
-    root.style.setProperty('--accent-glow', `rgba(${r},${g},${b},0.32)`);
-    root.style.setProperty('--accent-soft', `rgba(${r},${g},${b},0.07)`);
-    root.style.setProperty('--accent-faint', `rgba(${r},${g},${b},0.03)`);
-    root.style.setProperty('--accent-subtle', `rgba(${r},${g},${b},0.10)`);
-    root.style.setProperty('--accent-medium', `rgba(${r},${g},${b},0.28)`);
-    root.style.setProperty('--accent-strong', `rgba(${r},${g},${b},0.60)`);
-    root.style.setProperty('--border-color', `rgba(${r},${g},${b},0.14)`);
-    root.style.setProperty('--card-gradient', `linear-gradient(135deg, rgba(${r},${g},${b},0.04) 0%, transparent 60%)`);
-    root.style.setProperty('--card-gradient-hover', `linear-gradient(135deg, rgba(${r},${g},${b},0.07) 0%, transparent 60%)`);
-    root.style.setProperty('--shadow-hover', `0 0 0 1px rgba(${r},${g},${b},0.3), 0 4px 24px rgba(0,0,0,0.4), 0 0 32px rgba(${r},${g},${b},0.06)`);
-    root.style.setProperty('--shadow-glow', `0 0 8px rgba(${r},${g},${b},0.13), 0 0 24px rgba(${r},${g},${b},0.05)`);
-  }
-  if (settings.accent_color) root.style.setProperty('--cyan', settings.accent_color);
-  if (settings.sidebar_color) {
-    const sidebar = document.querySelector('.sidebar-nav');
-    if (sidebar) sidebar.style.background = settings.sidebar_color;
-  }
+  Object.keys(tokens).forEach(function(name) {
+    root.style.setProperty(name, tokens[name]);
+  });
+  root.dataset.activeTheme = (settings && settings.theme_id) || '';
 }
 
 function toggleProjectDropdown(forceState) {
@@ -596,14 +509,6 @@ async function refreshWithProjectFilter() {
   fetchYouTubeData();
   fetchAnalyticsMetrics();
   fetchSocialMetrics();
-  // Update pipeline preview on dashboard
-  renderPipelinePreview();
-  const pipelineTitle = document.querySelector('[data-component="pipeline-preview"] .section-title');
-  if (pipelineTitle) {
-    pipelineTitle.textContent = (currentProject.id && currentProject.display_name !== 'All Projects')
-      ? currentProject.display_name + ' -- Pipeline'
-      : 'Task Pipeline';
-  }
   // Re-fetch page-specific data for currently visible page
   const activePage = document.querySelector('section.page:not([hidden])');
   if (activePage) {
@@ -611,14 +516,13 @@ async function refreshWithProjectFilter() {
     if (pageId === 'page-costs') initCostsPage();
     if (pageId === 'page-health') initHealthPage();
     if (pageId === 'page-pipeline') initPipelinePage();
-    if (pageId === 'page-research') { initResearchPage(); renderResearchUpcoming(); }
+    if (pageId === 'page-research') { initResearchPage(); }
     if (pageId === 'page-board') initBoardPage();
     if (pageId === 'page-comms') initCommsPage();
     if (pageId === 'page-logging') initLoggingPage();
     if (pageId === 'page-credentials') refreshCredentialsPage();
     if (pageId === 'page-agents') fetchAgentStatuses();
     if (pageId === 'page-action-plan') initActionPlanPage();
-    if (pageId === 'page-performance') { fetchYouTubeData(); fetchAnalyticsMetrics(); fetchSocialMetrics(); }
     if (pageId === 'page-webhooks') fetchWebhooks();
     if (pageId === 'page-plugins') fetchPlugins();
     if (pageId === 'page-graph') { fetchGraphData(); }
@@ -873,6 +777,14 @@ async function connectWebSocket() {
       if (msg.type === 'paws-update') {
         if (!currentProject.id || !msg.project_id || msg.project_id === currentProject.id) fetchPaws();
       }
+      if (msg.type === 'trader-update') {
+        if (msg.project_id === 'trader' && typeof refreshTraderOperationalEvents === 'function') {
+          refreshTraderOperationalEvents(true);
+        }
+      }
+      if (msg.type === 'registered' && typeof refreshTraderOperationalEvents === 'function') {
+        refreshTraderOperationalEvents(false);
+      }
       if (msg.type === 'action_item_update') {
         if (!currentProject.id || !msg.project_id || msg.project_id === currentProject.id) {
           document.dispatchEvent(new CustomEvent('action-item-ws-update', { detail: msg }));
@@ -941,6 +853,10 @@ async function connectWebSocket() {
         }
       }
       if (msg.type === 'test-update') TestRunner.handleWsUpdate(msg.data);
+      if (msg.type === 'project_settings_sync') {
+        refreshPawBadge();
+        return;
+      }
     } catch (e) {
       console.warn('WS message parse error:', e);
     }
@@ -948,6 +864,7 @@ async function connectWebSocket() {
 
   ws.onclose = (event) => {
     updateWsStatus('disconnected');
+    if (typeof freezeTraderOperationalMotion === 'function') freezeTraderOperationalMotion();
     // 4401: ticket expired or invalid -- re-fetch ticket and reconnect with bounded retries
     if (event.code === 4401 && _wsTicketRetries < _wsTicketMaxRetries) {
       _wsTicketRetries++;
@@ -1375,7 +1292,6 @@ async function fetchAgentStatuses() {
     bind('active-agents-delta', idleCount > 0 ? idleCount + ' idle/sleeping' : 'all agents active');
 
     // Rebuild all agent UI
-    buildDashboardAgentCards();
     initAgentCards();
     buildDetailAgentCards();
     buildAgentSelect();
@@ -1583,109 +1499,6 @@ function renderProjectHealthGrid(data) {
   });
 }
 
-// Populate pipeline preview on dashboard from scheduled tasks
-async function renderPipelinePreview() {
-  const container = document.getElementById('pipeline-preview-container');
-  if (!container) return;
-
-  try {
-    const pq = getProjectQueryParam();
-    const tasks = await fetchFromAPI('/api/v1/tasks' + (pq ? '?' + pq : ''));
-    if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
-      container.textContent = '';
-      const empty = document.createElement('div');
-      empty.style.cssText = 'text-align:center;padding:2rem;color:var(--text-muted)';
-      empty.textContent = 'No scheduled tasks yet';
-      container.appendChild(empty);
-      return;
-    }
-
-    const now = Date.now();
-    const active = tasks.filter(t => t.status === 'active');
-    const paused = tasks.filter(t => t.status === 'paused');
-    const overdue = active.filter(t => t.next_run && t.next_run < now);
-    const upcoming = active.filter(t => t.next_run && t.next_run >= now).sort((a, b) => a.next_run - b.next_run);
-
-    container.textContent = '';
-
-    // Summary grid
-    const grid = document.createElement('div');
-    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;';
-
-    function makeKPI(value, label, color, borderColor) {
-      const card = document.createElement('div');
-      card.style.cssText = 'padding:16px;background:var(--surface-elevated);border-radius:8px;border:1px solid ' + (borderColor || 'var(--border-subtle)') + ';';
-      const valEl = document.createElement('div');
-      valEl.style.cssText = 'font-size:24px;font-weight:700;color:' + color + ';';
-      valEl.textContent = value;
-      const lblEl = document.createElement('div');
-      lblEl.style.cssText = 'font-size:12px;color:var(--text-muted);';
-      lblEl.textContent = label;
-      card.appendChild(valEl);
-      card.appendChild(lblEl);
-      return card;
-    }
-
-    grid.appendChild(makeKPI(active.length, 'Active Tasks', 'var(--accent)'));
-    if (overdue.length > 0) grid.appendChild(makeKPI(overdue.length, 'Overdue', 'var(--danger, #ff3355)', 'var(--danger, #ff3355)'));
-    if (paused.length > 0) grid.appendChild(makeKPI(paused.length, 'Paused', 'var(--amber, #ffaa00)', 'var(--amber, #ffaa00)'));
-
-    // Next up card
-    if (upcoming.length > 0) {
-      const next = upcoming[0];
-      const diffMs = next.next_run - now;
-      const diffH = Math.floor(diffMs / 3600000);
-      const diffM = Math.floor((diffMs % 3600000) / 60000);
-      const countdown = diffH > 0 ? diffH + 'h ' + diffM + 'm' : diffM + 'm';
-      const card = document.createElement('div');
-      card.style.cssText = 'padding:16px;background:var(--surface-elevated);border-radius:8px;border:1px solid var(--border-subtle);';
-      const lbl = document.createElement('div');
-      lbl.style.cssText = 'font-size:12px;color:var(--text-muted);margin-bottom:4px;';
-      lbl.textContent = 'Next Run';
-      const name = document.createElement('div');
-      name.style.cssText = 'font-size:14px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-      name.textContent = next.id;
-      const time = document.createElement('div');
-      time.style.cssText = 'font-size:12px;color:var(--accent);margin-top:2px;';
-      time.textContent = 'in ' + countdown;
-      card.appendChild(lbl);
-      card.appendChild(name);
-      card.appendChild(time);
-      grid.appendChild(card);
-    }
-
-    container.appendChild(grid);
-
-    // Upcoming task list (next 5 after the first)
-    if (upcoming.length > 1) {
-      const list = document.createElement('div');
-      list.style.cssText = 'margin-top:12px;';
-      for (let i = 1; i < Math.min(upcoming.length, 6); i++) {
-        const t = upcoming[i];
-        const nd = new Date(t.next_run);
-        const row = document.createElement('div');
-        row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border-subtle);font-size:12px;';
-        const nameSpan = document.createElement('span');
-        nameSpan.style.cssText = 'color:var(--text-primary);font-weight:500;';
-        nameSpan.textContent = t.id;
-        const timeSpan = document.createElement('span');
-        timeSpan.style.cssText = 'color:var(--text-muted);';
-        timeSpan.textContent = nd.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-        row.appendChild(nameSpan);
-        row.appendChild(timeSpan);
-        list.appendChild(row);
-      }
-      container.appendChild(list);
-    }
-  } catch (e) {
-    container.textContent = '';
-    const err = document.createElement('div');
-    err.style.cssText = 'text-align:center;padding:2rem;color:var(--text-muted)';
-    err.textContent = 'Failed to load tasks';
-    container.appendChild(err);
-  }
-}
-
 async function fetchAnalyticsMetrics() {
   const pq = getProjectQueryParam();
   const data = await fetchFromAPI('/api/v1/metrics/analytics' + (pq ? '?' + pq : ''));
@@ -1885,7 +1698,7 @@ function renderIntConnected() {
     btnRow.style.cssText = 'display:flex;gap:6px;margin-top:6px'
 
     const testBtn = document.createElement('button')
-    testBtn.className = 'btn-secondary'
+    testBtn.className = 'btn btn--secondary'
     testBtn.style.cssText = 'font-size:11px;padding:4px 8px'
     testBtn.textContent = 'Test'
     testBtn.addEventListener('click', () => intVerify(row.integration_id, testBtn))
@@ -1893,7 +1706,7 @@ function renderIntConnected() {
 
     if (m && m.kind === 'oauth' && m.oauth && m.oauth.provider) {
       const reBtn = document.createElement('button')
-      reBtn.className = 'btn-secondary'
+      reBtn.className = 'btn btn--secondary'
       reBtn.style.cssText = 'font-size:11px;padding:4px 8px'
       reBtn.textContent = 'Reconnect'
       reBtn.addEventListener('click', () => {
@@ -1904,7 +1717,7 @@ function renderIntConnected() {
     }
 
     const disBtn = document.createElement('button')
-    disBtn.className = 'btn-secondary'
+    disBtn.className = 'btn btn--secondary'
     disBtn.style.cssText = 'font-size:11px;padding:4px 8px'
     disBtn.textContent = 'Disconnect'
     disBtn.addEventListener('click', () => intUninstall(row.integration_id))
@@ -1962,7 +1775,7 @@ function renderIntBrowse() {
     card.appendChild(desc)
 
     const btn = document.createElement('button')
-    btn.className = installed ? 'btn-secondary' : 'btn-primary'
+    btn.className = installed ? 'btn btn--secondary' : 'btn btn--primary'
     btn.style.cssText = 'font-size:12px;padding:5px 10px;margin-top:6px'
     btn.textContent = installed ? 'Installed' : 'Connect'
     btn.addEventListener('click', () => {
@@ -2043,7 +1856,7 @@ function openInstallModal(manifest) {
 
   if (manifest.kind === 'oauth') {
     const btn = document.createElement('button')
-    btn.className = 'btn-primary'
+    btn.className = 'btn btn--primary'
     btn.textContent = 'Connect with ' + manifest.name
     btn.addEventListener('click', () => {
       const projectId = currentProject.id
@@ -2087,7 +1900,7 @@ function openInstallModal(manifest) {
         err.textContent = 'Failed: ' + (res.error || 'unknown error')
         body.appendChild(err)
         const back = document.createElement('button')
-        back.className = 'btn-secondary'
+        back.className = 'btn btn--secondary'
         back.style.cssText = 'margin-top:10px'
         back.textContent = 'Back'
         back.addEventListener('click', () => openInstallModal(manifest))
@@ -2129,7 +1942,7 @@ function openInstallModal(manifest) {
   }
   const submit = document.createElement('button')
   submit.type = 'submit'
-  submit.className = 'btn-primary'
+  submit.className = 'btn btn--primary'
   submit.textContent = 'Install'
   form.appendChild(submit)
   body.appendChild(form)
@@ -2170,7 +1983,6 @@ async function fetchProjectIntegrations() {
   }
   renderSocialCards();
   renderDashboardStats();
-  renderPerfCards();
   // Pull health badges in parallel - non-blocking
   fetchMetricHealth();
 }
@@ -2439,70 +2251,6 @@ function renderDashboardStats() {
   }
 
   // If metrics already loaded, populate stat values now
-  if (Object.keys(_allMetricValues).length > 0) {
-    populateIntegrationCards();
-  }
-}
-
-function renderPerfCards() {
-  const container = document.getElementById('perf-cards-container');
-  if (!container) return;
-
-  if (_projectIntegrations.length === 0) {
-    const msg = document.createElement('div');
-    msg.style.cssText = 'text-align:center;padding:3rem 1rem;color:var(--text-muted)';
-    msg.textContent = currentProject.id
-      ? 'No integrations configured for this project'
-      : 'Select a project to view performance analytics';
-    container.textContent = '';
-    container.appendChild(msg);
-    return;
-  }
-
-  let html = '';
-  for (const integ of _projectIntegrations) {
-    const labels = platformMetricLabels(integ.platform);
-    const prefix = escapeHtml(integ.metric_prefix || integ.platform);
-    const safePlatform = escapeHtml(integ.platform);
-
-    html += '<div class="perf-card" data-platform="' + safePlatform + '">'
-      + '<h4>' + escapeHtml(integ.display_name) + (integ.handle ? ' &mdash; ' + escapeHtml(integ.handle) : '') + '</h4>'
-      + '<div class="perf-card__chart">'
-      + '<canvas data-chart="perf-' + prefix + '-chart" width="400" height="120" aria-label="' + escapeHtml(integ.display_name) + ' chart"></canvas>'
-      + '</div>'
-      + '<div class="perf-card__metrics">'
-      + '<div class="metric-row"><span>' + escapeHtml(labels[0]) + '</span><span data-bind="perf-' + prefix + '-m1">--</span></div>'
-      + '<div class="metric-row"><span>' + escapeHtml(labels[1]) + '</span><span data-bind="perf-' + prefix + '-m2">--</span></div>'
-      + '<div class="metric-row"><span>' + escapeHtml(labels[2]) + '</span><span data-bind="perf-' + prefix + '-m3">--</span></div>'
-      + '</div>'
-      + '</div>';
-
-    // YouTube gets a video table card
-    if (integ.platform === 'youtube') {
-      html += '<div class="perf-card perf-card--wide" data-platform="youtube-videos">'
-        + '<h4>Video Performance</h4>'
-        + '<div class="yt-video-table-wrap">'
-        + '<table class="yt-video-table"><thead><tr>'
-        + '<th>Thumbnail</th><th>Title</th><th>Published</th><th>Views</th><th>Likes</th><th>Comments</th>'
-        + '</tr></thead>'
-        + '<tbody data-bind="yt-video-tbody"><tr><td colspan="6" style="text-align:center;color:var(--text-muted)">Loading...</td></tr></tbody>'
-        + '</table></div></div>';
-    }
-  }
-
-  container.innerHTML = html;
-
-  // Ensure dynamic cards are visible (not caught by stagger animation)
-  container.querySelectorAll('.perf-card').forEach(card => {
-    card.style.opacity = '1';
-    card.style.transform = 'translateY(0)';
-    card.dataset.skipStagger = '1';
-  });
-
-  // Draw charts: use sparkline data if available, otherwise no-data placeholder
-  setTimeout(() => refreshPerfCharts(container), 100);
-
-  // If metrics already loaded, populate card values now
   if (Object.keys(_allMetricValues).length > 0) {
     populateIntegrationCards();
   }
@@ -3078,7 +2826,72 @@ function showAgentsGrid() {
   history.replaceState(null, '', '#agents');
 }
 
-function navigateToPage(pageId, pushState = true) {
+const HASH_TO_PAGE = {
+  'overview': 'page-dashboard',
+  'dashboard': 'page-dashboard',
+  'board': 'page-board',
+  'work': 'page-action-plan',
+  'agents': 'page-agents',
+  'chat': 'page-chat',
+  'activity': 'page-logging',
+  'automations': 'page-sops',
+  'knowledge': 'page-graph',
+  'needs-you': 'page-usage',
+  'usage': 'page-usage',
+  'projects': 'page-projects',
+  'integrations': 'page-integrations',
+  'credentials': 'page-credentials',
+  'users': 'page-users',
+  'settings': 'page-settings',
+  'security': 'page-security',
+  'health': 'page-health',
+  'costs': 'page-costs',
+  'plugins': 'page-plugins',
+  'webhooks': 'page-webhooks',
+  'deals': 'page-deals',
+  'portfolio': 'page-portfolio',
+  'rehab': 'page-rehab',
+  'tax': 'page-tax',
+  'participation': 'page-participation',
+  'investments': 'page-investments',
+  'pawdev/board': 'page-pawdev-board',
+  'pawdev/repos': 'page-pawdev-repos',
+  'pawdev/history': 'page-pawdev-history',
+  // Fallback so an old page-id-derived bookmark still resolves, and so each
+  // tab-only page (Task 4) has a hash of its own for reload/share.
+  'action-plan': 'page-action-plan',
+  'logging': 'page-logging',
+  'sops': 'page-sops',
+  'graph': 'page-graph',
+  'pipeline': 'page-pipeline',
+  'research': 'page-research',
+  'comms': 'page-comms',
+  'audit': 'page-audit',
+  'paws': 'page-paws',
+};
+
+// The hash to WRITE for a given page id: the reverse of HASH_TO_PAGE,
+// preferring the first (canonical) key that maps to it -- so page-dashboard
+// writes "overview", not "dashboard", and a tab-only page like page-pipeline
+// writes its own hash since it has no earlier alias.
+const PAGE_TO_HASH = (function() {
+  const out = {};
+  Object.keys(HASH_TO_PAGE).forEach(function(hash) {
+    const pid = HASH_TO_PAGE[hash];
+    if (!(pid in out)) out[pid] = hash;
+  });
+  return out;
+})();
+
+// Shell v2 fix round 1: the ownership toast and the "unknown hash" toast
+// both stay silent until the saved project has been restored (see
+// finishInitialNav, called from fetchProjects), so a bookmarked Paw page
+// never shows a false "not in this workspace" before its workspace is even
+// known.
+let navReady = false;
+let pendingInitialHash = null;
+
+function navigateToPage(pageId, pushState = true, sub) {
   // Cancel comms animation frame when navigating away from comms page
   if (typeof commsState !== 'undefined' && commsState.animFrame) {
     cancelAnimationFrame(commsState.animFrame);
@@ -3094,12 +2907,14 @@ function navigateToPage(pageId, pushState = true) {
   // Show target page
   const target = document.getElementById(pageId);
   if (target) {
-    // Redirect to dashboard if page is hidden for current project
-    var _pgSlug = currentProject && currentProject.slug;
-    var _pgOverrides = (currentProject && currentProject.settings && currentProject.settings.page_overrides) || {};
-    var _pgVis = Object.assign({}, PAGE_DEFAULTS[_pgSlug] || {}, _pgOverrides);
-    var _pgKey = pageId.replace('page-', '');
-    if (_pgVis[_pgKey] === false) {
+    // Shell v2 section 3.5: a page that belongs to another workspace says so
+    // and lands on Overview. It never redirects in silence -- except before
+    // the saved project has been restored (navReady false), when the
+    // workspace is not known yet and the gate would misfire on every
+    // deep link.
+    const owner = PAW_ONLY_PAGES[pageId];
+    if (navReady && owner && (!currentProject || currentProject.id !== owner)) {
+      showToast('Not available in this workspace', 'warn');
       navigateToPage('page-dashboard', pushState);
       return;
     }
@@ -3115,9 +2930,17 @@ function navigateToPage(pageId, pushState = true) {
     });
   }
 
-  // Update sidebar page link active states
+  renderPageTabs(pageId, sub);
+
+  // Update sidebar page link active states, following the tab group so
+  // opening "In flight" keeps Work highlighted.
+  const groupId = groupForPage(pageId);
+  const GROUP_TO_ITEM = { overview: 'overview', work: 'work', activity: 'activity', automations: 'automations' };
+  const activeItem = GROUP_TO_ITEM[groupId] || null;
   document.querySelectorAll('.sidebar-link[data-page]').forEach(s => {
-    const isActive = s.dataset.page === pageId;
+    const isActive = activeItem
+      ? s.dataset.item === activeItem
+      : s.dataset.page === pageId;
     s.classList.toggle('active', isActive);
     if (isActive) s.setAttribute('aria-current', 'page');
     else s.removeAttribute('aria-current');
@@ -3130,7 +2953,7 @@ function navigateToPage(pageId, pushState = true) {
 
   // Update URL hash
   if (pushState) {
-    const hash = pageId.replace('page-', '');
+    const hash = PAGE_TO_HASH[pageId] || pageId.replace('page-', '');
     if (window.location.hash !== '#' + hash) {
       history.replaceState(null, '', '#' + hash);
     }
@@ -3154,24 +2977,29 @@ function navigateToPage(pageId, pushState = true) {
     if (typeof loadChatMessages === 'function') loadChatMessages(); else initChatPage();
   }
   if (pageId === 'page-logging') initLoggingPage();
+  if (pageId === 'page-audit') initAuditPage();
   if (pageId === 'page-sops') fetchSOPs();
   if (pageId === 'page-paws') fetchPaws();
-  if (pageId === 'page-how-it-works') initHowItWorksPage();
   if (pageId === 'page-deals') initDealsPage();
   if (pageId === 'page-portfolio') initPortfolioPage();
   if (pageId === 'page-rehab') initRehabPage();
   if (pageId === 'page-tax') initTaxPage();
   if (pageId === 'page-participation') initParticipationPage();
   if (pageId === 'page-investments') initInvestmentsPage();
-  if (pageId === 'page-performance') { renderPerfCards(); fetchYouTubeData(); fetchAnalyticsMetrics(); fetchSocialMetrics(); }
+  if (pageId === 'page-pawdev-board') initPawdevBoardPage();
+  if (pageId === 'page-pawdev-repos') initPawdevReposPage();
+  if (pageId === 'page-pawdev-history') initPawdevHistoryPage();
   if (pageId === 'page-costs') initCostsPage();
   if (pageId === 'page-usage') initUsagePage();
   if (pageId === 'page-action-plan') initActionPlanPage();
   if (pageId === 'page-health') initHealthPage();
   if (pageId === 'page-webhooks') fetchWebhooks();
   if (pageId === 'page-plugins') fetchPlugins();
+  if (pageId === 'page-integrations' && sub) {
+    const inPage = document.querySelector('[data-int-tab="' + sub + '"]');
+    if (inPage) inPage.click();
+  }
   if (pageId === 'page-graph') { if (typeof fetchGraphData === 'function') fetchGraphData(); }
-  if (pageId === 'page-knowledge') initKnowledgePage();
   if (pageId === 'page-credentials') refreshCredentialsPage();
   if (pageId === 'page-projects') renderProjectsPage();
   if (pageId === 'page-users') {
@@ -3181,6 +3009,78 @@ function navigateToPage(pageId, pushState = true) {
     }
     renderUsersPage();
   }
+}
+
+// Shared by the hashchange listener and the initial-load path (and its
+// post-restore replay in finishInitialNav) so the three routes agree on
+// exactly one behavior. The "unknown hash" toast is suppressed until
+// navReady is true, matching the ownership gate in navigateToPage: no error
+// message on first load, ever.
+function routeToHash(hash, pushState) {
+  // Handle agent detail routes: #agent/content-researcher, #agent/security-scanner, etc.
+  if (hash.startsWith('agent/')) {
+    const agentId = hash.split('/')[1];
+    if (AGENTS[agentId]) {
+      showAgentDetail(agentId);
+      return;
+    }
+  }
+
+  // Phase 4 Task D -- trader strategy drill-down: #trader/strategy/:id
+  if (hash.startsWith('trader/strategy/')) {
+    const strategyId = decodeURIComponent(hash.slice('trader/strategy/'.length));
+    if (strategyId) {
+      navigateToPage('page-trader', pushState);
+      initStrategyDetail(strategyId);
+      return;
+    }
+  }
+  // Phase 6 Task 5 -- kill-switch audit log: #trader/kill-switch-log
+  if (hash === 'trader/kill-switch-log') {
+    navigateToPage('page-trader', pushState);
+    renderKillSwitchLogPage();
+    return;
+  }
+  // Navigating back to plain #trader should dismiss any open drill-down.
+  if (hash === 'trader' && typeof closeStrategyDetail === 'function') {
+    closeStrategyDetail();
+    closeKillSwitchLogPage();
+  }
+
+  // Phase 3 Task 11 fix round 1: #work/<item-id> (written by _pawdevCard's
+  // click handler) opens the Action Plan drawer on that item instead of
+  // falling through to the unknown-hash toast.
+  if (hash.startsWith('work/')) {
+    const itemId = decodeURIComponent(hash.slice('work/'.length));
+    if (itemId) {
+      navigateToPage('page-action-plan', pushState);
+      apOpenDrawer(itemId);
+      return;
+    }
+  }
+
+  const pageId = HASH_TO_PAGE[hash];
+  if (!pageId || !document.getElementById(pageId)) {
+    if (navReady) showToast('Not available in this workspace', 'warn');
+    navigateToPage('page-dashboard', pushState);
+    return;
+  }
+  navigateToPage(pageId, pushState);
+}
+
+// Called once the saved project has been restored (see fetchProjects, after
+// the localStorage restore block). Flips navReady on so the ownership gate
+// and the unknown-hash toast start enforcing, then replays the hash the
+// page loaded with -- now that the workspace is known -- so a bookmarked
+// Paw page resolves instead of having silently bounced to Overview. A bare
+// hash (already showing Overview) needs no replay. No-op after the first
+// call.
+function finishInitialNav() {
+  if (navReady) return;
+  navReady = true;
+  const hash = pendingInitialHash;
+  pendingInitialHash = null;
+  if (hash && hash !== 'dashboard') routeToHash(hash, false);
 }
 
 function initNavigation() {
@@ -3203,63 +3103,100 @@ function initNavigation() {
 
   // Handle hash changes (back/forward)
   window.addEventListener('hashchange', () => {
-    const hash = location.hash.replace('#', '');
-
-    // Handle agent detail routes: #agent/scout, #agent/auditor, etc.
-    if (hash.startsWith('agent/')) {
-      const agentId = hash.split('/')[1];
-      if (AGENTS[agentId]) {
-        showAgentDetail(agentId);
-        return;
-      }
-    }
-
-
-    const pageMap = {
-      'dashboard': 'page-dashboard',
-      'agents': 'page-agents',
-      'pipeline': 'page-pipeline',
-      'performance': 'page-performance',
-      'costs': 'page-costs',
-      'usage': 'page-usage',
-      'health': 'page-health',
-      'security': 'page-security',
-      'chat': 'page-chat',
-      'comms': 'page-comms',
-      'board': 'page-board',
-      'research': 'page-research',
-      'sops': 'page-sops',
-      'paws': 'page-paws',
-      'how-it-works': 'page-how-it-works',
-      'plugins': 'page-plugins',
-      'webhooks': 'page-webhooks',
-      'graph': 'page-graph',
-      'knowledge': 'page-knowledge',
-      'settings': 'page-settings',
-      'projects': 'page-projects',
-      'logging': 'page-logging',
-      'action-plan': 'page-action-plan',
-    };
-    const pageId = pageMap[hash] || ('page-' + hash);
-    const target = document.getElementById(pageId);
-    if (target) navigateToPage(pageId, false);
+    routeToHash(location.hash.replace('#', ''), false);
   });
 
-  // Navigate from initial hash
+  // Navigate from initial hash. navReady is still false here, so this first
+  // pass never toasts and the ownership gate does not fire; finishInitialNav
+  // replays the same hash once the workspace is known.
   const initialHash = location.hash.replace('#', '') || 'dashboard';
+  pendingInitialHash = initialHash;
+  routeToHash(initialHash, false);
+}
 
-  // Handle initial load of agent detail routes
-  if (initialHash.startsWith('agent/')) {
-    const agentId = initialHash.split('/')[1];
-    if (AGENTS[agentId]) {
-      showAgentDetail(agentId);
-    } else {
-      navigateToPage('page-dashboard', false);
-    }
-  } else {
-    const initialPage = document.getElementById('page-' + initialHash) ? 'page-' + initialHash : 'page-dashboard';
-    navigateToPage(initialPage, false);
+function initSystemMenu() {
+  const btn = document.getElementById('header-system-btn');
+  const panel = document.getElementById('header-system-panel');
+  if (!btn || !panel) return;
+  btn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    panel.hidden = !panel.hidden;
+    btn.setAttribute('aria-expanded', String(!panel.hidden));
+  });
+  document.addEventListener('click', function() {
+    panel.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+  });
+  panel.querySelectorAll('a[data-page]').forEach(function(a) {
+    a.addEventListener('click', function(e) {
+      e.preventDefault();
+      panel.hidden = true;
+      navigateToPage(a.dataset.page, true);
+    });
+  });
+  const tests = document.getElementById('header-test-runner');
+  if (tests) tests.addEventListener('click', function() { panel.hidden = true; initTestRunner(); });
+  const upgrade = document.getElementById('header-upgrade');
+  if (upgrade) upgrade.addEventListener('click', function() { panel.hidden = true; openUpgradeModal(); });
+}
+
+// Header badge for the cross-project queue. Refreshed on project switch and
+// on the same 60s cadence the header clock already runs on.
+async function refreshNeedsYouBadge() {
+  const el = document.getElementById('needs-you-badge');
+  if (!el) return;
+  const data = await fetchFromAPI('/api/v1/needs-you/count');
+  const total = data && Number.isFinite(data.total) ? data.total : 0;
+  el.textContent = String(total);
+  el.hidden = total === 0;
+}
+
+// Shell v2 section 3.6. The one visual that says "this workspace runs itself".
+// Hidden for a plain project. One fetch per switch, then a refresh on the
+// project_settings_sync socket message and on a 30s tick while a Paw is open.
+let _pawBadgeTimer = null;
+// Bumped on every call so a slow response from a project we've since
+// switched away from is dropped instead of painting a stale badge.
+let _pawBadgeToken = 0;
+
+function formatPawNumber(value, label) {
+  if (value == null) return '';
+  if (label === 'NAV') {
+    return '$' + Number(value).toLocaleString('en-US', { maximumFractionDigits: 0 });
   }
+  return String(value) + ' ' + label;
+}
+
+async function refreshPawBadge() {
+  const el = document.getElementById('paw-badge');
+  if (!el) return;
+  if (_pawBadgeTimer) { clearInterval(_pawBadgeTimer); _pawBadgeTimer = null; }
+  const myToken = ++_pawBadgeToken;
+  if (!currentProject || !currentProject.id) { el.hidden = true; el.textContent = ''; return; }
+
+  const state = await fetchFromAPI('/api/v1/projects/' + encodeURIComponent(currentProject.id) + '/paw-state');
+  if (myToken !== _pawBadgeToken) return;
+  if (!state || !state.is_paw) { el.hidden = true; el.textContent = ''; return; }
+
+  el.textContent = '';
+  const tag = document.createElement('span');
+  tag.className = 'paw-badge__tag';
+  tag.textContent = 'PAW';
+  el.appendChild(tag);
+
+  const parts = [];
+  if (state.mode) parts.push(state.mode);
+  if (state.phase) parts.push(state.phase);
+  const number = formatPawNumber(state.number, state.label || '');
+  if (number) parts.push(number);
+
+  const text = document.createElement('span');
+  text.className = 'paw-badge__text';
+  text.textContent = parts.join(' · ');
+  el.appendChild(text);
+  el.hidden = false;
+
+  _pawBadgeTimer = setInterval(refreshPawBadge, 30000);
 }
 
 function animateCardsStaggered(container) {
@@ -3281,78 +3218,6 @@ function animateCardsStaggered(container) {
       card.style.transform = 'none';
     }, i * 60);
   });
-}
-
-// --------------- DYNAMIC AGENT CARD GENERATION ---------------
-
-function buildDashboardAgentCards() {
-  const grid = document.getElementById('dashboard-agent-grid');
-  if (!grid) return;
-  grid.textContent = '';
-  for (const [id, agent] of Object.entries(AGENTS)) {
-    const card = document.createElement('div');
-    card.className = 'agent-card';
-    card.dataset.agent = id;
-    card.dataset.status = agent.status;
-
-    const header = document.createElement('div');
-    header.className = 'agent-card__header';
-
-    const iconEl = document.createElement('i');
-    iconEl.className = 'agent-card__icon';
-    iconEl.setAttribute('data-lucide', agent.icon);
-
-    const identity = document.createElement('div');
-    identity.className = 'agent-card__identity';
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'agent-card__name';
-    nameSpan.textContent = agent.name;
-    const roleSpan = document.createElement('span');
-    roleSpan.className = 'agent-card__role';
-    roleSpan.textContent = agent.role;
-    identity.appendChild(nameSpan);
-    identity.appendChild(roleSpan);
-
-    const statusDot = document.createElement('span');
-    statusDot.className = 'status-dot ' + agent.status;
-
-    header.appendChild(iconEl);
-    header.appendChild(identity);
-    header.appendChild(statusDot);
-
-    const body = document.createElement('div');
-    body.className = 'agent-card__body';
-
-    const metaDiv = document.createElement('div');
-    metaDiv.className = 'agent-card__meta';
-    const activeSpan = document.createElement('span');
-    activeSpan.className = 'agent-card__last-active';
-    activeSpan.dataset.bind = id + '-active';
-    activeSpan.textContent = '--';
-    metaDiv.appendChild(activeSpan);
-
-    const taskP = document.createElement('p');
-    taskP.className = 'agent-card__task';
-    taskP.dataset.bind = id + '-task';
-    taskP.textContent = 'Loading...';
-
-    const progressBar = document.createElement('div');
-    progressBar.className = 'progress-bar-mini';
-    const progressFill = document.createElement('div');
-    progressFill.className = 'progress-bar-mini__fill';
-    progressFill.style.width = '0%';
-    progressFill.dataset.bind = id + '-progress';
-    progressBar.appendChild(progressFill);
-
-    body.appendChild(metaDiv);
-    body.appendChild(taskP);
-    body.appendChild(progressBar);
-
-    card.appendChild(header);
-    card.appendChild(body);
-    grid.appendChild(card);
-  }
-  if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
 function buildDetailAgentCards() {
@@ -3931,7 +3796,13 @@ function renderCostsPage() {
       agentContainer.appendChild(noAgentMsg);
     }
     var maxCost = sorted.length > 0 ? sorted[0][1].cost : 1;
-    var agentColors = { scout: themeAccent(), producer: themeCyan(), qa: themeMagenta(), social: themeAmber(), sentinel: themeRed(), analyst: themePurple(), brand:'#64748b', advocate:'#e879f9', direct:'#94a3b8' };
+    var agentColors = {
+      scout: themeAccent(), 'content-researcher': themeAccent(), 'ecosystem-researcher': themeAccent(), 'listing-finder': themeAccent(),
+      producer: themeCyan(), 'video-producer': themeCyan(),
+      qa: themeMagenta(), social: themeAmber(), 'social-writer': themeAmber(),
+      sentinel: themeRed(), analyst: themePurple(), 'signal-analyst': themePurple(),
+      brand:'#64748b', advocate:'#e879f9', direct:'#94a3b8',
+    };
     sorted.forEach(function(entry) {
       var id = entry[0], data = entry[1];
       var pct = maxCost > 0 ? Math.round(data.cost / maxCost * 100) : 0;
@@ -4334,7 +4205,7 @@ function drawHealthChart(canvasId, data, label, color) {
   const plotW = w - p.left - p.right, plotH = h - p.top - p.bottom;
   ctx.clearRect(0, 0, w, h);
 
-  ctx.font = '600 10px "Orbitron", sans-serif';
+  ctx.font = '600 10px "Outfit", sans-serif';
   ctx.fillStyle = color;
   ctx.textAlign = 'left';
   ctx.fillText(label, p.left, 14);
@@ -6389,7 +6260,7 @@ function renderPawCards(paws) {
     empty.className = 'sop-card';
     empty.style.cssText = 'opacity:0.4;text-align:center;padding:40px;';
     var msg = document.createElement('span');
-    msg.textContent = 'No Paws configured yet.';
+    msg.textContent = 'No routines yet.';
     empty.appendChild(msg);
     grid.appendChild(empty);
     return;
@@ -7563,7 +7434,7 @@ function showPawCyclesModal(name, cycles) {
   hdr.appendChild(hTitle);
 
   var closeBtn = document.createElement('button');
-  closeBtn.className = 'btn btn-sm btn-secondary';
+  closeBtn.className = 'btn btn--sm btn--secondary';
   closeBtn.textContent = 'Close';
   closeBtn.onclick = function() { overlay.remove(); };
   hdr.appendChild(closeBtn);
@@ -8496,53 +8367,6 @@ var ResearchPage = {
   }
 };
 
-// ── Research Upcoming Tasks Bar ──
-
-async function renderResearchUpcoming() {
-  var container = document.querySelector('[data-bind="research-upcoming"]');
-  if (!container) return;
-
-  try {
-    var pq = getProjectQueryParam();
-    var res = await fetch('/api/v1/tasks' + (pq ? '?' + pq : ''));
-    var tasks = await res.json();
-    var researchTasks = tasks.filter(function(t) {
-      return (t.id.indexOf('research') !== -1 || t.id.indexOf('scout') !== -1 ||
-              t.id.indexOf('newsletter') !== -1 || t.prompt.toLowerCase().indexOf('research') !== -1 ||
-              t.prompt.toLowerCase().indexOf('scout') !== -1) && t.status === 'active';
-    });
-
-    if (researchTasks.length === 0) { container.textContent = ''; return; }
-
-    var nextTask = researchTasks.sort(function(a, b) { return a.next_run - b.next_run; })[0];
-    var nextDate = new Date(nextTask.next_run);
-    var now = Date.now();
-    var diffMs = nextTask.next_run - now;
-    var diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    var diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-    var countdown = diffMs <= 0 ? 'Due now' : diffHours > 0 ? 'in ' + diffHours + 'h ' + diffMins + 'm' : 'in ' + diffMins + 'm';
-
-    setElementHTML(container,
-      '<div style="display:flex;align-items:center;gap:16px;padding:12px 16px;background:var(--surface-elevated);border-radius:8px;border:1px solid var(--border-subtle);">' +
-        '<span style="font-size:18px;">&#128269;</span>' +
-        '<div style="flex:1;">' +
-          '<span style="font-size:13px;font-weight:600;color:var(--text-primary);">Next Research Sweep</span>' +
-          '<span style="font-size:12px;color:var(--text-muted);margin-left:8px;">' + escapeHtml(nextTask.id) + '</span>' +
-        '</div>' +
-        '<div style="text-align:right;">' +
-          '<div style="font-size:13px;font-weight:600;color:var(--accent);">' + escapeHtml(countdown) + '</div>' +
-          '<div style="font-size:11px;color:var(--text-muted);">' + escapeHtml(nextDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })) + '</div>' +
-        '</div>' +
-        '<div style="text-align:right;border-left:1px solid var(--border-subtle);padding-left:16px;">' +
-          '<div style="font-size:16px;font-weight:700;color:var(--text-primary);">' + researchTasks.length + '</div>' +
-          '<div style="font-size:11px;color:var(--text-muted);">active tasks</div>' +
-        '</div>' +
-      '</div>');
-  } catch (e) {
-    container.textContent = '';
-  }
-}
-
 document.addEventListener('click', function(ev) {
   var closeEl = ev.target.closest('#rs-drawer [data-action="close"]');
   if (closeEl) { rsDrawer.close(); ev.preventDefault(); }
@@ -8615,8 +8439,8 @@ var PipelinePage = {
     var tab = this.data.activeTab;
     var tasks = this.data.tasks;
     if (tab === 'cron') return tasks;
-    if (tab === 'research') return tasks.filter(function(t) { return t.id.indexOf('research') !== -1 || t.id.indexOf('scout') !== -1 || t.id.indexOf('newsletter') !== -1; });
-    if (tab === 'video') return tasks.filter(function(t) { return t.id.indexOf('video') !== -1 || t.id.indexOf('producer') !== -1; });
+    if (tab === 'research') return tasks.filter(function(t) { return t.id.indexOf('research') !== -1 || t.id.indexOf('newsletter') !== -1; });
+    if (tab === 'video') return tasks.filter(function(t) { return t.id.indexOf('video') !== -1 || t.id.indexOf('youtube') !== -1; });
     return tasks;
   },
 
@@ -9287,6 +9111,33 @@ var PROJECT_BOT_MAP = {
   'default': '@YourBotName',
   'claudepaw': '@YourBotName',
 };
+
+// Shell v2 Task 4: Activity page's Audit tab, backed by GET /action-audit.
+async function initAuditPage() {
+  const tbody = document.getElementById('audit-tbody');
+  if (!tbody) return;
+  if (!currentProject || !currentProject.id) { tbody.textContent = ''; return; } // clear stale rows on All Projects
+  const rows = await fetchFromAPI(API + '/action-audit?project_id=' + encodeURIComponent(currentProject.id));
+  tbody.textContent = '';
+  if (!rows || !Array.isArray(rows) || rows.length === 0) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 5;
+    td.textContent = 'No audited actions yet';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  rows.forEach(function(row) {
+    const tr = document.createElement('tr');
+    [new Date(row.ts_ms).toLocaleString(), row.actor, row.action_class, row.decision, row.policy_value].forEach(function(val) {
+      const td = document.createElement('td');
+      td.textContent = String(val);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+}
 
 function initLoggingPage() {
   loggingOffset = 0;
@@ -9974,13 +9825,13 @@ function renderCommsNetwork() {
       ctx.lineWidth = isActive ? 2 : 1;
       ctx.stroke();
 
-      ctx.font = "bold 13px 'Orbitron', sans-serif";
+      ctx.font = "bold 13px 'Outfit', sans-serif";
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = isActive ? accentColor : textColor;
       ctx.fillText((agent.name || '?').charAt(0).toUpperCase(), pos.x, pos.y);
 
-      ctx.font = "600 10px 'Orbitron', sans-serif";
+      ctx.font = "600 10px 'Outfit', sans-serif";
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       ctx.fillStyle = mutedColor;
@@ -11059,7 +10910,7 @@ function selectTheme(theme) {
   if (!settingsProject) return;
   settingsProject.theme_id = theme.id;
 
-  applyThemeToRoot(theme);
+  applyProjectTheme(settingsProject);
 
   document.querySelectorAll('.theme-card').forEach(c => {
     c.classList.toggle('active', c.dataset.themeId === theme.id);
@@ -11334,7 +11185,7 @@ function saveProjectSettings() {
     if (currentProject.id === settingsProject.id) {
       currentProject.settings = saved;
       applyProjectTheme(saved);
-      applyPageVisibility(currentProject.slug, saved.page_overrides || null);
+      applySidebar(currentProject);
     }
     setSettingsStatus('', 'Saved');
   }).catch(err => {
@@ -11355,88 +11206,66 @@ function resetProjectSettings() {
       renderColorOverrides();
       renderExecutionDefaults();
       renderSidebarPagesSettings(settingsProject);
-      if (settingsProject.theme_id) {
-        const theme = getThemeById(settingsProject.theme_id);
-        if (theme) applyThemeToRoot(theme);
-      }
+      applyProjectTheme(settingsProject);
     })
     .catch(err => console.warn('Failed to reset settings view:', err));
 }
 
+// Shell v2: the seven fixed items are not toggleable. Only a Paw's own group
+// can be trimmed, and only in that Paw's workspace.
 function renderSidebarPagesSettings(proj) {
   const grid = document.getElementById('sidebar-pages-grid');
   if (!grid) return;
   while (grid.firstChild) grid.removeChild(grid.firstChild);
+  const section = document.getElementById('settings-pages-section');
+  if (!proj || !proj.id) { if (section) section.hidden = true; return; } // All Projects: no card, not an empty one
 
-  if (!proj || !proj.id) return;
+  const group = PAW_GROUPS[proj.id];
+  if (!group) { if (section) section.hidden = true; return; }
+  if (section) section.hidden = false;
 
-  const slug = proj.slug || '';
-  const defaults = PAGE_DEFAULTS[slug] || {};
-  const rawOverrides = proj.page_overrides;
-  const overrides = typeof rawOverrides === 'string'
-    ? JSON.parse(rawOverrides)
-    : (rawOverrides || {});
-  const current = Object.assign({}, defaults, overrides);
-
-  // Section header
   const header = document.createElement('div');
   header.className = 'pages-section-header';
   const title = document.createElement('span');
   title.className = 'pages-section-title';
-  title.textContent = 'Sidebar Pages';
-  const resetBtn = document.createElement('button');
-  resetBtn.className = 'btn-secondary';
-  resetBtn.style.cssText = 'font-size:0.72rem;padding:3px 8px;';
-  resetBtn.textContent = 'Reset to defaults';
-  resetBtn.onclick = function() {
-    saveSidebarPageOverrides(proj, null);
-  };
+  title.textContent = group.label + ' pages';
   header.appendChild(title);
-  header.appendChild(resetBtn);
   grid.appendChild(header);
+
+  const rawOverrides = proj.page_overrides;
+  const overrides = typeof rawOverrides === 'string' ? JSON.parse(rawOverrides) : (rawOverrides || {});
 
   const pageGrid = document.createElement('div');
   pageGrid.className = 'pages-grid';
-
-  SIDEBAR_PAGES.forEach(function(page) {
-    const isOn = current[page.id] !== false;
+  group.items.forEach(function(item) {
+    const isOn = overrides[item.id] !== false;
     const row = document.createElement('div');
     row.className = 'pages-grid__row' + (isOn ? '' : ' pages-grid__row--off');
-
     const label = document.createElement('span');
     label.className = 'pages-grid__label';
-    label.textContent = page.label;
-
+    label.textContent = item.label;
     const toggle = document.createElement('label');
     toggle.className = 'cp-toggle';
-
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.checked = isOn;
-    input.dataset.pageId = page.id;
+    input.dataset.pageId = item.id;
     input.onchange = function() {
       row.className = 'pages-grid__row' + (input.checked ? '' : ' pages-grid__row--off');
-      // Collect all current toggle states and save
-      var newOverrides = {};
+      const next = {};
       pageGrid.querySelectorAll('input[type=checkbox]').forEach(function(cb) {
-        var pid = cb.dataset.pageId;
-        var defaultOn = defaults[pid] !== false;
-        // Only write overrides that differ from the default
-        if (cb.checked !== defaultOn) newOverrides[pid] = cb.checked;
+        if (!cb.checked) next[cb.dataset.pageId] = false;
       });
-      saveSidebarPageOverrides(proj, Object.keys(newOverrides).length ? newOverrides : null);
+      saveSidebarPageOverrides(proj, Object.keys(next).length ? next : null);
     };
-
     const track = document.createElement('span');
     track.className = 'cp-toggle__track';
-
     toggle.appendChild(input);
     toggle.appendChild(track);
     row.appendChild(label);
     row.appendChild(toggle);
     pageGrid.appendChild(row);
   });
-
   grid.appendChild(pageGrid);
 }
 
@@ -11454,7 +11283,7 @@ function saveSidebarPageOverrides(proj, overrides) {
     if (idx >= 0) allProjects[idx].page_overrides = newOverrides;
     if (currentProject.id === proj.id) {
       if (currentProject.settings) currentProject.settings.page_overrides = newOverrides;
-      applyPageVisibility(currentProject.slug, newOverrides);
+      applySidebar(currentProject);
     }
     renderSidebarPagesSettings(proj);
     setSettingsStatus('', 'Saved');
@@ -11546,14 +11375,14 @@ function renderIntegrationCards(integrations, projectId) {
 
       if (existing.status === 'connected') {
         const disconnBtn = document.createElement('button');
-        disconnBtn.className = 'btn-secondary';
+        disconnBtn.className = 'btn btn--secondary';
         disconnBtn.style.cssText = 'font-size:12px;padding:4px 10px;';
         disconnBtn.textContent = 'Disconnect';
         disconnBtn.addEventListener('click', () => disconnectIntegration(svc.id, projectId, existing.account));
         btnRow.appendChild(disconnBtn);
       } else {
         const reconnBtn = document.createElement('button');
-        reconnBtn.className = 'btn-primary';
+        reconnBtn.className = 'btn btn--primary';
         reconnBtn.style.cssText = 'font-size:12px;padding:4px 10px;';
         reconnBtn.textContent = 'Reconnect';
         reconnBtn.addEventListener('click', () => connectIntegration(svc.id, projectId));
@@ -11563,7 +11392,7 @@ function renderIntegrationCards(integrations, projectId) {
       card.appendChild(btnRow);
     } else {
       const connectBtn = document.createElement('button');
-      connectBtn.className = 'btn-primary';
+      connectBtn.className = 'btn btn--primary';
       connectBtn.style.cssText = 'font-size:12px;padding:4px 10px;margin-top:8px;';
       connectBtn.textContent = 'Connect';
       connectBtn.addEventListener('click', () => connectIntegration(svc.id, projectId));
@@ -11784,12 +11613,12 @@ function renderAllProjectsCredentials(container, credentials, summaries) {
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'cred-header-actions';
     const addBtn = document.createElement('button');
-    addBtn.className = 'btn btn-sm btn-primary';
+    addBtn.className = 'btn btn--sm btn--primary';
     addBtn.textContent = 'Add';
     addBtn.addEventListener('click', () => toggleAddCredentialForm(group, pid));
     actionsDiv.appendChild(addBtn);
     const importBtn = document.createElement('button');
-    importBtn.className = 'btn btn-sm btn-ghost';
+    importBtn.className = 'btn btn--sm btn-ghost';
     importBtn.textContent = 'Import .env';
     importBtn.addEventListener('click', () => openImportModal(pid));
     actionsDiv.appendChild(importBtn);
@@ -11905,12 +11734,12 @@ function renderCredentialsList(container, credentials, projectId, summary) {
   actions.className = 'cred-header-actions';
   actions.style.marginBottom = '1rem';
   const addBtn = document.createElement('button');
-  addBtn.className = 'btn btn-sm btn-primary';
+  addBtn.className = 'btn btn--sm btn--primary';
   addBtn.textContent = 'Add Credential';
   addBtn.addEventListener('click', () => toggleAddCredentialForm(container, projectId));
   actions.appendChild(addBtn);
   const importBtn = document.createElement('button');
-  importBtn.className = 'btn btn-sm btn-ghost';
+  importBtn.className = 'btn btn--sm btn-ghost';
   importBtn.textContent = 'Import .env';
   importBtn.addEventListener('click', () => openImportModal(projectId));
   actions.appendChild(importBtn);
@@ -12000,12 +11829,12 @@ function toggleAddCredentialForm(container, projectId) {
   const btnRow = document.createElement('div');
   btnRow.className = 'cred-form-buttons';
   const saveBtn = document.createElement('button');
-  saveBtn.className = 'btn btn-sm btn-primary';
+  saveBtn.className = 'btn btn--sm btn--primary';
   saveBtn.textContent = 'Save';
   saveBtn.addEventListener('click', () => submitCredential(projectId));
   btnRow.appendChild(saveBtn);
   const cancelBtn = document.createElement('button');
-  cancelBtn.className = 'btn btn-sm btn-ghost';
+  cancelBtn.className = 'btn btn--sm btn-ghost';
   cancelBtn.textContent = 'Cancel';
   cancelBtn.addEventListener('click', () => { while (slot.firstChild) slot.removeChild(slot.firstChild); });
   btnRow.appendChild(cancelBtn);
@@ -12146,7 +11975,7 @@ function openImportModal(projectId) {
   const fileRow = document.createElement('div');
   fileRow.style.margin = '0.5rem 0';
   const fileLabel = document.createElement('label');
-  fileLabel.className = 'btn btn-sm btn-ghost';
+  fileLabel.className = 'btn btn--sm btn-ghost';
   fileLabel.style.cursor = 'pointer';
   fileLabel.textContent = 'Choose file';
   const fileInput = document.createElement('input');
@@ -12177,7 +12006,7 @@ function openImportModal(projectId) {
   btnRow.style.marginTop = '1rem';
 
   const previewBtn = document.createElement('button');
-  previewBtn.className = 'btn btn-sm btn-ghost';
+  previewBtn.className = 'btn btn--sm btn-ghost';
   previewBtn.textContent = 'Preview';
   previewBtn.addEventListener('click', () => {
     const raw = textarea.value.trim();
@@ -12235,7 +12064,7 @@ function openImportModal(projectId) {
   btnRow.appendChild(previewBtn);
 
   const submitBtn = document.createElement('button');
-  submitBtn.className = 'btn btn-sm btn-primary';
+  submitBtn.className = 'btn btn--sm btn--primary';
   submitBtn.textContent = 'Import';
   submitBtn.disabled = true;
   submitBtn.addEventListener('click', async () => {
@@ -12262,7 +12091,7 @@ function openImportModal(projectId) {
   btnRow.appendChild(submitBtn);
 
   const cancelBtn2 = document.createElement('button');
-  cancelBtn2.className = 'btn btn-sm btn-ghost';
+  cancelBtn2.className = 'btn btn--sm btn-ghost';
   cancelBtn2.textContent = 'Cancel';
   cancelBtn2.addEventListener('click', () => overlay.remove());
   btnRow.appendChild(cancelBtn2);
@@ -12337,44 +12166,6 @@ function initGraphPage() {
   if (graphPage) {
     graphMutationObserver.observe(graphPage, { attributes: true });
     if (!graphPage.hasAttribute('hidden')) fetchGraphData();
-  }
-}
-
-async function initKnowledgePage() {
-  try {
-    const pq = (currentProject && currentProject.id) ? 'project_id=' + encodeURIComponent(currentProject.id) : '';
-    const data = await fetchFromAPI('/api/v1/knowledge/stats' + (pq ? '?' + pq : ''));
-    if (!data) return;
-
-    const statsEl = document.getElementById('knowledge-stats');
-    if (statsEl) {
-      const entityRows = (data.entityCounts || [])
-        .map(function(e) { return '<div class="stat-row"><span class="stat-label">' + escapeHtml(String(e.type)) + '</span><span class="stat-value">' + escapeHtml(String(e.count)) + '</span></div>'; })
-        .join('');
-      statsEl.innerHTML =
-        '<div class="card"><h3 style="margin-bottom:10px;">Entities by Type</h3>' + (entityRows || '<div class="empty-state">No entities yet</div>') + '</div>' +
-        '<div class="card"><h3 style="margin-bottom:10px;">Observations</h3><div class="stat-value" style="font-size:2rem;font-weight:700;">' + escapeHtml(String(data.totalObservations || 0)) + '</div><div class="stat-label">currently active</div></div>' +
-        '<div class="card"><h3 style="margin-bottom:10px;">Relations</h3><div class="stat-value" style="font-size:2rem;font-weight:700;">' + escapeHtml(String(data.totalRelations || 0)) + '</div>' +
-        (data.embeddingDimension ? '<div class="stat-label">Embed dims: ' + escapeHtml(String(data.embeddingDimension)) + '</div>' : '<div class="stat-label">Embeddings: not initialized</div>') + '</div>';
-    }
-
-    const recentEl = document.getElementById('knowledge-recent');
-    if (recentEl) {
-      recentEl.innerHTML = (data.recentObservations || [])
-        // escapeHtml applied to all API-sourced fields to prevent XSS
-        .map(function(o) { return '<div class="feed-item"><strong>' + escapeHtml(String(o.entity_name)) + '</strong>: ' + escapeHtml(String(o.content).slice(0, 120)) + ' <span class="badge">' + escapeHtml(String(o.source)) + '</span></div>'; })
-        .join('') || '<div class="empty-state">No observations yet</div>';
-    }
-
-    const changesEl = document.getElementById('knowledge-changes');
-    if (changesEl) {
-      changesEl.innerHTML = (data.recentChanges || [])
-        // escapeHtml applied to all API-sourced fields to prevent XSS
-        .map(function(o) { return '<div class="feed-item"><strong>' + escapeHtml(String(o.entity_name)) + '</strong>: ' + escapeHtml(String(o.content).slice(0, 100)) + ' <span class="badge">updated</span></div>'; })
-        .join('') || '<div class="empty-state">No changes yet</div>';
-    }
-  } catch (err) {
-    console.warn('Knowledge stats unavailable:', err);
   }
 }
 
@@ -12784,7 +12575,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Initialize Lucide icons (replaces data-lucide attributes with SVGs)
   if (window.lucide) lucide.createIcons();
 
-  buildDashboardAgentCards();
   buildDetailAgentCards();
   buildAgentSelect();
 
@@ -12794,6 +12584,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initSidebarToggle();
   initHamburger();
   initNavigation();
+  initSystemMenu();
   initProjectSelector();
 
   // Register project change subscribers
@@ -12801,6 +12592,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   ProjectBus.on(() => { if (typeof SecurityPage !== 'undefined') SecurityPage.load(); });
   ProjectBus.on(() => fetchProjectOverview());
   ProjectBus.on(() => apRenderHomeSection());
+  ProjectBus.on(() => refreshNeedsYouBadge());
+  addPollingInterval(refreshNeedsYouBadge, 60000);
+  refreshNeedsYouBadge();
+  ProjectBus.on(() => refreshPawBadge());
+  refreshPawBadge();
 
   document.getElementById('header-chip-clear')?.addEventListener('click', () => selectProject(null));
 
@@ -12817,7 +12613,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   fetchYouTubeData();
   fetchAnalyticsMetrics();
   fetchSocialMetrics();
-  renderPipelinePreview();
   addPollingInterval(fetchProjectIntegrations, 300000);
   addPollingInterval(fetchAnalyticsMetrics, 300000);
   addPollingInterval(fetchSocialMetrics, 300000);
@@ -12839,7 +12634,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   initTaskAssignment();
   initPipelinePage();
   initResearchPage();
-  renderResearchUpcoming();
   initSOPsPage();
   initBoardPage();
   initPluginsPage();
@@ -13741,27 +13535,162 @@ initAuthGate();
 // Simplification pass 2026-09-02: every project starts from a short sidebar
 // (Agents, Action Plan, Chat, Logging, Cron Jobs, Paws) plus its own pages.
 // Anything hidden here can be turned back on per project in Settings > Sidebar Pages.
-const PAGE_DEFAULTS = {
-  '':                { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false, 'how-it-works': false },
-  'default':         { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false, 'how-it-works': false, board: false, research: false, pipeline: false, comms: false, knowledge: false },
-  'default':  { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false, 'how-it-works': false, board: false, research: true, pipeline: true, comms: false, knowledge: false },
-  'example-company':     { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false, 'how-it-works': false, board: true, research: true, pipeline: false, comms: false, knowledge: false },
-  'example-company': { paws: false, deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false, 'how-it-works': false, board: false, research: false, pipeline: false, comms: false, knowledge: false },
-  'claudepaw':       { deals: false, portfolio: false, rehab: false, tax: false, participation: false, investments: false, 'how-it-works': false, board: false, research: false, pipeline: false, comms: false, knowledge: false },
-  'broker':          { 'how-it-works': false, board: false, research: false, pipeline: false, comms: false, knowledge: false },
+// Shell v2 section 3.2. The seven items are fixed and identical in every
+// workspace, so there is no per-project visibility map for them any more.
+// Only the Paw group below is per-workspace, and only a Paw has one.
+const PAW_GROUPS = {
+  trader: {
+    label: 'Paw Trader',
+    items: [
+      { id: 'mission-control', label: 'Mission Control', icon: 'line-chart', page: 'page-trader', hash: 'trader' },
+      { id: 'strategies',      label: 'Strategies',      icon: 'git-branch', page: 'page-trader', hash: 'trader' },
+      { id: 'kill-switch-log', label: 'Kill switch log', icon: 'octagon-alert', page: 'page-trader', hash: 'trader/kill-switch-log' },
+    ],
+  },
+  broker: {
+    label: 'Paw Broker',
+    items: [
+      { id: 'deals',         label: 'Deals',         icon: 'home',      page: 'page-deals',         hash: 'deals' },
+      { id: 'portfolio',     label: 'Portfolio',     icon: 'map',       page: 'page-portfolio',     hash: 'portfolio' },
+      { id: 'rehab',         label: 'Rehab',         icon: 'hammer',    page: 'page-rehab',         hash: 'rehab' },
+      { id: 'tax',           label: 'Tax',           icon: 'receipt',   page: 'page-tax',           hash: 'tax' },
+      { id: 'participation', label: 'Participation', icon: 'timer',     page: 'page-participation', hash: 'participation' },
+      { id: 'investments',   label: 'Investments',   icon: 'briefcase', page: 'page-investments',   hash: 'investments' },
+    ],
+  },
+  pawdev: {
+    label: 'Paw Dev',
+    items: [
+      { id: 'board',   label: 'Board',   icon: 'kanban',     page: 'page-pawdev-board',   hash: 'pawdev/board' },
+      { id: 'repos',   label: 'Repos',   icon: 'git-branch', page: 'page-pawdev-repos',   hash: 'pawdev/repos' },
+      { id: 'history', label: 'History', icon: 'history',    page: 'page-pawdev-history', hash: 'pawdev/history' },
+    ],
+  },
 };
+
+// Pages a Paw group owns. Reaching one from a workspace that does not own it
+// is what the toast in navigateToPage catches.
+const PAW_ONLY_PAGES = (function() {
+  const out = {};
+  Object.keys(PAW_GROUPS).forEach(function(pid) {
+    PAW_GROUPS[pid].items.forEach(function(it) { out[it.page] = pid; });
+  });
+  return out;
+})();
+
+// Shell v2 section 3.2. Three sidebar items each front more than one existing
+// page section. The sections keep their ids and their render functions; this
+// bar is the only thing that knows they belong together.
+const PAGE_GROUPS = {
+  overview: {
+    tabs: [
+      { label: 'Overview', page: 'page-dashboard' },
+      { label: 'Board',    page: 'page-board' },
+    ],
+  },
+  work: {
+    tabs: [
+      { label: 'Board',     page: 'page-action-plan' },
+      { label: 'In flight', page: 'page-pipeline' },
+      { label: 'Research',  page: 'page-research' },
+    ],
+  },
+  activity: {
+    tabs: [
+      { label: 'Log',   page: 'page-logging' },
+      { label: 'Comms', page: 'page-comms' },
+      { label: 'Audit', page: 'page-audit' },
+    ],
+  },
+  automations: {
+    tabs: [
+      { label: 'Cron jobs', page: 'page-sops' },
+      { label: 'Routines',  page: 'page-paws' },
+    ],
+  },
+  integrations: {
+    tabs: [
+      { label: 'Catalog',   page: 'page-integrations', sub: 'browse' },
+      { label: 'Connected', page: 'page-integrations', sub: 'connected' },
+      { label: 'Plugins',   page: 'page-plugins' },
+      { label: 'Webhooks',  page: 'page-webhooks' },
+    ],
+  },
+};
+
+function groupForPage(pageId) {
+  const ids = Object.keys(PAGE_GROUPS);
+  for (let i = 0; i < ids.length; i++) {
+    if (PAGE_GROUPS[ids[i]].tabs.some(function(t) { return t.page === pageId; })) return ids[i];
+  }
+  return null;
+}
+
+// Draw the tab strip for whichever group owns pageId, or hide it.
+// activeSub disambiguates two tabs that share one page section (Integrations).
+function renderPageTabs(pageId, activeSub) {
+  const bar = document.getElementById('page-tabs');
+  if (!bar) return;
+  const groupId = groupForPage(pageId);
+  bar.textContent = '';
+  if (!groupId) { bar.hidden = true; return; }
+  if (groupId === 'integrations' && !activeSub) activeSub = 'connected'; // plain #integrations highlights Connected
+
+  PAGE_GROUPS[groupId].tabs.forEach(function(tab) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'page-tabs__tab';
+    btn.textContent = tab.label;
+    btn.setAttribute('role', 'tab');
+    const isActive = tab.page === pageId && (!tab.sub || tab.sub === activeSub);
+    if (isActive) {
+      btn.classList.add('page-tabs__tab--active');
+      btn.setAttribute('aria-selected', 'true');
+    } else {
+      btn.setAttribute('aria-selected', 'false');
+    }
+    btn.addEventListener('click', function() {
+      if (tab.page === pageId) {
+        // Same section, different in-page tab (Integrations only).
+        renderPageTabs(pageId, tab.sub);
+        if (tab.sub) {
+          const inPage = document.querySelector('[data-int-tab="' + tab.sub + '"]');
+          if (inPage) inPage.click();
+        }
+        return;
+      }
+      navigateToPage(tab.page, true, tab.sub);
+    });
+    bar.appendChild(btn);
+  });
+  bar.hidden = false;
+}
 
 // Operator knobs per project slug. Values live in project_settings.knobs
 // (JSON) and reach the bot through project_settings_sync. Env vars are the
 // fallback when a knob is blank.
 const KNOB_SCHEMA = {
+  // Applies to every project. Merged ahead of the per-slug group below.
+  '*': [
+    { key: 'action_policy', label: 'Action policy (JSON)', type: 'textarea',
+      placeholder: '{"code.pr":"auto","github.comment":"ask","social.post":"ask","email.send":"ask","schedule.change":"ask","spend.external":"ask","paw.act":"auto"}',
+      hint: 'What agents may do without you. auto = do it and log it. ask = open a card and wait for your tap. never = refuse and log. An action class you leave out reads as ask.' },
+  ],
   'default': [
     { key: 'quiet_hours', label: 'Quiet hours (ET)', type: 'text', placeholder: '21-8', hint: 'Routine Telegram messages are held in this window and released as one batch. "off" disables.' },
+    { key: 'digest_mode', label: 'Digest mode', type: 'select', options: ['', 'daily', 'off'], hint: 'daily holds every routine message and sends one 08:00 summary. off falls back to quiet hours only.' },
+    { key: 'approval_stale_hours', label: 'Approval expiry (hours)', type: 'number', placeholder: '48', hint: 'An unanswered routine approval is treated as a skip after this long. The cycle is marked failed so it shows up as a missed decision.' },
   ],
     { key: 'nav_drop_pct', label: 'NAV drop halt (%)', type: 'number', placeholder: '5', hint: 'Halt trading when NAV falls this much over 7 days.' },
     { key: 'daily_trade_cap', label: 'Daily trade cap', type: 'number', placeholder: '20', hint: 'Max new decisions per day.' },
     { key: 'symbol_cooldown_days', label: 'Symbol cooldown (days)', type: 'number', placeholder: '10', hint: 'Bench a symbol this long after a losing exit.' },
     { key: 'alert_on_reject', label: 'Alert on engine reject', type: 'select', options: ['', 'true', 'false'], hint: 'Send a message when the engine rejects an order.' },
+  ],
+  'pawdev': [
+    { key: 'repos', label: 'Repos in scope', type: 'text', placeholder: 'Owner/repo-one,Owner/repo-two', hint: 'Comma separated Owner/Repo list the routine reads each cycle. One gh call per list per repo, so keep it short.' },
+    { key: 'owner_login', label: 'Owner GitHub login', type: 'text', placeholder: 'your-github-login', hint: 'A commit, issue or PR by this login or the bot is tagged self and never auto-advances past Triaged.' },
+    { key: 'bot_login', label: 'Bot GitHub login', type: 'text', placeholder: 'paw-dev-bot', hint: 'The GitHub account the routine files under. Anything it opens is tagged self and never auto-advances past Triaged.' },
+    { key: 'monthly_cost_cap_usd', label: 'Monthly cost cap (USD)', type: 'number', placeholder: '40', hint: 'At 80 percent the routine drops to the local provider. At 100 percent it refuses to run.' },
   ],
 };
 
@@ -13769,9 +13698,9 @@ function renderKnobsSettings(proj) {
   const section = document.getElementById('settings-knobs-section');
   const grid = document.getElementById('settings-knobs-grid');
   if (!section || !grid) return;
-  const schema = proj && KNOB_SCHEMA[proj.slug];
+  const schema = proj ? (KNOB_SCHEMA['*'] || []).concat(KNOB_SCHEMA[proj.slug] || []) : null;
   while (grid.firstChild) grid.removeChild(grid.firstChild);
-  if (!schema) { section.hidden = true; return; }
+  if (!schema || schema.length === 0) { section.hidden = true; return; }
   section.hidden = false;
   const raw = proj.knobs || (proj.settings && proj.settings.knobs) || null;
   const current = typeof raw === 'string' ? (JSON.parse(raw) || {}) : (raw || {});
@@ -13790,6 +13719,12 @@ function renderKnobsSettings(proj) {
         opt.value = o; opt.textContent = o === '' ? 'default' : o;
         input.appendChild(opt);
       });
+      input.value = current[k.key] != null ? String(current[k.key]) : '';
+    } else if (k.type === 'textarea') {
+      input = document.createElement('textarea');
+      input.className = 'input';
+      input.rows = 4;
+      input.placeholder = k.placeholder || '';
       input.value = current[k.key] != null ? String(current[k.key]) : '';
     } else {
       input = document.createElement('input');
@@ -13829,42 +13764,83 @@ function saveKnob(proj, key, value) {
   });
 }
 
-// Pages shown in the sidebar (order matches sidebar HTML)
-const SIDEBAR_PAGES = [
-  { id: 'agents',        label: '🤖 AI Agents' },
-  { id: 'action-plan',   label: '📋 Action Plan' },
-  { id: 'pipeline',      label: '⚡ Pipeline' },
-  { id: 'board',         label: '📅 Monday Board' },
-  { id: 'research',      label: '🔬 Research' },
-  { id: 'comms',         label: '💬 Comms' },
-  { id: 'chat',          label: '💬 Chat' },
-  { id: 'logging',       label: '📝 Logging' },
-  { id: 'sops',          label: '⏰ Cron Jobs' },
-  { id: 'paws',          label: '🐾 Paws Mode' },
-  { id: 'how-it-works',  label: '📖 How It Works' },
-  { id: 'deals',         label: '🏠 Deals' },
-  { id: 'portfolio',     label: '🗺️ Portfolio' },
-  { id: 'rehab',         label: '🔨 Rehab' },
-  { id: 'tax',           label: '🧾 Tax' },
-  { id: 'participation', label: '⏱️ Participation' },
-  { id: 'investments',   label: '💼 Investments' },
-  { id: 'knowledge',     label: '🧠 Knowledge Graph' },
-];
-
 function applyAdminVisibility() {
   const isAdmin = CURRENT_USER && CURRENT_USER.isAdmin;
-  document.querySelectorAll('.sidebar-link--admin-only').forEach(el => {
+  document.querySelectorAll('.sidebar-link--admin-only, .header-nav__link--admin-only').forEach(el => {
     el.style.display = isAdmin ? '' : 'none';
   });
 }
 
-function applyPageVisibility(projectSlug, overrides) {
-  var defaults = PAGE_DEFAULTS[projectSlug] || {};
-  var visibility = Object.assign({}, defaults, overrides || {});
-  document.querySelectorAll('.sidebar-link[data-page]').forEach(function(link) {
-    var pageId = link.dataset.page.replace('page-', '');
-    link.style.display = (visibility[pageId] === false) ? 'none' : '';
+// Rebuild the Paw group for the current workspace. The seven fixed items are
+// static markup and are never hidden.
+function applySidebar(project) {
+  const wrap = document.getElementById('sidebar-paw-group');
+  const label = document.getElementById('sidebar-paw-label');
+  const links = document.getElementById('sidebar-paw-links');
+  if (!wrap || !links || !label) return;
+
+  const group = project && project.id ? PAW_GROUPS[project.id] : null;
+  links.textContent = '';
+  if (!group) { wrap.hidden = true; return; }
+
+  label.textContent = group.label;
+  const overrides = (project.settings && project.settings.page_overrides) || {};
+  group.items.forEach(function(item) {
+    if (overrides[item.id] === false) return;
+    const a = document.createElement('a');
+    a.className = 'sidebar-link';
+    a.href = '#' + item.hash;
+    a.dataset.page = item.page;
+    a.dataset.item = item.id;
+    const icon = document.createElement('i');
+    icon.setAttribute('data-lucide', item.icon);
+    const span = document.createElement('span');
+    span.textContent = item.label;
+    a.appendChild(icon);
+    a.appendChild(span);
+    a.addEventListener('click', function(e) {
+      e.preventDefault();
+      window.location.hash = item.hash;
+    });
+    links.appendChild(a);
   });
+  wrap.hidden = false;
+  if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+// ---------------------------------------------------------------------------
+// Shell v2 shared components. Every async surface uses these three instead of
+// setting "Loading..." or String(err) as body text.
+// ---------------------------------------------------------------------------
+
+function cpEmpty(message) {
+  const el = document.createElement('div');
+  el.className = 'cp-empty';
+  el.textContent = message;
+  return el;
+}
+
+function cpSkeleton(rows) {
+  const wrap = document.createElement('div');
+  wrap.className = 'cp-skeleton';
+  const n = rows || 3;
+  for (let i = 0; i < n; i++) {
+    const row = document.createElement('div');
+    row.className = 'cp-skeleton__row';
+    row.style.width = (60 + ((i * 17) % 35)) + '%';
+    wrap.appendChild(row);
+  }
+  return wrap;
+}
+
+// `what` names the thing that failed, never the exception. The detail goes to
+// the console so the operator can still read it in devtools.
+function cpErrorCard(what, err) {
+  if (err) console.warn(what + ' failed:', err);
+  const el = document.createElement('div');
+  el.className = 'cp-error';
+  el.textContent = 'Could not load ' + what + '. Try refreshing.';
+  return el;
 }
 
 // ---------------------------------------------------------------------------
@@ -14437,6 +14413,18 @@ async function fetchUsageData() {
   _usageState.refreshing = true;
   const host = document.querySelector('[data-bind="usage-report"]');
   try {
+    const needs = await fetchFromAPI('/api/v1/needs-you').catch(() => null);
+    _needsYouRows = (needs && needs.rows) || [];
+
+    // The health cards (report, timeseries, tools) are admin-only data.
+    // A member sees the Needs you rows only, never an error banner.
+    const isAdmin = CURRENT_USER && CURRENT_USER.isAdmin;
+    if (!isAdmin) {
+      _usageState.data = null;
+      if (host) host.innerHTML = usageNeedsYouCard();
+      return;
+    }
+
     const qs = _usageFilterQs();
     // Tool usage is gracefully optional (older server builds may 404). Degraded mode shows the page without it.
     const [report, ts, tools] = await Promise.all([
@@ -14475,10 +14463,29 @@ function _usageFilterQs() {
   return parts.length ? '&' + parts.join('&') : '';
 }
 
+let _needsYouRows = null;
+
+function usageNeedsYouCard() {
+  if (!_needsYouRows) return '<div class="cp-card"><h3>Needs you</h3><div class="cp-empty">Loading</div></div>';
+  if (!_needsYouRows.length) {
+    return '<div class="cp-card"><h3>Needs you</h3><div class="cp-empty">Nothing is waiting on you.</div></div>';
+  }
+  const rows = _needsYouRows.map(function(r) {
+    return '<a class="needs-you-row" href="' + _usageEsc(r.url) + '">' +
+      '<span class="needs-you-row__kind">' + _usageEsc(r.kind.replace(/_/g, ' ')) + '</span>' +
+      '<span class="needs-you-row__title">' + _usageEsc(r.title) + '</span>' +
+      '<span class="needs-you-row__project">' + _usageEsc(r.project_id) + '</span>' +
+      '<span class="needs-you-row__age">' + _usageEsc(timeAgo(Date.now() - r.age_ms)) + '</span>' +
+      '</a>';
+  }).join('');
+  return '<div class="cp-card"><h3>Needs you</h3>' + rows + '</div>';
+}
+
 function renderUsagePage(data) {
   const host = document.querySelector('[data-bind="usage-report"]');
   if (!host) return;
   host.innerHTML = [
+    usageNeedsYouCard(),
     usageKillSwitch(data),
     usageStatusBanner(data),
     usageAgentSdkPoolCard(data),
@@ -15229,7 +15236,7 @@ function openSopResultModal(task) {
   titleEl.textContent = formatTaskTitle(task.id);
   var closeBtn = document.createElement('button');
   closeBtn.type = 'button';
-  closeBtn.className = 'btn btn-secondary';
+  closeBtn.className = 'btn btn--secondary';
   closeBtn.innerHTML = '<i data-lucide="x" style="width:14px;height:14px;"></i>';
   closeBtn.setAttribute('aria-label', 'Close');
   closeBtn.addEventListener('click', function() { modal.remove(); });
@@ -15430,9 +15437,9 @@ function ensureDealsPageDOM() {
 
   // Heading row with badge
   var heading = document.createElement('div');
-  heading.className = 'page-heading-row';
+  heading.className = 'cp-page-header';
   var h2 = document.createElement('h2');
-  h2.className = 'page-heading';
+  h2.className = 'cp-page-header__title';
   h2.textContent = 'Deals';
   heading.appendChild(h2);
   var badge = document.createElement('span');
@@ -15447,7 +15454,8 @@ function ensureDealsPageDOM() {
   scoutCard.id = 'deals-scout-feed';
   scoutCard.className = 'stat-card';
   scoutCard.style.cssText = 'padding:18px;';
-  scoutCard.textContent = 'Loading top scout finds...';
+  scoutCard.textContent = '';
+  scoutCard.appendChild(cpSkeleton(4));
   page.appendChild(scoutCard);
 
   // Segmented control: Kanban | Father-Broker Inbox
@@ -15487,7 +15495,8 @@ function ensureDealsPageDOM() {
   inbox.id = 'deals-inbox';
   inbox.className = 'stat-card';
   inbox.style.cssText = 'padding:18px;margin-top:12px;display:none;';
-  inbox.textContent = 'Loading father-broker inbox...';
+  inbox.textContent = '';
+  inbox.appendChild(cpSkeleton(4));
   page.appendChild(inbox);
 
   // Modal backdrop (hidden until openDealUnderwritingModal)
@@ -15639,10 +15648,7 @@ function refreshDealsKanban() {
     }
   }).catch(function(e) {
     while (board.firstChild) board.removeChild(board.firstChild);
-    var err = document.createElement('div');
-    err.style.cssText = 'padding:18px;opacity:0.7;';
-    err.textContent = 'Pipeline unavailable: ' + String(e);
-    board.appendChild(err);
+    board.appendChild(cpErrorCard('the deals pipeline', e));
   });
 }
 
@@ -15680,11 +15686,24 @@ function _renderKanbanBoard(deals) {
   });
 
   DEAL_STATUSES.forEach(function(status) {
-    board.appendChild(_renderKanbanColumn(status, buckets[status] || []));
+    board.appendChild(_renderKanbanColumn(status, buckets[status] || [], {
+      label: DEAL_STATUS_LABELS[status] || status,
+      renderItem: _renderDealCard,
+      draggable: true,
+      onDrop: function(itemId, fromStatus) { _dealsHandleDrop(itemId, fromStatus, status); },
+    }));
   });
 }
 
-function _renderKanbanColumn(status, deals) {
+// Reusable kanban column, shared by the Deals board and the Paw Dev board
+// (Phase 3 Task 11, ruling N6). `opts.label` and `opts.renderItem` let each
+// caller supply its own column title and card renderer; `opts.draggable`
+// (default true) turns the deal-specific drag-and-drop wiring on or off,
+// since Paw Dev cards are not draggable.
+function _renderKanbanColumn(status, items, opts) {
+  opts = opts || {};
+  var draggable = opts.draggable !== false;
+
   var col = document.createElement('div');
   col.className = 'stat-card';
   col.dataset.dealsStatus = status;
@@ -15695,12 +15714,12 @@ function _renderKanbanColumn(status, deals) {
   header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;' +
     'padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.08);';
   var title = document.createElement('div');
-  title.textContent = DEAL_STATUS_LABELS[status] || status;
+  title.textContent = opts.label || status;
   title.style.cssText = 'font-weight:600;letter-spacing:0.3px;';
   header.appendChild(title);
   var count = document.createElement('span');
   count.className = 'sop-task-count';
-  count.textContent = String(deals.length);
+  count.textContent = String(items.length);
   header.appendChild(count);
   col.appendChild(header);
 
@@ -15709,31 +15728,33 @@ function _renderKanbanColumn(status, deals) {
     'padding:4px;min-height:60px;border-radius:6px;transition:background 0.12s;';
   dropZone.dataset.dealsDropTarget = status;
 
-  dropZone.addEventListener('dragover', function(e) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    dropZone.style.background = 'rgba(76,175,80,0.08)';
-  });
-  dropZone.addEventListener('dragleave', function() {
-    dropZone.style.background = 'transparent';
-  });
-  dropZone.addEventListener('drop', function(e) {
-    e.preventDefault();
-    dropZone.style.background = 'transparent';
-    var dealId = e.dataTransfer.getData('text/deal-id');
-    var fromStatus = e.dataTransfer.getData('text/deal-from');
-    if (!dealId) return;
-    if (fromStatus === status) return;
-    _dealsHandleDrop(dealId, fromStatus, status);
-  });
+  if (draggable) {
+    dropZone.addEventListener('dragover', function(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      dropZone.style.background = 'rgba(76,175,80,0.08)';
+    });
+    dropZone.addEventListener('dragleave', function() {
+      dropZone.style.background = 'transparent';
+    });
+    dropZone.addEventListener('drop', function(e) {
+      e.preventDefault();
+      dropZone.style.background = 'transparent';
+      var itemId = e.dataTransfer.getData('text/deal-id');
+      var fromStatus = e.dataTransfer.getData('text/deal-from');
+      if (!itemId) return;
+      if (fromStatus === status) return;
+      if (opts.onDrop) opts.onDrop(itemId, fromStatus);
+    });
+  }
 
-  if (deals.length === 0) {
+  if (items.length === 0) {
     var emptyCol = document.createElement('div');
     emptyCol.style.cssText = 'opacity:0.4;font-size:0.78rem;text-align:center;padding:18px 6px;';
     emptyCol.textContent = '(empty)';
     dropZone.appendChild(emptyCol);
   } else {
-    deals.forEach(function(d) { dropZone.appendChild(_renderDealCard(d)); });
+    items.forEach(function(d) { dropZone.appendChild(opts.renderItem(d)); });
   }
 
   col.appendChild(dropZone);
@@ -15830,7 +15851,8 @@ function _dealsHandleDrop(dealId, fromStatus, toStatus) {
   }).catch(function(e) {
     deal.status = fromStatus;
     _renderKanbanBoard(DEALS_STATE.deals);
-    _dealsToast('Network error: ' + String(e), true);
+    console.warn('Deal move failed', e);
+    _dealsToast('Move failed. Try again.', true);
   });
 }
 
@@ -16045,10 +16067,7 @@ function refreshFatherBrokerInbox() {
     _renderFatherBrokerInbox(rows);
   }).catch(function(e) {
     while (card.firstChild) card.removeChild(card.firstChild);
-    var err = document.createElement('div');
-    err.style.cssText = 'opacity:0.7;';
-    err.textContent = 'Inbox unavailable: ' + String(e);
-    card.appendChild(err);
+    card.appendChild(cpErrorCard('father broker listings', e));
   });
 }
 
@@ -16172,7 +16191,8 @@ function _dealsSetFatherBrokerStatus(id, status) {
     }
     return true;
   }).catch(function(e) {
-    _dealsToast('Network error: ' + String(e), true);
+    console.warn('Father-broker status update failed', e);
+    _dealsToast('Status update failed. Try again.', true);
     return false;
   });
 }
@@ -16341,9 +16361,9 @@ function ensurePortfolioPageDOM() {
   page.hidden = true;
 
   var heading = document.createElement('div');
-  heading.className = 'page-heading-row';
+  heading.className = 'cp-page-header';
   var h2 = document.createElement('h2');
-  h2.className = 'page-heading';
+  h2.className = 'cp-page-header__title';
   h2.textContent = 'Portfolio';
   heading.appendChild(h2);
   var badge = document.createElement('span');
@@ -17283,9 +17303,9 @@ function ensureRehabPageDOM() {
   page.hidden = true;
 
   var heading = document.createElement('div');
-  heading.className = 'page-heading-row';
+  heading.className = 'cp-page-header';
   var h2 = document.createElement('h2');
-  h2.className = 'page-heading';
+  h2.className = 'cp-page-header__title';
   h2.textContent = 'Rehab and Improvements';
   heading.appendChild(h2);
   page.appendChild(heading);
@@ -17294,21 +17314,24 @@ function ensureRehabPageDOM() {
   activeCard.id = 'rehab-active-list';
   activeCard.className = 'stat-card';
   activeCard.style.cssText = 'padding:18px;';
-  activeCard.textContent = 'Loading active rehabs...';
+  activeCard.textContent = '';
+  activeCard.appendChild(cpSkeleton(4));
   page.appendChild(activeCard);
 
   var contractorCard = document.createElement('div');
   contractorCard.id = 'rehab-contractor-scoreboard';
   contractorCard.className = 'stat-card';
   contractorCard.style.cssText = 'padding:18px;margin-top:12px;';
-  contractorCard.textContent = 'Loading contractor scoreboard...';
+  contractorCard.textContent = '';
+  contractorCard.appendChild(cpSkeleton(4));
   page.appendChild(contractorCard);
 
   var ledgerCard = document.createElement('div');
   ledgerCard.id = 'rehab-improvements-ledger';
   ledgerCard.className = 'stat-card';
   ledgerCard.style.cssText = 'padding:18px;margin-top:12px;';
-  ledgerCard.textContent = 'Loading improvements ledger...';
+  ledgerCard.textContent = '';
+  ledgerCard.appendChild(cpSkeleton(4));
   page.appendChild(ledgerCard);
 
   main.appendChild(page);
@@ -17326,7 +17349,8 @@ async function refreshRehabActiveList() {
     _rehabRows = (data && Array.isArray(data.rehab_estimates)) ? data.rehab_estimates : [];
     renderRehabActiveList(container);
   } catch (e) {
-    container.textContent = 'Active rehab list unavailable: ' + String(e);
+    container.textContent = '';
+    container.appendChild(cpErrorCard('active rehabs', e));
   }
 }
 
@@ -17480,7 +17504,8 @@ async function refreshContractorScoreboard() {
     _contractorRows = (data && Array.isArray(data.contractors)) ? data.contractors : [];
     renderContractorScoreboard(container);
   } catch (e) {
-    container.textContent = 'Contractor scoreboard unavailable: ' + String(e);
+    container.textContent = '';
+    container.appendChild(cpErrorCard('contractor scoreboard', e));
   }
 }
 
@@ -17611,7 +17636,8 @@ async function refreshImprovementsLedger() {
     _improvementRows = (imps && Array.isArray(imps.improvements)) ? imps.improvements : [];
     renderImprovementsLedger(container);
   } catch (e) {
-    container.textContent = 'Improvements ledger unavailable: ' + String(e);
+    container.textContent = '';
+    container.appendChild(cpErrorCard('the improvements ledger', e));
   }
 }
 
@@ -17804,8 +17830,9 @@ function openAddImprovementModal(propertyId) {
         msg.style.color = '#e74c3c';
       }
     } catch (e) {
+      console.warn('Improvement save failed', e);
       saveBtn.disabled = false;
-      msg.textContent = 'Save failed: ' + String(e);
+      msg.textContent = 'Save failed. Try again.';
       msg.style.color = '#e74c3c';
     }
   });
@@ -17900,9 +17927,9 @@ function ensureTaxPageDOM() {
 
   // Page heading
   var heading = document.createElement('div');
-  heading.className = 'page-heading-row';
+  heading.className = 'cp-page-header';
   var h2 = document.createElement('h2');
-  h2.className = 'page-heading';
+  h2.className = 'cp-page-header__title';
   h2.textContent = 'Paw Broker Tax';
   heading.appendChild(h2);
   page.appendChild(heading);
@@ -18577,7 +18604,8 @@ async function refreshTaxClock() {
     _taxRenderExchangeClocks(clocksCard, clock);
     _taxRenderQEstimate(qCard, clock);
   } catch (e) {
-    depCard.textContent = 'Tax clock unavailable: ' + String(e);
+    depCard.textContent = '';
+    depCard.appendChild(cpErrorCard('the tax clock', e));
   }
 }
 
@@ -18603,7 +18631,8 @@ async function refreshCostSegTracker() {
     _taxRenderCostSeg(trackerCard, studies);
     _taxRenderCostSegCandidates(candCard, properties, studies);
   } catch (e) {
-    trackerCard.textContent = 'Cost-seg data unavailable: ' + String(e);
+    trackerCard.textContent = '';
+    trackerCard.appendChild(cpErrorCard('cost-seg data', e));
   }
 }
 
@@ -18622,7 +18651,8 @@ async function refreshLTTAGrid() {
 
     _taxRenderLTTAGrid(lttaCard, abatements);
   } catch (e) {
-    lttaCard.textContent = 'LTTA data unavailable: ' + String(e);
+    lttaCard.textContent = '';
+    lttaCard.appendChild(cpErrorCard('LTTA data', e));
   }
 }
 
@@ -18807,7 +18837,10 @@ async function refreshParticipationTotals() {
     renderParticipationPropertyTotals();
   } catch (e) {
     var card = document.getElementById('participation-reps-gauge');
-    if (card) card.textContent = 'Totals unavailable: ' + String(e);
+    if (card) {
+      card.textContent = '';
+      card.appendChild(cpErrorCard('participation totals', e));
+    }
   }
 }
 
@@ -18933,7 +18966,8 @@ async function submitParticipationEntry() {
     actEl.value = ''; hrsEl.value = ''; if (evEl) evEl.value = '';
     refreshParticipationTotals();
   } catch (e) {
-    errBox.textContent = 'Save failed: ' + String(e);
+    console.warn('Participation log save failed', e);
+    errBox.textContent = 'Save failed. Try again.';
   }
 }
 
@@ -19279,10 +19313,10 @@ function ensureInvestmentsPageDOM() {
   page.hidden = true;
 
   var heading = document.createElement('div');
-  heading.className = 'page-heading-row';
+  heading.className = 'cp-page-header';
 
   var h2 = document.createElement('h2');
-  h2.className = 'page-heading';
+  h2.className = 'cp-page-header__title';
   h2.textContent = 'Investments';
   heading.appendChild(h2);
 
@@ -19305,21 +19339,24 @@ function ensureInvestmentsPageDOM() {
   summary.id = 'inv-summary';
   summary.className = 'stat-card';
   summary.style.cssText = 'padding:18px;margin-bottom:14px;';
-  summary.textContent = 'Loading totals...';
+  summary.textContent = '';
+  summary.appendChild(cpSkeleton(2));
   page.appendChild(summary);
 
   var freshness = document.createElement('div');
   freshness.id = 'inv-freshness';
   freshness.className = 'stat-card';
   freshness.style.cssText = 'padding:14px 18px;margin-bottom:14px;';
-  freshness.textContent = 'Loading account freshness...';
+  freshness.textContent = '';
+  freshness.appendChild(cpSkeleton(1));
   page.appendChild(freshness);
 
   var tableCard = document.createElement('div');
   tableCard.id = 'inv-table-card';
   tableCard.className = 'stat-card';
   tableCard.style.cssText = 'padding:14px;';
-  tableCard.textContent = 'Loading investments...';
+  tableCard.textContent = '';
+  tableCard.appendChild(cpSkeleton(4));
   page.appendChild(tableCard);
 
   main.appendChild(page);
@@ -19393,7 +19430,10 @@ async function refreshInvestmentsTable() {
   try {
     data = await fetchFromAPI(url);
   } catch (e) {
-    if (card) card.textContent = 'Investments unavailable: ' + String(e);
+    if (card) {
+      card.textContent = '';
+      card.appendChild(cpErrorCard('the investment ledger', e));
+    }
     return;
   }
   if (data === null) return;
@@ -19833,7 +19873,8 @@ async function submitInvestmentEntry(overlay, saveBtn, editId) {
       body: JSON.stringify(body),
     });
   } catch (e) {
-    if (errEl) errEl.textContent = 'Network error: ' + String(e);
+    console.warn('Investment save failed', e);
+    if (errEl) errEl.textContent = 'Save failed. Try again.';
     if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = editId ? 'Save changes' : 'Add row'; }
     return;
   }
@@ -19872,7 +19913,8 @@ async function runDeleteInvestment(id) {
   try {
     result = await apiFetch('/api/v1/broker/investments/' + encodeURIComponent(id), { method: 'DELETE' });
   } catch (e) {
-    if (typeof showToast === 'function') showToast('Delete failed: ' + String(e), 'error');
+    console.warn('Investment delete failed', e);
+    if (typeof showToast === 'function') showToast('Delete failed. Try again.', 'error');
     return;
   }
   if (!result || !result.ok) {
@@ -19892,5 +19934,201 @@ if (typeof ProjectBus !== 'undefined' && ProjectBus && typeof ProjectBus.on === 
     var pageId = active ? active.id : null;
     if (!pageId && typeof currentPageId !== 'undefined') pageId = currentPageId;
     if (pageId === 'page-investments') refreshInvestmentsTable();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Paw Dev. Three read-only pages over data that already exists: action_items
+// for the board, the latest routine cycle for the repo snapshot, repo_events
+// for the history. The board reuses _renderKanbanColumn (Phase 3 Task 11,
+// ruling N6) with its own label map and card renderer, drag-and-drop off.
+// ---------------------------------------------------------------------------
+var PAWDEV_COLUMNS = [
+  { status: 'proposed',    label: 'Triaged' },
+  { status: 'approved',    label: 'Queued' },
+  { status: 'in_progress', label: 'Coding' },
+  { status: 'blocked',     label: 'Needs you' },
+  { status: 'completed',   label: 'Shipped' },
+  { status: 'rejected',    label: 'Dropped' },
+];
+
+function _pawdevCard(item) {
+  var el = document.createElement('div');
+  el.className = 'cp-card';
+  el.style.cssText = 'padding:10px;margin:0;cursor:pointer;';
+  el.addEventListener('click', function() { location.hash = 'work/' + encodeURIComponent(item.id); });
+
+  var title = document.createElement('div');
+  title.textContent = item.title;
+  title.style.cssText = 'font-size:0.82rem;line-height:1.35;';
+  el.appendChild(title);
+
+  var ref = null;
+  try { ref = JSON.parse(item.external_ref || '{}'); } catch (e) { ref = null; }
+  if (ref && ref.pr) {
+    // Fix round 1, item 2: only link when the value is actually a GitHub PR
+    // URL. external_ref comes off the wire; a value that doesn't match this
+    // shape is shown as plain text instead of being handed to href.
+    var prUrlPattern = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/;
+    if (prUrlPattern.test(ref.pr)) {
+      var link = document.createElement('a');
+      link.href = ref.pr;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = 'pull request';
+      link.style.cssText = 'font-size:0.75rem;color:var(--accent);';
+      link.addEventListener('click', function(e) { e.stopPropagation(); });
+      el.appendChild(link);
+    } else {
+      var prText = document.createElement('span');
+      prText.textContent = 'pull request';
+      prText.style.cssText = 'font-size:0.75rem;opacity:0.65;';
+      el.appendChild(prText);
+    }
+  }
+  if (item.proposed_by) {
+    var by = document.createElement('div');
+    by.textContent = item.proposed_by;
+    by.style.cssText = 'font-size:0.72rem;opacity:0.65;margin-top:4px;';
+    el.appendChild(by);
+  }
+  return el;
+}
+
+function initPawdevBoardPage() { refreshPawdevBoard(); }
+
+function refreshPawdevBoard() {
+  var board = document.getElementById('pawdev-board');
+  if (!board) return;
+  while (board.firstChild) board.removeChild(board.firstChild);
+  board.appendChild(cpSkeleton(3));
+
+  fetchFromAPI('/api/v1/action-items?project_id=pawdev').then(function(data) {
+    if (data === null) return;
+    var items = (data && data.items) || [];
+    while (board.firstChild) board.removeChild(board.firstChild);
+    PAWDEV_COLUMNS.forEach(function(col) {
+      board.appendChild(_renderKanbanColumn(col.status, items.filter(function(i) { return i.status === col.status; }), {
+        label: col.label,
+        renderItem: _pawdevCard,
+        draggable: false,
+      }));
+    });
+    var count = document.getElementById('pawdev-board-count');
+    if (count) count.textContent = items.length + ' cards';
+  }).catch(function(e) {
+    while (board.firstChild) board.removeChild(board.firstChild);
+    board.appendChild(cpErrorCard('the Paw Dev board'));
+    console.error('pawdev board', e);
+  });
+}
+
+function initPawdevReposPage() {
+  var host = document.getElementById('pawdev-repos');
+  if (!host) return;
+  while (host.firstChild) host.removeChild(host.firstChild);
+  host.appendChild(cpSkeleton(4));
+
+  fetchFromAPI('/api/v1/paws/paw-dev-cycle').then(function(data) {
+    while (host.firstChild) host.removeChild(host.firstChild);
+    var cycle = data && data.latest_cycle;
+    var raw = null;
+    try { raw = JSON.parse(cycle.state.observe_raw).raw_data; } catch (e) { raw = null; }
+    if (!raw || !raw.repos) { host.appendChild(cpEmpty('No collector output yet. Run the routine once.')); return; }
+
+    raw.repos.forEach(function(r) {
+      var card = document.createElement('div');
+      card.className = 'cp-card';
+      var h = document.createElement('h3');
+      h.textContent = r.repo;
+      card.appendChild(h);
+
+      var rows = [
+        ['open issues seen this cycle', String(r.new_issues.length)],
+        ['open pull requests seen this cycle', String(r.new_prs.length)],
+        ['latest CI', r.ci.conclusion || 'no runs'],
+        ['dependabot alerts', r.dependabot_open === null || r.dependabot_open === undefined ? 'unknown' : String(r.dependabot_open)],
+        ['mirror', r.is_mirror ? (r.mirror_drift.drifted ? 'behind the monorepo' : 'in sync') : 'not a mirror'],
+      ];
+      rows.forEach(function(pair) {
+        var line = document.createElement('div');
+        line.style.cssText = 'display:flex;justify-content:space-between;font-size:0.82rem;padding:3px 0;';
+        var k = document.createElement('span'); k.textContent = pair[0]; k.style.opacity = '0.7';
+        var v = document.createElement('span'); v.textContent = pair[1];
+        if (pair[1] === 'failure' || pair[1] === 'behind the monorepo') v.style.color = 'var(--accent)';
+        line.appendChild(k); line.appendChild(v);
+        card.appendChild(line);
+      });
+      if (r.errors && r.errors.length) {
+        var err = document.createElement('div');
+        err.style.cssText = 'font-size:0.75rem;opacity:0.7;margin-top:6px;';
+        err.textContent = r.errors.join('; ');
+        card.appendChild(err);
+      }
+      host.appendChild(card);
+    });
+
+    var stamp = document.getElementById('pawdev-repos-stamp');
+    if (stamp && cycle) stamp.textContent = 'as of ' + new Date(cycle.started_at).toLocaleString();
+  }).catch(function(e) {
+    while (host.firstChild) host.removeChild(host.firstChild);
+    host.appendChild(cpErrorCard('the repo snapshot'));
+    console.error('pawdev repos', e);
+  });
+}
+
+function initPawdevHistoryPage() {
+  var host = document.getElementById('pawdev-history');
+  if (!host) return;
+  while (host.firstChild) host.removeChild(host.firstChild);
+  host.appendChild(cpSkeleton(5));
+
+  fetchFromAPI('/api/v1/repo-events?project_id=pawdev').then(function(data) {
+    while (host.firstChild) host.removeChild(host.firstChild);
+    var events = (data && data.events) || [];
+    var stats = (data && data.stats) || [];
+
+    var ext = 0, self = 0;
+    stats.forEach(function(s) { if (s.actor_class === 'external') ext += s.n; else self += s.n; });
+    var label = document.getElementById('pawdev-history-stats');
+    if (label) label.textContent = ext + ' external, ' + self + ' our own (last 30 days, newest 200 shown)';
+
+    if (events.length === 0) { host.appendChild(cpEmpty('No repo events in the last 30 days.')); return; }
+
+    var card = document.createElement('div');
+    card.className = 'cp-card';
+    var table = document.createElement('table');
+    table.style.cssText = 'width:100%;border-collapse:collapse;font-size:0.8rem;';
+    var head = document.createElement('tr');
+    ['when', 'repo', 'what', 'ref', 'who'].forEach(function(h) {
+      var th = document.createElement('th');
+      th.textContent = h;
+      th.style.cssText = 'text-align:left;padding:6px 8px;opacity:0.65;font-weight:600;';
+      head.appendChild(th);
+    });
+    table.appendChild(head);
+    events.forEach(function(e) {
+      var tr = document.createElement('tr');
+      var cells = [
+        new Date(e.created_at).toLocaleString(),
+        e.repo, e.kind, e.ref || '', e.actor,
+      ];
+      cells.forEach(function(c) {
+        var td = document.createElement('td');
+        td.textContent = c;
+        td.style.cssText = 'padding:6px 8px;border-top:1px solid var(--border-color);';
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    });
+    var scroller = document.createElement('div');
+    scroller.style.cssText = 'overflow-x:auto;';
+    scroller.appendChild(table);
+    card.appendChild(scroller);
+    host.appendChild(card);
+  }).catch(function(e) {
+    while (host.firstChild) host.removeChild(host.firstChild);
+    host.appendChild(cpErrorCard('the repo history'));
+    console.error('pawdev history', e);
   });
 }

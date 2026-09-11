@@ -1,6 +1,7 @@
 // src/guard/layers/l6-output-validate.ts
 import type { L6Result } from '../types.js'
 import { GUARD_CONFIG } from '../config.js'
+import { logger } from '../../logger.js'
 
 // Exfil patterns to check in output (same as L2 markdown/HTML vectors)
 const OUTPUT_EXFIL_PATTERNS: RegExp[] = [
@@ -26,8 +27,17 @@ export function validateOutput(
   const echoPhrases = ctx.systemPromptEchoPhrases ?? GUARD_CONFIG.systemPromptEchoPhrases
   const echoThreshold = ctx.echoThreshold ?? GUARD_CONFIG.systemPromptEchoThreshold
 
-  // 1. Length bounds
+  // 1. Length bounds. Flagged only, never blocked: a real digest, research
+  // draft or social post routinely exceeds maxResponseChars, and a short "ok"
+  // reply routinely falls under minResponseChars. Neither is a security
+  // signal, so length alone must not null out a legitimate response.
   const lengthOk = response.length >= minChars && response.length <= maxChars
+  if (!lengthOk) {
+    logger.info(
+      { length: response.length, minChars, maxChars },
+      'l6-output-validate: response length outside bounds (flag only, not blocked)',
+    )
+  }
 
   // 2. Canary leak detection
   const canaryLeaked = response.includes(ctx.canary)
@@ -58,11 +68,6 @@ export function validateOutput(
   if (canaryLeaked) {
     isBlocked = true
     blockReason = 'Canary token leaked in response (system prompt exfiltration)'
-  } else if (!lengthOk) {
-    isBlocked = true
-    blockReason = response.length < minChars
-      ? `Response too short (${response.length} < ${minChars})`
-      : `Response too long (${response.length} > ${maxChars})`
   } else if (exfilDetected) {
     isBlocked = true
     blockReason = 'Data exfiltration pattern detected in output'

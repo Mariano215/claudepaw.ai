@@ -124,7 +124,7 @@ describe('full cycle integration', () => {
     expect(cycle!.state.act_result).toContain('port 8080')
     expect(cycle!.report).toContain('port 8080')
     expect(mockAgent).toHaveBeenCalledTimes(5)
-    expect(mockSend).toHaveBeenCalledWith('123456789', expect.stringContaining('Cycle complete'), expect.any(String))
+    expect(mockSend).toHaveBeenCalledWith('123456789', expect.stringContaining('port 8080'), expect.any(String))
   })
 
   it('pauses at DECIDE for high severity, resumes on approval, completes cycle', async () => {
@@ -210,7 +210,7 @@ describe('full cycle integration', () => {
     expect(cycle!.phase).toBe('completed')
     expect(cycle!.state.approval_granted).toBe(false)
     expect(cycle!.state.act_result).toBeNull()
-    expect(mockSend).toHaveBeenCalledWith('123456789', expect.stringContaining('ACT skipped'), expect.any(String))
+    expect(mockSend).toHaveBeenCalledWith('123456789', expect.stringContaining('ACT was skipped by operator'), expect.any(String))
   })
 
   it('second cycle receives previous cycle findings as context', async () => {

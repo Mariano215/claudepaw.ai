@@ -41,10 +41,12 @@ export function buildApprovalCard(
   const text = `${header}\n\n${body}`
 
   const keyboard: InlineKeyboard = {
-    inline_keyboard: [[
-      { text: 'Approve', callback_data: `paw:approve:${paw.id}` },
-      { text: 'Reject', callback_data: `paw:skip:${paw.id}` },
-    ]],
+    inline_keyboard: [
+      [
+        { text: 'Approve', callback_data: `paw:approve:${paw.id}` },
+        { text: 'Reject', callback_data: `paw:skip:${paw.id}` },
+      ],
+    ],
   }
 
   return { text, keyboard }

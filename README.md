@@ -222,8 +222,8 @@ npm run sync:paw-trader -- --no-push
 Notes:
 
 - `npm run deploy` already includes commit and push steps for the main repo.
-- `npm run sync:oss` writes to `/Volumes/T7/Projects/claudepaw-oss`.
-- `npm run sync:paw-trader` writes to `/Volumes/T7/Projects/paw-trader-mirror` unless `PAW_TRADER_MIRROR_DIR` overrides it.
+- `npm run sync:oss` writes to `~/Projects/claudepaw-oss`.
+- `npm run sync:paw-trader` writes to `~/Projects/paw-trader-mirror` unless `PAW_TRADER_MIRROR_DIR` overrides it.
 
 ## Dashboard Auth
 

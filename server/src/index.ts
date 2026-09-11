@@ -84,9 +84,13 @@ const userOrIpKey = (req: Request): string => {
   const uid = req.user?.id
   return uid ? `u:${uid}` : ipKeyGenerator(req.ip ?? 'unknown')
 }
+// GENERAL_API_LIMIT_PER_MIN is a test-harness setting, not an operator knob:
+// it exists so e2e/shell.spec.ts can raise the ceiling above the fan-out a
+// single workspace switch produces (~22 concurrent requests). Never set it
+// in production.
 const generalApiLimiter = rateLimit({
   windowMs: 60 * 1000,
-  limit: 300,
+  limit: Number(process.env.GENERAL_API_LIMIT_PER_MIN) || 300,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   keyGenerator: userOrIpKey,

@@ -341,3 +341,24 @@ describe('resolveMetaConfig', () => {
     expect(cfg!.pages['evelyn']).toEqual({ pageId: 'ev-pg', accessToken: 'ev-tok' })
   })
 })
+
+import { igProxyMonorepoPath, igProxyRawUrl, GH_PROXY_PREFIX } from './meta.js'
+
+describe('image proxy path mapping', () => {
+  it('maps a filename to the monorepo path that sync-oss copies to the mirror', () => {
+    const p = igProxyMonorepoPath('shot.jpg')
+    expect(p.startsWith(TEST_DIR)).toBe(true)
+    expect(p.endsWith('/assets/ig-proxy/shot.jpg')).toBe(true)
+    expect(GH_PROXY_PREFIX).toBe('assets/ig-proxy')
+  })
+
+  it('strips directories and query strings out of the filename', () => {
+    expect(igProxyMonorepoPath('../../etc/passwd').endsWith('/assets/ig-proxy/passwd')).toBe(true)
+    expect(igProxyMonorepoPath('a/b/pic.png?w=900').endsWith('/assets/ig-proxy/pic.png')).toBe(true)
+  })
+
+  it('the raw url points at the mirror path the monorepo path becomes', () => {
+    expect(igProxyRawUrl('shot.jpg'))
+      .toBe('https://raw.githubusercontent.com/YourGitHubUser/claudepaw.ai/main/assets/ig-proxy/shot.jpg')
+  })
+})

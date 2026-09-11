@@ -16,7 +16,7 @@ import { initDatabase } from './db.js'
 import { initCredentialStore } from './credentials.js'
 import { initSocial, draft, getPost, listDrafts, listPosts, getPostStats, approveAndPublish, autoApproveAndSchedule, reject } from './social/index.js'
 import type { Platform, PostStatus } from './social/types.js'
-import { BOT_TOKEN } from './config.js'
+import { notifyOwner } from './notify.js'
 
 const db = initDatabase()
 initCredentialStore(db)
@@ -48,10 +48,14 @@ async function sendTelegramDraftNotification(postId: string, chatId: string): Pr
 
   // Auto-approve + queue for the scheduler tick. No human tap. The tick gap
   // (up to ~60s) is a pull-back window: reply or use the dashboard to pull it.
-  const { queued } = autoApproveAndSchedule(post.id)
+  // The social.post policy gate lives inside autoApproveAndSchedule now, so
+  // there is nothing left to gate here.
+  const { queued, parked } = await autoApproveAndSchedule(post.id)
   const header = queued
     ? `Auto-approved and queued: ${platformLabel} post [${post.id}]. Posts on the next scheduler tick. Reply or use the dashboard to pull it first.`
-    : `${platformLabel} post [${post.id}] (status: ${getPost(post.id)?.status ?? 'unknown'}) -- already handled, no action taken.`
+    : parked
+      ? `Held for your approval: ${platformLabel} post [${post.id}]. Card ${parked} is on the Work board.`
+      : `${platformLabel} post [${post.id}] (status: ${getPost(post.id)?.status ?? 'unknown'}) -- already handled, no action taken.`
 
   // Plain text only -- no HTML, no markdown, no entity codes.
   let text = `${header}\n\n${preview}`
@@ -69,20 +73,15 @@ async function sendTelegramDraftNotification(postId: string, chatId: string): Pr
   }
   if (post.suggested_time) text += `\nTime: ${post.suggested_time}`
 
-  const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      // No parse_mode -- plain text only. Informational notice, no buttons.
-    }),
-  })
+  // No parse_mode -- plain text only. Informational notice, no buttons, so it
+  // routes through notifyOwner (the youtube-publish approval keyboard is the
+  // one send in this area that still needs sendWithKeyboard; that move is
+  // Phase 2, when this CLI gets a manager handle).
+  await notifyOwner(text, post.project_id ?? 'default')
 
-  if (!response.ok) {
-    const body = await response.text()
-    console.error(`Telegram API error: ${body}`)
-    process.exit(1)
+  if (!queued) {
+    console.log(`Draft ${postId}: not queued (${parked ? `held, card ${parked}` : 'no action taken'}); notice sent to chat ${chatId}`)
+    process.exit(2)
   }
 
   console.log(`Draft ${postId} auto-queued; informational notice sent to chat ${chatId}`)

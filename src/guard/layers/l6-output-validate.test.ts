@@ -1,5 +1,8 @@
 // src/guard/layers/l6-output-validate.test.ts
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('../../logger.js', () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }))
+
 import { validateOutput } from './l6-output-validate.js'
 
 describe('l6-output-validate', () => {
@@ -32,16 +35,16 @@ describe('l6-output-validate', () => {
     expect(result.blockReason).toContain('Canary')
   })
 
-  it('flags too-short response', () => {
+  it('flags a too-short response but does not block it', () => {
     const result = validateOutput('Hi', defaultCtx)
     expect(result.lengthOk).toBe(false)
-    expect(result.isBlocked).toBe(true)
+    expect(result.isBlocked).toBe(false)
   })
 
-  it('flags too-long response', () => {
+  it('flags a too-long response but does not block it', () => {
     const result = validateOutput('x'.repeat(9000), defaultCtx)
     expect(result.lengthOk).toBe(false)
-    expect(result.isBlocked).toBe(true)
+    expect(result.isBlocked).toBe(false)
   })
 
   it('detects markdown image exfil in output', () => {

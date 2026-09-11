@@ -93,4 +93,16 @@ describe('checkKillSwitch', () => {
     // (null). Fail-closed only applies before any authoritative observation.
     expect(result).toBeNull()
   })
+
+  it('treats a 401 as unreachable: fail-closed before any success, stale after', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: 'Unauthorized' }),
+    }))
+
+    const first = await checkKillSwitch()
+    expect(first).not.toBeNull()
+    expect(first!.reason).toContain('fail-closed')
+  })
 })

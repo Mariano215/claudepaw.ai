@@ -1,0 +1,519 @@
+--- a/src/trader_engine/data/coinbase_data.py
++++ b/src/trader_engine/data/coinbase_data.py
+@@ -82,8 +82,6 @@
+             last_ts = batch[-1][0]
+             if last_ts < cursor:
+                 break
+-            if len(batch) < _COINBASE_PAGE_LIMIT:
+-                break
+             cursor = last_ts + period_ms
+ 
+         if not raw:
+@@ -95,7 +93,7 @@
+         return df
+ 
+     def get_daily_bars(self, asset: str, days: int = 270) -> pd.DataFrame:
+-        """Return a daily OHLCV DataFrame indexed by UTC timestamp.
++        """Return completed daily OHLCV bars indexed by UTC timestamp.
+ 
+         `asset` must be in ccxt unified pair form (e.g. 'BTC/USD'). Raises
+         ValueError when the exchange returns no rows.
+@@ -104,9 +102,15 @@
+         so lookbacks longer than the Coinbase 300-candle cap still reach the
+         most recent bar rather than truncating ~300 days in the past.
+         """
+-        return self._get_bars(
+-            asset, timeframe='1d', periods=days, period_ms=_DAY_MS
++        df = self._get_bars(
++            asset, timeframe='1d', periods=days + 1, period_ms=_DAY_MS
+         )
++        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
++        current_day_ms = (now_ms // _DAY_MS) * _DAY_MS
++        completed = df[df.index.view('int64') // 1_000_000 < current_day_ms]
++        if completed.empty:
++            raise ValueError(f'No completed daily OHLCV data returned for {asset}')
++        return completed.tail(days)
+ 
+     def get_hourly_bars(self, asset: str, hours: int = 500) -> pd.DataFrame:
+         """Return the latest completed one-hour candles for ``asset``.
+--- a/src/trader_engine/scheduler.py
++++ b/src/trader_engine/scheduler.py
+@@ -84,12 +84,25 @@
+ # None = suppress the strategy entirely in that regime.
+ # ---------------------------------------------------------------------------
+ _CRYPTO_REGIME_PARAMS: dict[str, dict[str, float | None]] = {
+-    'crypto-bull':      {'mean-reversion-hourly-crypto': 0.8},
+-    'crypto-bear':      {'mean-reversion-hourly-crypto': None},
+-    'crypto-high-vol':  {'mean-reversion-hourly-crypto': 1.5},
+-    'crypto-choppy':    {'mean-reversion-hourly-crypto': 1.0},
++    'crypto-bull': {
++        'momentum-crypto': 0.8,
++        'mean-reversion-hourly-crypto': 0.8,
++    },
++    'crypto-bear': {
++        'momentum-crypto': None,
++        'mean-reversion-hourly-crypto': None,
++    },
++    'crypto-high-vol': {
++        'momentum-crypto': 2.0,
++        'mean-reversion-hourly-crypto': 1.5,
++    },
++    'crypto-choppy': {
++        'momentum-crypto': 1.0,
++        'mean-reversion-hourly-crypto': 1.0,
++    },
+ }
+ _CRYPTO_DEFAULT_REGIME_PARAMS: dict[str, float | None] = {
++    'momentum-crypto': 1.0,
+     'mean-reversion-hourly-crypto': 1.0,
+ }
+ 
+@@ -422,7 +435,7 @@
+ 
+ 
+ def run_crypto_signal_generation() -> None:  # noqa: RUF029
+-    """24/7 hourly BTC mean-reversion generator with regime gating.
++    """Score both BTC paper candidates; cohort enforcement chooses execution.
+ 
+     Phase 8C: wired a BTC-specific regime classifier (signals/crypto_regime.py)
+     so telemetry is labelled and candidates are regime-gated. Equity SPY regime
+@@ -431,7 +444,7 @@
+     Regime gate behaviour (mirrors equity _regime_gate logic):
+       crypto-bull:     multiplier 0.8  -- loosen gate in confirmed uptrend
+       crypto-bear:     suppressed      -- no buy signals in downtrend
+-      crypto-high-vol: multiplier 2.0  -- tighten gate in extreme volatility
++      crypto-high-vol: strategy-specific tighter threshold
+       crypto-choppy:   multiplier 1.0  -- neutral (default)
+ 
+     On regime-fetch failure the default multiplier (1.0) is used and telemetry
+@@ -448,9 +461,16 @@
+     from trader_engine.api.routes.signals import cache_signals
+     from trader_engine.db.session import get_session
+     from trader_engine.signals.crypto_mean_reversion import (
+-        MIN_SCORE as CRYPTO_MIN,
+-        HORIZON_DAYS as CRYPTO_HORIZON,
+-        score_all as score_crypto,
++        HORIZON_DAYS as HOURLY_HORIZON,
++        MIN_SCORE as HOURLY_MIN,
++        STRATEGY_NAME as HOURLY_STRATEGY,
++        score_all as score_hourly,
++    )
++    from trader_engine.signals.crypto_momentum import (
++        HORIZON_DAYS as MOMENTUM_HORIZON,
++        MIN_SCORE as MOMENTUM_MIN,
++        STRATEGY_NAME as MOMENTUM_STRATEGY,
++        score_all as score_momentum,
+     )
+     from trader_engine.signals.crypto_regime import get_crypto_regime
+     import time as _time
+@@ -473,50 +493,52 @@
+     if not current_crypto_regime:
+         current_crypto_regime = 'crypto-unknown'
+ 
+-    # Resolve regime multiplier for the frozen hourly pullback rule.
+     regime_row = _CRYPTO_REGIME_PARAMS.get(
+         current_crypto_regime, _CRYPTO_DEFAULT_REGIME_PARAMS
+     )
+-    multiplier: float | None = regime_row.get('mean-reversion-hourly-crypto', 1.0)
+-    effective_threshold = None if multiplier is None else CRYPTO_MIN * multiplier
+-
+-    scores: list = []
+-    try:
+-        scores = score_crypto(_crypto_data_client)
+-    except Exception as exc:
+-        log.error('signals.crypto_mean_reversion.error', error=str(exc))
+-        return
+-
+-    # Apply regime gate.
+-    fired_keys:      set[tuple[str, str]] = set()
+-    suppressed_keys: set[tuple[str, str]] = set()
+-    live_candidates = []
+-
+-    for s in scores:
+-        key = (s.asset, s.strategy)
+-        if effective_threshold is None:
+-            # Strategy suppressed entirely in this regime.
+-            suppressed_keys.add(key)
+-        elif s.raw_score >= effective_threshold:
+-            fired_keys.add(key)
+-            live_candidates.append(s)
+-        # Scores below effective_threshold are near-misses; neither set.
+-
+-    # Telemetry -- always write with the resolved regime label.
+-    if scores:
+-        _write_score_telemetry(
+-            scores, fired_keys, suppressed_keys, regime=current_crypto_regime
++    specs = (
++        (MOMENTUM_STRATEGY, MOMENTUM_MIN, MOMENTUM_HORIZON, score_momentum),
++        (HOURLY_STRATEGY, HOURLY_MIN, HOURLY_HORIZON, score_hourly),
++    )
++    live_candidates: list[tuple[Any, int]] = []
++    total_suppressed = 0
++    for strategy_name, base_threshold, horizon_days, score_fn in specs:
++        multiplier = regime_row.get(strategy_name, 1.0)
++        effective_threshold = (
++            None if multiplier is None else base_threshold * multiplier
++        )
++        try:
++            scores = score_fn(_crypto_data_client)
++        except Exception as exc:
++            log.error('signals.crypto_strategy.error', strategy=strategy_name, error=str(exc))
++            continue
++        fired_keys: set[tuple[str, str]] = set()
++        suppressed_keys: set[tuple[str, str]] = set()
++        for score in scores:
++            key = (score.asset, score.strategy)
++            if effective_threshold is None:
++                suppressed_keys.add(key)
++            elif score.raw_score >= effective_threshold:
++                fired_keys.add(key)
++                live_candidates.append((score, horizon_days))
++        if scores:
++            _write_score_telemetry(
++                scores, fired_keys, suppressed_keys, regime=current_crypto_regime
++            )
++        total_suppressed += len(suppressed_keys)
++        log.info(
++            'signals.crypto_strategy.generated',
++            strategy=strategy_name,
++            count=len(fired_keys),
++            regime=current_crypto_regime,
++            multiplier=multiplier,
++            suppressed=len(suppressed_keys),
+         )
+ 
+     log.info(
+-        'signals.generated',
+-        scope='crypto',
+-        count=len(live_candidates),
+-        regime=current_crypto_regime,
+-        multiplier=multiplier,
+-        suppressed=len(suppressed_keys),
+-    )
+-
++        'signals.generated', scope='crypto', count=len(live_candidates),
++        regime=current_crypto_regime, suppressed=total_suppressed,
++    )
+     if not live_candidates:
+         return
+ 
+@@ -535,14 +557,14 @@
+     cand_objects = [
+         _Cand(
+             id=str(_uuid.uuid4()),
+-            strategy=s.strategy,
+-            asset=s.asset,
++            strategy=score.strategy,
++            asset=score.asset,
+             side='buy',
+-            raw_score=s.raw_score,
+-            horizon_days=CRYPTO_HORIZON,
+-            generated_at=s.ts_ms,
+-        )
+-        for s in live_candidates
++            raw_score=score.raw_score,
++            horizon_days=horizon_days,
++            generated_at=score.ts_ms,
++        )
++        for score, horizon_days in live_candidates
+     ]
+ 
+     try:
+@@ -646,7 +668,7 @@
+             trigger="interval",
+             minutes=15,
+             id="crypto_signal_gen",
+-            name="Generate hourly BTC mean-reversion signals every 15 min (24/7)",
++            name="Generate BTC paper signals every 15 min (24/7)",
+             misfire_grace_time=120,
+             coalesce=True,
+         )
+--- a/src/trader_engine/backtest/trade_simulator.py
++++ b/src/trader_engine/backtest/trade_simulator.py
+@@ -468,3 +468,86 @@
+         warnings=warnings,
+         trades=all_trades,
+     )
++
++
++def run_crypto_momentum_backtest(
++    data_client,
++    days: int = 1_825,
++    slippage_bps: float = 10.0,
++    fee_bps: float = 25.0,
++) -> BacktestResult:
++    """Simulate the deployed BTC-only daily breakout rule after costs."""
++    from trader_engine.signals.crypto_momentum import (
++        BASKET,
++        HORIZON_DAYS,
++        MIN_BARS,
++        MIN_SCORE,
++        STRATEGY_NAME,
++        _breakout_score,
++    )
++
++    warnings: list[str] = []
++    all_trades: list[Trade] = []
++    start_date = ''
++    end_date = ''
++    for asset in BASKET:
++        try:
++            df = data_client.get_daily_bars(asset, days=days)
++        except Exception as exc:
++            warnings.append(f'{asset}: daily bar fetch failed ({exc})')
++            continue
++        if len(df) <= MIN_BARS + 2:
++            warnings.append(
++                f'{asset}: only {len(df)} bars, needs > {MIN_BARS + 2} for a signal'
++            )
++            continue
++        start_date = str(df.index[0])
++        end_date = str(df.index[-1])
++        all_trades.extend(_simulate_asset(
++            asset=asset,
++            df=df,
++            score_fn=_breakout_score,
++            min_score=MIN_SCORE,
++            horizon_days=HORIZON_DAYS,
++            slippage_bps=slippage_bps,
++            fee_bps=fee_bps,
++            warmup=MIN_BARS,
++        ))
++
++    returns = [trade.return_net for trade in all_trades]
++    total_return = 1.0
++    for value in returns:
++        total_return *= 1.0 + value
++    total_return -= 1.0
++    wins = sum(value > 0 for value in returns)
++    unresolved = sum(trade.reason == 'eod' for trade in all_trades)
++    if unresolved:
++        warnings.append(f'{unresolved} trade(s) open at history end, marked to last close')
++
++    return BacktestResult(
++        strategy=STRATEGY_NAME,
++        method=(
++            'historical simulation of the deployed BTC-only breakout; '
++            'completed daily signal, next-day-open entry, stop-before-target, '
++            '14-day time stop, conservative crypto fee and slippage on both legs; '
++            'no parameter fit'
++        ),
++        start=start_date,
++        end=end_date,
++        n_trades=len(all_trades),
++        sharpe=_sharpe_per_trade(returns),
++        max_drawdown=_max_drawdown(returns) if returns else None,
++        win_rate=(wins / len(returns)) if returns else None,
++        expectancy=statistics.fmean(returns) if returns else None,
++        total_return=total_return,
++        slippage_bps=slippage_bps,
++        fee_bps=fee_bps,
++        min_score=MIN_SCORE,
++        sharpe_convention=(
++            'mean/stdev of per-trade returns annualised by sqrt(252), matching '
++            'the live cohort gate; not a conventional daily-return Sharpe'
++        ),
++        assets=list(BASKET),
++        warnings=warnings,
++        trades=all_trades,
++    )
+--- a/src/trader_engine/api/routes/backtest.py
++++ b/src/trader_engine/api/routes/backtest.py
+@@ -17,6 +17,7 @@
+ 
+ from trader_engine.backtest.trade_simulator import (
+     run_crypto_hourly_mean_reversion_backtest,
++    run_crypto_momentum_backtest,
+     run_momentum_backtest,
+ )
+ from trader_engine.scheduler import get_crypto_data_client, get_data_client
+@@ -76,3 +77,20 @@
+     payload['elapsed_ms'] = int((time.time() - started) * 1000)
+     payload['computed_at_ms'] = int(time.time() * 1000)
+     return payload
++
++
++@router.get('/crypto-momentum')
++def get_crypto_momentum_backtest(
++    days: int = Query(1_825, ge=300, le=5_000),
++    include_trades: bool = Query(False),
++) -> dict:
++    """Trade-level simulation of the deployed BTC-only daily breakout."""
++    data_client = get_crypto_data_client()
++    if data_client is None:
++        raise HTTPException(status_code=503, detail='crypto data client not ready')
++    started = time.time()
++    result = run_crypto_momentum_backtest(data_client, days=days)
++    payload = result.to_dict(include_trades=include_trades)
++    payload['elapsed_ms'] = int((time.time() - started) * 1000)
++    payload['computed_at_ms'] = int(time.time() * 1000)
++    return payload
+--- a/src/trader_engine/signals/crypto_momentum.py
++++ b/src/trader_engine/signals/crypto_momentum.py
+@@ -5,7 +5,7 @@
+ Strategy: 7-day breakout over the 20-day high on BTC/USD.
+ 
+ Entry (BUY candidate):
+-  close(today) > max(high over last 30 days, exclusive of today)
++  close(today) > max(high over last 20 days, exclusive of today)
+   AND 7-day return > 0
+   raw_score normalises the breakout magnitude via tanh.
+ 
+@@ -54,7 +54,7 @@
+ 
+ 
+ def _breakout_score(df: pd.DataFrame) -> float:
+-    """Return a [0, 1] score for a 30-day-high breakout on the last bar.
++    """Return a [0, 1] score for a 20-day-high breakout on the last bar.
+ 
+     Returns 0.0 when there is not enough data, the close is not above
+     the rolling max-high, or the 7-day return is not positive. The
+@@ -124,7 +124,7 @@
+ def score_all(data_client: Any) -> list[ScoredAsset]:
+     """Return raw breakout scores for every BASKET asset, no filtering.
+ 
+-    A score of 0.0 means the asset is not breaking out above its 30-day
++    A score of 0.0 means the asset is not breaking out above its 20-day
+     high or 7-day return is non-positive. Non-zero scores below MIN_SCORE
+     are near-misses. Used by the scheduler for telemetry and regime-aware
+     candidate selection.
+--- a/tests/test_coinbase_data.py
++++ b/tests/test_coinbase_data.py
+@@ -45,6 +45,12 @@
+         self.calls.append((symbol, since, limit))
+         rows = [c for c in self._series if since is None or c[0] >= since]
+         return rows[: self.PAGE_CAP]
++
++
++class _ShortPagedExchange(_CappedExchange):
++    """Returns short intermediate pages even when newer candles exist."""
++
++    PAGE_CAP = 75
+ 
+ 
+ def _minimal_settings() -> Settings:
+@@ -102,8 +108,9 @@
+ 
+     df = client.get_daily_bars('BTC/USD', days=600)
+ 
+-    # Most-recent bar must be today's candle, not one ~300 days stale.
+-    assert int(df.index.max().value // 1_000_000) == now_ms
++    # Most-recent bar must be yesterday's completed candle, not one ~300 days
++    # stale or today's still-forming candle.
++    assert int(df.index.max().value // 1_000_000) == now_ms - _DAY_MS
+     # We asked for 600 bars and the source has them -- expect close to 600,
+     # well past the single-request 300-candle ceiling.
+     assert len(df) >= 595
+@@ -126,6 +133,20 @@
+     assert not df.index.has_duplicates
+ 
+ 
++def test_short_intermediate_pages_do_not_truncate_history():
++    import time
++
++    now_ms = (int(time.time() * 1000) // _DAY_MS) * _DAY_MS
++    ex = _ShortPagedExchange(n_days=500, end_ms=now_ms)
++    client = CoinbaseDataClient(_minimal_settings(), exchange=ex)
++
++    df = client.get_daily_bars('BTC/USD', days=400)
++
++    assert len(df) >= 395
++    assert int(df.index.max().value // 1_000_000) == now_ms - _DAY_MS
++    assert len(ex.calls) >= 6
++
++
+ def test_get_hourly_bars_uses_one_hour_pages_and_drops_forming_candle():
+     import time
+ 
+@@ -146,6 +167,22 @@
+     assert ex.calls[0][0] == 'BTC/USD'
+ 
+ 
++def test_get_daily_bars_drops_forming_utc_day():
++    import time
++
++    current_day = (int(time.time() * 1000) // _DAY_MS) * _DAY_MS
++    rows = [
++        [current_day - _DAY_MS, 100, 102, 99, 101, 10],
++        [current_day, 101, 104, 100, 103, 12],
++    ]
++    client = CoinbaseDataClient(_minimal_settings(), exchange=_FakeExchange(rows))
++
++    df = client.get_daily_bars('BTC/USD', days=10)
++
++    assert len(df) == 1
++    assert int(df.index.max().value // 1_000_000) == current_day - _DAY_MS
++
++
+ def test_get_hourly_bars_rejects_non_positive_period_count():
+     client = CoinbaseDataClient(_minimal_settings(), exchange=_FakeExchange([]))
+     with pytest.raises(ValueError, match='periods must be positive'):
+--- a/tests/test_scheduler.py
++++ b/tests/test_scheduler.py
+@@ -279,6 +279,7 @@
+     from trader_engine import scheduler
+     from trader_engine.config import settings as live_settings
+     import trader_engine.signals.crypto_mean_reversion as crypto_mod
++    import trader_engine.signals.crypto_momentum as momentum_mod
+     import trader_engine.signals.crypto_regime as crypto_regime_mod
+     import trader_engine.api.routes.signals as signals_route
+ 
+@@ -294,6 +295,12 @@
+     crypto_score.raw_score = 0.9
+     crypto_score.ts_ms = 1_000_000
+     monkeypatch.setattr(crypto_mod, 'score_all', lambda c: [crypto_score])
++    momentum_score = MagicMock()
++    momentum_score.strategy = 'momentum-crypto'
++    momentum_score.asset = 'BTC/USD'
++    momentum_score.raw_score = 0.9
++    momentum_score.ts_ms = 1_000_000
++    monkeypatch.setattr(momentum_mod, 'score_all', lambda c: [momentum_score])
+ 
+     # Stub regime fetch: return crypto-bull so multiplier is 0.8 (not suppressed).
+     monkeypatch.setattr(crypto_regime_mod, 'get_crypto_regime', lambda c, **kw: 'crypto-bull')
+@@ -320,7 +327,9 @@
+     scheduler.run_crypto_signal_generation()
+ 
+     assert len(cached) == 1
+-    assert cached[0][0].strategy == 'mean-reversion-hourly-crypto'
++    assert {candidate.strategy for candidate in cached[0]} == {
++        'momentum-crypto', 'mean-reversion-hourly-crypto',
++    }
+ 
+ 
+ def test_scheduler_registers_order_sync_job():
+--- a/tests/test_trade_simulator.py
++++ b/tests/test_trade_simulator.py
+@@ -23,6 +23,7 @@
+     _vol_stop_pct,
+     run_momentum_backtest,
+     run_crypto_hourly_mean_reversion_backtest,
++    run_crypto_momentum_backtest,
+ )
+ 
+ 
+@@ -262,3 +263,24 @@
+         assert result.slippage_bps == 10
+         assert result.fee_bps == 25
+         assert result.n_trades > 0
++
++
++class TestRunCryptoMomentumBacktest:
++    def test_uses_btc_only_and_crypto_costs(self):
++        closes = [100.0] * 30
++        for cycle in range(12):
++            base = 105 + cycle * 15
++            closes.extend([base + i * 1.5 for i in range(25)])
++            closes.extend([base + 37.5 - i * 0.7 for i in range(15)])
++        df = make_df(closes)
++
++        class Client:
++            def get_daily_bars(self, asset, days=1825):
++                return df
++
++        result = run_crypto_momentum_backtest(Client(), days=500)
++        assert result.strategy == 'momentum-crypto'
++        assert result.assets == ['BTC/USD']
++        assert result.slippage_bps == 10
++        assert result.fee_bps == 25
++        assert result.n_trades > 0

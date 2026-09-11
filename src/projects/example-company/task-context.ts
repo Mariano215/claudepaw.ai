@@ -143,8 +143,9 @@ async function buildBlogDraftContext(): Promise<string> {
 
   const strategyNow = await sheets.read(auth, STRATEGY_SHEET, 'NOW!A1:H20')
   // Blog prompt requires festival rows verified against the tracker before
-  // calling anything "selected"/"screening", so pre-fetch them too.
-  const festivalRows = await sheets.read(auth, EVELYN_FESTIVAL_SHEET, 'Example Film Festival List!A1:J20')
+  // calling anything "selected"/"screening", so pre-fetch them too, via the
+  // shared reader so this and the fo-festivals collector stay one function.
+  const festivalRows = await readExample FilmFestivalRows()
 
   return [
     '## Structured Google Context',
@@ -158,26 +159,65 @@ async function buildBlogDraftContext(): Promise<string> {
   ].join('\n')
 }
 
-async function buildFestivalScanContext(): Promise<string> {
+/** The Example Film festival tracker rows, for the fo-festivals collector. Same
+ *  read buildFestivalScanContext used to do, exposed on its own. */
+export async function readExample FilmFestivalRows(): Promise<string[][]> {
   const auth = await withGoogleAuth()
   const sheets = new SheetsModule()
-  const festivalMeta = await sheets.metadata(auth, EVELYN_FESTIVAL_SHEET)
-  const festivalRows = await sheets.read(auth, EVELYN_FESTIVAL_SHEET, 'Example Film Festival List!A1:J20')
+  return await sheets.read(auth, EVELYN_FESTIVAL_SHEET, 'Example Film Festival List!A1:J20')
+}
 
-  return [
-    '## Structured Google Context',
-    `Festival workbook: ${festivalMeta.title} (${festivalMeta.sheets.map((sheet) => sheet.title).join(', ')})`,
-    '### Existing Festival Tracker Sample',
-    formatTable(festivalRows, 12),
+// The six Monday cron jobs whose output the board meeting synthesizes, in the
+// order the prompt lists them, plus the festival routine that replaced the
+// weekly festival scan.
+const BOARD_INPUT_TASKS = [
+  'fop-weekly-briefing',
+  'fop-weekly-grant-scan',
+  'fop-weekly-screenplay-pipeline',
+  'fop-weekly-content-plan',
+  'fop-weekly-social-report',
+  'fop-weekly-blog-draft',
+] as const
+
+async function buildBoardMeetingContext(): Promise<string> {
+  const { getDb } = await import('../../db.js')
+  const db = getDb()
+  const sections: string[] = ['## This Morning\'s Agent Output']
+
+  for (const id of BOARD_INPUT_TASKS) {
+    const row = db.prepare(
+      'SELECT last_run, last_result FROM scheduled_tasks WHERE id = ?',
+    ).get(id) as { last_run: number | null; last_result: string | null } | undefined
+    if (!row?.last_result) {
+      sections.push(`### ${id}\n(did not run, or produced no result)`)
+      continue
+    }
+    const age = row.last_run ? `${Math.round((Date.now() - row.last_run) / 3_600_000)}h ago` : 'unknown time'
+    sections.push(`### ${id} (${age})\n${row.last_result.slice(0, 2000)}`)
+  }
+
+  const festival = db.prepare(
+    `SELECT report, completed_at FROM paw_cycles
+       WHERE paw_id = 'fo-festival-tracker' AND phase = 'completed' AND report IS NOT NULL
+       ORDER BY started_at DESC LIMIT 1`,
+  ).get() as { report: string; completed_at: number | null } | undefined
+  sections.push(
+    festival
+      ? `### fo-festival-tracker (last completed cycle)\n${festival.report.slice(0, 2000)}`
+      : '### fo-festival-tracker\n(no completed cycle yet)',
+  )
+
+  sections.push(
     '',
-    'Use the structured context above to avoid duplicate festival recommendations. Do not rerun CLI commands for the spreadsheet.',
-  ].join('\n')
+    'This block is the only source for what the agents produced. Do not narrate a plan to gather it, and do not claim a report is missing unless the section above says so. Write the synthesis and the decision list directly.',
+  )
+  return sections.join('\n\n')
 }
 
 export async function buildExampleCompanyTaskContext(taskId: string): Promise<string | null> {
   if (taskId === 'fop-weekly-briefing') return await buildBriefingContext()
   if (taskId === 'fop-weekly-content-plan') return await buildContentPlanContext()
-  if (taskId === 'fop-weekly-festival-scan') return await buildFestivalScanContext()
   if (taskId === 'fop-weekly-blog-draft') return await buildBlogDraftContext()
+  if (taskId === 'fop-board-meeting') return await buildBoardMeetingContext()
   return null
 }

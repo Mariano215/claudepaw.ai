@@ -51,6 +51,38 @@ export interface RemediationRow {
   summary: string
 }
 
+export interface NeedsYouItem {
+  title: string
+  project_id: string
+  kind: 'routine_approval' | 'card'
+  url: string
+  age_ms: number
+}
+
+export interface ProjectActivity {
+  project_id: string
+  cycles: number
+  cron_tasks_run: number
+  cards_opened: number
+  cards_shipped: number
+  cost_usd: number
+  failures: number
+  /** One line of what changed, rendered as-is in both renderers. */
+  note: string
+}
+
+/** One integration the metric collector could not read. Source: the server
+ *  metric_health table through GET /api/v1/metric-health/degraded. It replaces
+ *  the metric-healer agent, whose only output was this same list in prose. */
+export interface DegradedIntegration {
+  integration_id: number
+  project_id: string
+  platform: string
+  status: string
+  attempts: number
+  reason: string | null
+}
+
 export interface KillSwitchState {
   active: boolean
   reason?: string
@@ -107,5 +139,8 @@ export interface ReportData {
   }
   anomalies: Anomaly[]
   remediations_24h: RemediationRow[]
+  needs_you: NeedsYouItem[]
+  per_project: ProjectActivity[]
+  degraded_integrations: DegradedIntegration[]
   dashboard_url?: string
 }

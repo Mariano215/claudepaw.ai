@@ -1,6 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { ChannelManager } from './manager.js'
 import * as killSwitch from '../cost/kill-switch-client.js'
+import * as db from '../db.js'
+
+// This file tests the kill-switch gate only, not the digest/quiet-hours
+// hold decision. Force shouldHold false so routine text always reaches
+// the channel and the assertions below stay about the kill switch.
+vi.mock('./quiet-hours.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./quiet-hours.js')>()
+  return { ...actual, shouldHold: () => false }
+})
 
 function makeChannel(id = 'telegram') {
   return {
@@ -69,6 +78,21 @@ describe('ChannelManager kill-switch gate', () => {
     await mgr.startAll()
     await mgr.sendWithKeyboard('telegram', '123', 'hi', { inline_keyboard: [] })
     expect(channel.sendWithKeyboard).toHaveBeenCalled()
+  })
+
+  // Approval cards used to reach Telegram through the raw channel, so they
+  // never got a channel_log row and no approval request was auditable.
+  it('writes a channel_log row for a keyboard send', async () => {
+    vi.spyOn(killSwitch, 'checkKillSwitch').mockResolvedValue(null)
+    const logSpy = vi.spyOn(db, 'logChannelMessage').mockImplementation(() => undefined as never)
+    const mgr = new ChannelManager()
+    const channel = makeChannel()
+    mgr.register(channel)
+    await mgr.startAll()
+    await mgr.sendWithKeyboard('telegram', '123', 'approve this?', { inline_keyboard: [] })
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ direction: 'out', channel: 'telegram', chatId: '123', content: 'approve this?' }),
+    )
   })
 
   // ── sendVoice() ─────────────────────────────────────────────────────
