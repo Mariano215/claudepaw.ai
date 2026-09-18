@@ -3035,6 +3035,12 @@ function routeToHash(hash, pushState) {
       return;
     }
   }
+  // Strategies list: #trader/strategies
+  if (hash === 'trader/strategies') {
+    navigateToPage('page-trader', pushState);
+    renderStrategiesPage();
+    return;
+  }
   // Phase 6 Task 5 -- kill-switch audit log: #trader/kill-switch-log
   if (hash === 'trader/kill-switch-log') {
     navigateToPage('page-trader', pushState);
@@ -3045,6 +3051,7 @@ function routeToHash(hash, pushState) {
   if (hash === 'trader' && typeof closeStrategyDetail === 'function') {
     closeStrategyDetail();
     closeKillSwitchLogPage();
+    closeStrategiesPage();
   }
 
   // Phase 3 Task 11 fix round 1: #work/<item-id> (written by _pawdevCard's
@@ -3084,6 +3091,10 @@ function finishInitialNav() {
 }
 
 function initNavigation() {
+  // page-trader is not in index.html. Build it now, hidden, so routeToHash
+  // and navigateToPage can find it on the first click instead of bouncing
+  // to Overview with a toast.
+
   // Wire all sidebar page links
   document.querySelectorAll('.sidebar-link[data-page]').forEach(link => {
     link.addEventListener('click', (e) => {
@@ -13545,7 +13556,7 @@ const PAW_GROUPS = {
     label: 'Paw Trader',
     items: [
       { id: 'mission-control', label: 'Mission Control', icon: 'line-chart', page: 'page-trader', hash: 'trader' },
-      { id: 'strategies',      label: 'Strategies',      icon: 'git-branch', page: 'page-trader', hash: 'trader' },
+      { id: 'strategies',      label: 'Strategies',      icon: 'git-branch', page: 'page-trader', hash: 'trader/strategies' },
       { id: 'kill-switch-log', label: 'Kill switch log', icon: 'octagon-alert', page: 'page-trader', hash: 'trader/kill-switch-log' },
     ],
   },
@@ -13802,7 +13813,8 @@ function applySidebar(project) {
     a.appendChild(span);
     a.addEventListener('click', function(e) {
       e.preventDefault();
-      window.location.hash = item.hash;
+      if (window.location.hash === '#' + item.hash) routeToHash(item.hash, false);
+      else window.location.hash = item.hash;
     });
     links.appendChild(a);
   });
