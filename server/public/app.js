@@ -13698,6 +13698,7 @@ const KNOB_SCHEMA = {
     { key: 'daily_trade_cap', label: 'Daily trade cap', type: 'number', placeholder: '20', hint: 'Max new decisions per day.' },
     { key: 'symbol_cooldown_days', label: 'Symbol cooldown (days)', type: 'number', placeholder: '10', hint: 'Bench a symbol this long after a losing exit.' },
     { key: 'alert_on_reject', label: 'Alert on engine reject', type: 'select', options: ['', 'true', 'false'], hint: 'Send a message when the engine rejects an order.' },
+    { key: 'jev_shadow', label: 'Jev shadow judge', type: 'select', options: ['', 'true', 'false'], hint: 'Ask Jev (TypeSafe) the committee question in parallel and store its answer in the transcript. Decides nothing. Needs TYPESAFE_API_KEY on the bot.' },
   ],
   'pawdev': [
     { key: 'repos', label: 'Repos in scope', type: 'text', placeholder: 'Owner/repo-one,Owner/repo-two', hint: 'Comma separated Owner/Repo list the routine reads each cycle. One gh call per list per repo, so keep it short.' },
