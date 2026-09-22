@@ -1186,6 +1186,23 @@ interface IncomingRemediation {
   errors?: string | null
 }
 
+// The trader review CLI (src/trader-review-cli.ts) tunes a few trader knobs.
+// The bot user has no project roles, so it cannot use PUT /projects/:id/settings.
+// This route takes only the whitelisted keys; the CLI checks the ranges.
+const REVIEW_KNOBS = new Set(['jev_gate', 'earnings_blackout_days', 'symbol_cooldown_days', 'daily_trade_cap'])
+router.post('/internal/trader-knob', requireBotOrAdmin, (req: Request, res: Response) => {
+  const key = String(req.body?.key ?? '')
+  const value = String(req.body?.value ?? '')
+  if (!REVIEW_KNOBS.has(key) || !/^(true|false|\d{1,2})$/.test(value)) {
+    res.status(400).json({ error: 'knob not allowed' })
+    return
+  }
+  const prevRaw = getProjectSettingsById('trader')?.knobs
+  const knobs = { ...(prevRaw ? JSON.parse(prevRaw) as Record<string, unknown> : {}), [key]: value }
+  upsertProjectSettingsInDb({ project_id: 'trader', knobs: JSON.stringify(knobs) })
+  res.json({ ok: true, knobs })
+})
+
 router.post('/internal/remediations', requireBotOrAdmin, (req: Request, res: Response) => {
   const body = req.body
   const rows: IncomingRemediation[] = Array.isArray(body?.rows)

@@ -13701,6 +13701,7 @@ const KNOB_SCHEMA = {
     { key: 'jev_shadow', label: 'Jev shadow judge', type: 'select', options: ['', 'true', 'false'], hint: 'Ask Jev (TypeSafe) the committee question in parallel and store its answer in the transcript. Decides nothing. Needs TYPESAFE_API_KEY on the bot.' },
     { key: 'jev_gate', label: 'Jev veto gate', type: 'select', options: ['', 'true', 'false'], hint: 'Let Jev block a committee approval (Jev says abstain) or halve its size (size_half >= 0.5). Never approves on its own. Jev errors leave the committee result as is.' },
     { key: 'earnings_blackout_days', label: 'Earnings blackout (days)', type: 'number', placeholder: '0', hint: 'Block new entries in a single stock this many days before its earnings, and exit held stocks the day before. 0 turns it off. ETFs are never affected.' },
+    { key: 'telegram', label: 'Trader Telegram', type: 'select', options: ['', 'action_only', 'all'], hint: 'action_only (default): the trader bot only messages you when you must act (alerts, halts, approvals). Everything else stays on the Logging page and in the weekly email. all: send every message.' },
   ],
   'pawdev': [
     { key: 'repos', label: 'Repos in scope', type: 'text', placeholder: 'Owner/repo-one,Owner/repo-two', hint: 'Comma separated Owner/Repo list the routine reads each cycle. One gh call per list per repo, so keep it short.' },

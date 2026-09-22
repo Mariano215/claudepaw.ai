@@ -6,7 +6,7 @@ import type { Channel } from './types.js'
 import { getFormatter, splitMessage } from './formatters.js'
 import { logger } from '../logger.js'
 import { logChannelMessage } from '../db.js'
-import { digestMode, flushHeld, holdMessage, isQuietNow, shouldHold } from './quiet-hours.js'
+import { digestMode, flushHeld, holdMessage, isQuietNow, shouldHold, traderNeedsOperator } from './quiet-hours.js'
 
 export class ChannelManager {
   private channels = new Map<string, Channel>()
@@ -140,6 +140,16 @@ export class ChannelManager {
     const channel = this.running.get(channelId)
     if (!channel) {
       logger.error({ channelId, chatId }, 'Cannot send -- channel not running')
+      return
+    }
+
+    // The trader bot only messages when the operator must act. Everything
+    // else is logged (dashboard Logging page) and not sent, including
+    // digest flushes, which is why this check ignores bypassQuiet.
+    if (channelId === 'telegram:trader' && !traderNeedsOperator(text)) {
+      try {
+        logChannelMessage({ direction: 'out', channel: channelId, channelName: channel.name, chatId, content: `[not sent: no action needed] ${text}` })
+      } catch { /* logging must never block */ }
       return
     }
 

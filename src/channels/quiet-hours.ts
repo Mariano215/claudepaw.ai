@@ -71,6 +71,18 @@ export function isUrgent(text: string): boolean {
   return URGENT_RE.test(text)
 }
 
+/**
+ * The trader bot only speaks when the operator has to act. Status reports,
+ * trade confirmations, go-live gate progress and digests stay on the
+ * dashboard (Logging, Inbox) and in the weekly email. Knob
+ * trader.telegram = 'all' restores every message.
+ */
+const TRADER_ACTION_RE = /^(\[[^\]]*\]\s*)?(TRADER ALERT|NAV drop halt)|needs you|What to do:|reply "approve/i
+
+export function traderNeedsOperator(text: string): boolean {
+  return getKnob<string>('trader', 'telegram', 'action_only') === 'all' || TRADER_ACTION_RE.test(text)
+}
+
 export type DigestMode = 'daily' | 'off'
 
 /**

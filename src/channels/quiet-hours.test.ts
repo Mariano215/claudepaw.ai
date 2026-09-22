@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isQuietNow, isUrgent, parseWindow } from './quiet-hours.js'
+import { isQuietNow, isUrgent, parseWindow, traderNeedsOperator } from './quiet-hours.js'
 
 // 2026-09-02T02:30Z = 22:30 ET (quiet), 2026-09-02T14:30Z = 10:30 ET (open)
 const night = new Date('2026-09-02T02:30:00Z')
@@ -50,5 +50,17 @@ describe('quiet hours', () => {
   it('still lets ordinary trading updates be routine', () => {
     expect(isUrgent('Trading update (since the last one): bought SPY')).toBe(false)
     expect(isUrgent('EXECUTED: BUY SPY $100')).toBe(false)
+  })
+})
+
+describe('trader bot speaks only when the operator must act', () => {
+  it('sends alerts and asks, drops status and reports', () => {
+    expect(traderNeedsOperator('TRADER ALERT: UNEXPECTED SHORT POSITION: IWM -3.')).toBe(true)
+    expect(traderNeedsOperator('NAV drop halt: $1,000 (6%) over 7 days.')).toBe(true)
+    expect(traderNeedsOperator('Trader (needs you): engine stuck\nWhat to do: restart it')).toBe(true)
+    expect(traderNeedsOperator('EXECUTED: BUY DBC $500 @ market. Committee: approved')).toBe(false)
+    expect(traderNeedsOperator('Go-live gate: 1/8 criteria (0 closed round-trips)')).toBe(false)
+    expect(traderNeedsOperator('Paw Trader weekly report 2026-09-13. Kill switch: inactive')).toBe(false)
+    expect(traderNeedsOperator('Trader: order retried\nNothing for you to do.')).toBe(false)
   })
 })
