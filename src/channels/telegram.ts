@@ -833,6 +833,35 @@ export class TelegramChannel implements Channel {
             await ctx.editMessageText(ok ? 'Rejected.' : 'Reject failed (wrong status?)')
           } catch { /* ignore */ }
           logger.info({ postId, ok }, 'Social post rejected via Telegram')
+        } else if (action === 'creply') {
+          await ctx.answerCallbackQuery({ text: 'Replying...' })
+          const { sendCommentReply } = await import('../social/comments.js')
+          const r = await sendCommentReply(postId)
+          try {
+            await ctx.editMessageText(r.ok ? 'Replied.' : `Reply failed: ${r.error ?? 'unknown error'}`)
+          } catch { /* ignore */ }
+          logger.info({ commentId: postId, ok: r.ok, error: r.error }, 'Social comment reply via Telegram')
+        } else if (action === 'queue' || action === 'rejectg') {
+          const ids = postId.split(',').filter(Boolean)
+          await ctx.answerCallbackQuery({ text: action === 'queue' ? 'Queuing...' : 'Rejected' })
+          let msg: string
+          if (action === 'queue') {
+            const { queueDrafts } = await import('../social/autopilot.js')
+            const n = queueDrafts(ids)
+            msg = n ? `Queued ${n} post(s) for their planned time.` : 'Nothing to queue (already handled?).'
+          } else {
+            const { reject } = await import('../social/index.js')
+            msg = `Rejected ${ids.filter((id) => reject(id)).length} post(s).`
+          }
+          try { await ctx.editMessageText(msg) } catch { /* ignore */ }
+          logger.info({ ids, action }, 'Social plan card via Telegram')
+        } else if (action === 'cignore') {
+          await ctx.answerCallbackQuery({ text: 'Ignored' })
+          const { ignoreComment } = await import('../social/comments.js')
+          const ok = ignoreComment(postId)
+          try {
+            await ctx.editMessageText(ok ? 'Ignored.' : 'Already handled.')
+          } catch { /* ignore */ }
         } else {
           await ctx.answerCallbackQuery({ text: 'Unknown action' })
         }

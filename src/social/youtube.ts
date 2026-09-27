@@ -29,7 +29,7 @@ export interface YouTubeUploadOptions {
 // Get fresh access token from refresh token
 // ---------------------------------------------------------------------------
 
-async function getAccessToken(config: YouTubeConfig): Promise<string> {
+export async function getAccessToken(config: YouTubeConfig): Promise<string> {
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

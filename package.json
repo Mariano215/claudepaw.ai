@@ -53,7 +53,10 @@
     "memory:migrate-legacy": "tsx scripts/migrate-memory-v2.ts",
     "verify:permissions": "tsx scripts/verify-permissions.ts",
     "generate:social:this-week": "tsx scripts/generate-social-this-week.ts",
-    "report:health": "tsx src/reports/project-health.ts"
+    "report:health": "tsx src/reports/project-health.ts",
+    "meta:refresh": "node scripts/meta-token-refresh.mjs",
+    "meta:check": "node scripts/meta-token-check.mjs",
+    "linkedin:token": "node scripts/linkedin-token-set.mjs"
   },
   "bin": {
     "cpaw": "./dist/integrations/cli.js"

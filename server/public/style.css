@@ -392,7 +392,8 @@ img { max-width: 100%; display: block; }
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   overflow: hidden;
-  max-height: 280px;
+  /* Tall enough for every project; scrolls only on a short window. */
+  max-height: calc(100vh - 100px);
   overflow-y: auto;
   box-shadow: var(--shadow-card);
 }

@@ -19,6 +19,7 @@ import { postTweet } from './twitter.js'
 import { postLinkedIn } from './linkedin.js'
 import { postFacebook, postInstagram } from './meta.js'
 import { uploadToYouTube } from './youtube.js'
+import { initCommentsTable } from './comments.js'
 import { resolveTwitterConfig, resolveLinkedInConfig, resolveMetaConfig, resolveYouTubeConfig } from './resolve.js'
 import { getProject } from '../db.js'
 import { checkAction } from '../policy.js'
@@ -27,6 +28,7 @@ import type { DraftInput, SocialPost, Platform } from './types.js'
 export function initSocial(db: Database.Database): void {
   initSocialTables(db)
   setSocialDb(db)
+  initCommentsTable(db)
   logger.info('Social module initialized (credential resolution at publish time)')
 }
 

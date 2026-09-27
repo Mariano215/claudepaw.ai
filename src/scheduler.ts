@@ -560,6 +560,27 @@ async function executeDueTasks(send: Sender): Promise<void> {
     logger.error({ err }, 'Scheduler tick: social auto-publish failed')
   }
 
+  // ── Social inbox: new FB/IG/YouTube comments -> draft reply -> Telegram card ──
+  // Self-throttled to one poll per 30 min inside pollSocialInbox.
+  if (storedPawSend) {
+    try {
+      const { pollSocialInbox } = await import('./social/comments.js')
+      await pollSocialInbox(storedPawSend, '123456789')
+    } catch (err) {
+      logger.error({ err }, 'Scheduler tick: social inbox failed')
+    }
+  }
+
+  // ── Social autopilot: Sunday 17:00+ ET, draft next week's posts per project ──
+  if (storedPawSend) {
+    try {
+      const { runSocialAutopilot } = await import('./social/autopilot.js')
+      await runSocialAutopilot(storedPawSend, '123456789')
+    } catch (err) {
+      logger.error({ err }, 'Scheduler tick: social autopilot failed')
+    }
+  }
+
   // Sync updated task state to dashboard after all tasks run
   syncTasksToDashboard()
 }

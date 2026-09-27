@@ -3666,6 +3666,9 @@ const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/calendar',
   'https://www.googleapis.com/auth/youtube.upload',
   'https://www.googleapis.com/auth/youtube',
+  // Reading comment threads and replying (social inbox) needs force-ssl;
+  // the plain youtube scope returned 403 insufficient scopes live.
+  'https://www.googleapis.com/auth/youtube.force-ssl',
   // analytics.readonly is required by the metrics collector so GA4 cards can
   // query runReport on properties the authorizing account has access to.
   // Without this scope the google-analytics service credentials fall out of
