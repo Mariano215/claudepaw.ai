@@ -336,7 +336,7 @@ function handleServerMessage(msg: Record<string, unknown>): void {
     const key = (msg.key as string | undefined)?.trim()
     const value = typeof msg.value === 'string' ? msg.value : undefined
     if (!projectId || !service || !key || value === undefined) {
-      logger.warn({ msg }, 'Received invalid project_credential_sync payload')
+      logger.warn({ projectId, service, key, hasValue: value !== undefined }, 'Received invalid project_credential_sync payload')
       return
     }
     try {

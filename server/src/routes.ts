@@ -4143,7 +4143,7 @@ router.post('/credentials', requireProjectRole('editor'), (req: Request, res: Re
   }
   try {
     setProjectCredential(project_id, service, key, value)
-    broadcastCredentialSync(project_id, service, key)
+    broadcastCredentialSync(project_id, service, key, value)  // bot-only socket; on-connect sync already sends values
     res.status(201).json({ ok: true })
   } catch (e: any) {
     logger.error({ err: e }, 'Failed to set credential')

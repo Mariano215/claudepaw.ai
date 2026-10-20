@@ -11859,13 +11859,21 @@ async function submitCredential(projectId) {
   const service = document.getElementById('cred-input-service')?.value?.trim();
   const key = document.getElementById('cred-input-key')?.value?.trim();
   const value = document.getElementById('cred-input-value')?.value;
-  if (!service || !key || !value) return;
+  if (!service || !key || !value) {
+    showToast('Service, key and value are all required. Nothing was saved.', 'error');
+    return;
+  }
   try {
-    await fetch(API + '/credentials', {
+    const res = await fetch(API + '/credentials', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project_id: projectId, service, key, value })
     });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showToast('Credential not saved: ' + (body.error || 'HTTP ' + res.status), 'error');
+      return;
+    }
     // Close any open add forms
     document.querySelectorAll('.cred-add-form-slot').forEach(slot => {
       while (slot.firstChild) slot.removeChild(slot.firstChild);
