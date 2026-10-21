@@ -22,6 +22,7 @@
     "produce:publish": "tsx scripts/youtube-publish.ts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "trader:replay": "vitest run -c vitest.replay.config.ts",
     "e2e": "playwright test",
     "test:guard:rules": "bash -lc 'cd guard-sidecar && .venv/bin/python ./test_rules.py'",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
