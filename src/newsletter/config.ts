@@ -239,7 +239,9 @@ export const NEWSLETTER_CONFIG: NewsletterConfig = {
   geminiModel: env.GEMINI_MODEL || 'gemini-3.1-flash-image-preview',
   geminiApiKey: env.GEMINI_API_KEY || '',
   templatePath: path.join(PROJECT_ROOT, 'assets', 'newsletter-template.html'),
-  maxHeroBytes: 52_000,
+  // The hero travels as a CID part outside the HTML, so it does not count
+  // toward Gmail's 102 KB clip. Film grain needs the room to survive JPEG.
+  maxHeroBytes: 200_000,
 }
 
 // ---------------------------------------------------------------------------

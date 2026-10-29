@@ -69,6 +69,19 @@ describe('parseRssXml', () => {
     expect(articles[0].summary).toContain('Bold text and links')
   })
 
+  it('drops feed boilerplate and decodes numeric entities', () => {
+    const item = (desc: string) => `<item><title>T</title><link>https://example.com/${desc.length}</link>
+      <description><![CDATA[${desc}]]></description><pubDate>Thu, 03 Apr 2026 12:00:00 GMT</pubDate></item>`
+    const xml = `<?xml version="1.0"?><rss version="2.0"><channel>
+      ${item('arXiv:2610.32034v1 Announce Type: new Abstract: The growing population of debris.')}
+      ${item('Anthropic&#8217;s scanner ships. The post Anthropic Launches OSS Scanner appeared first on MarkTechPost.')}
+    </channel></rss>`
+
+    const [arxiv, mtp] = parseRssXml(xml, 'https://example.com/feed', 'research')
+    expect(arxiv.summary).toBe('The growing population of debris.')
+    expect(mtp.summary).toBe('Anthropic’s scanner ships.')
+  })
+
   it('handles arxiv RDF feed format', () => {
     const xml = `<?xml version="1.0"?>
     <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"

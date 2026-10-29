@@ -74,6 +74,8 @@ export interface ExecutiveBrief {
   topThemes: TopicId[]
   /** One-sentence visual scene for the hero image, tied to this week's story. LLM path only. */
   heroScene?: string
+  /** True when the LLM call failed and the canned heuristic text was used. */
+  fallback?: boolean
 }
 
 export interface NewsletterConfig {

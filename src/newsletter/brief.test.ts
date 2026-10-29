@@ -99,6 +99,7 @@ describe('generateExecutiveBrief', () => {
     expect(brief.insight).toBeTruthy()
     expect(brief.implication).toBeTruthy()
     expect(brief.topThemes.length).toBeGreaterThan(0)
+    expect(brief.fallback).toBe(true)
   })
 
   it('uses LLM output when the API returns valid JSON', async () => {
@@ -126,5 +127,6 @@ describe('generateExecutiveBrief', () => {
     const brief = await generateExecutiveBrief(articles)
     expect(brief.insight).toBe('Deep insight about the threat landscape.')
     expect(brief.implication).toBe('Specific action for the CISO.')
+    expect(brief.fallback).toBeUndefined()
   })
 })

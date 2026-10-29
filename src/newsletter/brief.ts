@@ -4,7 +4,7 @@ import { readEnvFile } from '../env.js'
 import type { ScoredArticle, CategoryId, TopicId, ExecutiveBrief } from './types.js'
 
 const env = readEnvFile()
-const BRIEF_MODEL = env.NEWSLETTER_BRIEF_MODEL || 'claude-sonnet-4-6'
+const BRIEF_MODEL = env.NEWSLETTER_BRIEF_MODEL || 'claude-sonnet-5-5'
 
 function getAnthropicKey(): string {
   // Read at call time so tests can override via process.env and the bot picks
@@ -197,10 +197,11 @@ async function callAnthropicForBrief(
     `check this week. Phrase each as a question to ask or a decision to make, not as a technical ` +
     `procedure. Example: 'Ask your IT lead whether we use Artifactory and whether it was patched this week.' ` +
     `Avoid generic advice like 'review your policies'.>",\n` +
-    `  "heroScene": "<One sentence describing a picture that tells this week's story, for an AI ` +
-    `image generator. It must include people or characters doing something concrete (a guard, ` +
-    `a courier, a locksmith, a crowd, a robot, an animal as a symbol). Name the setting and the action. ` +
-    `Describe things, not words: no text, signs, labels, or logos in the scene.>"\n` +
+    `  "heroScene": "<One short phrase, under 20 words, for an AI image generator. The image always ` +
+    `shows a cyberpunk android using AI; you supply only what the android is doing that tells this ` +
+    `week's lead story, with one concrete object and setting (for example: 'tracing a stolen login ` +
+    `token across a wall of glowing cloud servers'). Describe things, not words: no text, signs, ` +
+    `labels, logos, or real company names.>"\n` +
     `}\n\n` +
     `Return ONLY the JSON object. No preamble, no markdown fences.`
 
@@ -274,5 +275,5 @@ export async function generateExecutiveBrief(
 
   logger.warn('Falling back to heuristic brief')
   const heuristic = buildHeuristicBrief(articles, topThemes)
-  return { ...heuristic, topThemes }
+  return { ...heuristic, topThemes, fallback: true }
 }

@@ -53,7 +53,16 @@ export function scoreArticle(article: RawArticle, category: CategoryId): number 
 
   const hintScore = computeHintScore(text, hints)
   const recencyBonus = computeRecencyBonus(article.publishedAt)
-  return hintScore + recencyBonus
+  if (category !== 'research') return hintScore + recencyBonus
+
+  // Research hints ("paper", "benchmark") match any field, so robotics and
+  // chemistry papers outranked security work. Rank by relevance to the
+  // readers instead: security counts double, and arXiv cs.CR gets a lift.
+  const relevance =
+    2 * computeHintScore(text, CYBER_HINTS) +
+    computeHintScore(text, AI_HINTS) +
+    (article.sourceFeed.endsWith('/cs.CR') ? 5 : 0)
+  return hintScore + relevance + recencyBonus
 }
 
 // ---------------------------------------------------------------------------

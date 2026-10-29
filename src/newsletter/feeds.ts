@@ -74,8 +74,12 @@ function stripHtml(html: string): string {
       .replace(/&#0?39;/g, "'")
       .replace(/&apos;/g, "'")
       .replace(/&nbsp;/g, ' ')
+      .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
 
   return decode(decode(html).replace(/<[^>]+>/g, ''))
+    // Feed boilerplate that reads as noise in the newsletter.
+    .replace(/^arXiv:\S+\s+Announce Type:\s*\S+\s*(Abstract:\s*)?/i, '')
+    .replace(/\s*The post .+ appeared first on .+$/i, '')
     .replace(/\s+/g, ' ')
     .trim()
 }

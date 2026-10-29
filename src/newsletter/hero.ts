@@ -10,38 +10,34 @@ import type { TopicId } from './types.js'
 
 const THEME_MOTIFS: Record<TopicId, string> = {
   identity:
-    'biometric iris scans, digital fingerprints, glowing authentication tokens',
+    'scanning a glowing biometric fingerprint to unlock a vault door',
   supply_chain:
-    'interconnected chain links, flowing data pipelines, dependency graphs',
+    'inspecting a conveyor of glowing software packages for a hidden tampered one',
   model_security:
-    'neural network shields, adversarial pattern distortions, AI brain with armor',
+    'shielding a holographic neural network from a swarm of corrupted data shards',
   data_governance:
-    'encrypted data vaults, classification labels, privacy shields',
+    'sorting luminous data cubes into locked archive drawers',
   ai_operations:
-    'MLOps dashboards, model deployment pipelines, inference engines',
+    'monitoring a wall of live model telemetry in a server control room',
   quantum_readiness:
-    'quantum circuits, entangled qubits, lattice-based cryptographic structures',
+    'rewiring a glowing quantum processor core with new cryptographic locks',
 }
 
 // ---------------------------------------------------------------------------
 // Art prompt builder
 // ---------------------------------------------------------------------------
 
+// House style: one android protagonist, the week's story as the action.
 export function buildArtPrompt(themes: TopicId[], scene?: string): string {
-  const motifs = themes.map((t) => THEME_MOTIFS[t]).join(', ')
   // A scene from the brief makes each week's image tell that week's story.
-  // Without one (heuristic brief, old snapshot) fall back to the theme motifs alone.
-  const subject = scene
-    ? `Scene: ${scene} Show the characters clearly, mid-action, as the focal point. ` +
-      `Background details may hint at: ${motifs}. `
-    : `Abstract technology motifs: ${motifs}. `
+  // Without one (heuristic brief, old snapshot) fall back to the lead theme.
+  const topic = scene || THEME_MOTIFS[themes[0] ?? 'identity']
   return (
-    `Create a widescreen 21:9 aspect ratio cyberpunk digital art header image. ` +
-    `Style: Blade Runner 2049 inspired, dark moody atmosphere with neon accents in cyan, ` +
-    `magenta, and electric blue. ${subject}` +
-    `No text, no letters, no words, no signs, no logos. Cinematic lighting with volumetric fog. ` +
-    `Professional quality suitable for an email newsletter header. ` +
-    `Resolution should work well at 1200x514 pixels.`
+    `Cyberpunk android using AI - ${topic.replace(/\.$/, '')} - ` +
+    `with cyan and amber neon glow, shallow depth of field, photorealistic textures, ` +
+    `Blade Runner 2049 cinematography style, grainy 35mm film stock, moody atmospheric lighting, ` +
+    `dark teal and orange color grade in 16:9 aspect ratio. ` +
+    `No text, no letters, no words, no signs, no logos, no watermarks.`
   )
 }
 
@@ -111,7 +107,10 @@ export async function generateHeroImage(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: artDirection }] }],
-        generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
+        generationConfig: {
+          responseModalities: ['TEXT', 'IMAGE'],
+          imageConfig: { aspectRatio: '16:9' },
+        },
       }),
     })
 
@@ -180,7 +179,7 @@ export async function optimizeForEmail(imagePath: string): Promise<string> {
     let buffer: Buffer
 
     buffer = await sharp(imagePath)
-      .resize(1200, 514, { fit: 'cover' })
+      .resize(1200, 675, { fit: 'cover' })
       .jpeg({ quality })
       .toBuffer()
 
@@ -188,7 +187,7 @@ export async function optimizeForEmail(imagePath: string): Promise<string> {
     while (buffer.length > NEWSLETTER_CONFIG.maxHeroBytes && quality > 20) {
       quality -= 10
       buffer = await sharp(imagePath)
-        .resize(1200, 514, { fit: 'cover' })
+        .resize(1200, 675, { fit: 'cover' })
         .jpeg({ quality })
         .toBuffer()
     }

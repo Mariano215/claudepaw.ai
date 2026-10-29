@@ -61,6 +61,21 @@ describe('scoreArticle', () => {
     })
     expect(scoreArticle(recent, 'cyber')).toBeGreaterThan(scoreArticle(old, 'cyber'))
   })
+
+  it('ranks a security paper above an off-topic paper in research', () => {
+    // Last real miss: a space-robotics paper outranked security work.
+    const robotics = makeArticle({
+      title: 'PPO vs. SAC: A Comparative Study for Cooperative Motion Control of Dual-Arm Space Robots',
+      summary: 'This paper develops a coordinated reinforcement learning framework and benchmark.',
+      sourceFeed: 'http://export.arxiv.org/rss/cs.LG',
+    })
+    const security = makeArticle({
+      title: 'Detecting credential theft in agent pipelines',
+      summary: 'We study phishing and privilege escalation against LLM agents.',
+      sourceFeed: 'http://export.arxiv.org/rss/cs.CR',
+    })
+    expect(scoreArticle(security, 'research')).toBeGreaterThan(scoreArticle(robotics, 'research'))
+  })
 })
 
 describe('categorizeGoogleNewsArticle', () => {

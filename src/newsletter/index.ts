@@ -37,6 +37,8 @@ import {
 } from '../newsletter-linkedin/snapshot.js'
 import type { CategoryId, ScoredArticle, ScoredRepo, ExecutiveBrief } from './types.js'
 
+const HERO_CID = 'signal-hero'
+
 export interface GenerateOptions {
   /** Skip sendEmail() and skip marking URLs/repos as seen. Useful for one-shot LinkedIn republish. */
   skipGmail?: boolean
@@ -316,6 +318,11 @@ export async function generateAndSendNewsletter(
     linkedinPost,
   })
 
+  // The hero rides as a CID part so the HTML stays under Gmail's 102 KB clip.
+  // The preview file keeps the data URI so it renders standalone.
+  const heroB64 = heroImageSrc.match(/^data:image\/jpeg;base64,(.+)$/)?.[1]
+  const emailHtml = heroB64 ? html.split(heroImageSrc).join(`cid:${HERO_CID}`) : html
+
   if (opts.previewHtmlPath) {
     writeFileSync(opts.previewHtmlPath, html)
     logger.info({ path: opts.previewHtmlPath }, 'Preview HTML written')
@@ -327,7 +334,10 @@ export async function generateAndSendNewsletter(
     const sendResult = await sendEmail({
       to: NEWSLETTER_CONFIG.recipientEmail,
       subject: `The Signal - ${dateStr}`,
-      htmlBody: html,
+      htmlBody: emailHtml,
+      inlineImages: heroB64
+        ? [{ cid: HERO_CID, contentType: 'image/jpeg', data: Buffer.from(heroB64, 'base64') }]
+        : undefined,
     })
     sendOk = sendResult.success
 
@@ -363,7 +373,7 @@ export async function generateAndSendNewsletter(
     articles_research: accessibleByCategory.research.length,
     articles_github: githubPicks.length,
     hero_path: imagePath,
-    html_bytes: Buffer.byteLength(html, 'utf-8'),
+    html_bytes: Buffer.byteLength(emailHtml, 'utf-8'),
     sent_at: !opts.skipGmail && sendOk ? Date.now() : null,
     recipient: NEWSLETTER_CONFIG.recipientEmail,
   })
@@ -431,6 +441,7 @@ export async function generateAndSendNewsletter(
     `The Signal ${dateStr}: ${accessibleByCategory.cyber.length} cyber, ` +
     `${accessibleByCategory.ai.length} AI, ${accessibleByCategory.research.length} research, ` +
     `${githubPicks.length} repos. ` +
+    `Brief: ${brief.fallback ? 'FALLBACK (LLM failed, canned text sent)' : 'OK'}. ` +
     `Hero: ${heroStatus}. Gmail: ${gmailStatus}. LinkedIn: ${linkedinStatus}.`
 
   reportFeedItem('content-researcher', 'newsletter-sent', summary)

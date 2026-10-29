@@ -31,16 +31,14 @@ import { logger } from '../logger.js'
 import { buildArtPrompt, heroPathForDate, generateHeroImage, optimizeForEmail } from './hero.js'
 
 describe('buildArtPrompt', () => {
-  it('includes motifs for each provided theme', () => {
+  it('uses the lead theme as the topic when no scene is given', () => {
     const prompt = buildArtPrompt(['identity', 'supply_chain'])
-    expect(prompt).toContain('biometric iris scans')
-    expect(prompt).toContain('interconnected chain links')
+    expect(prompt).toContain('Cyberpunk android using AI - scanning a glowing biometric fingerprint')
   })
 
   it('puts the brief scene front and center when provided', () => {
     const prompt = buildArtPrompt(['identity'], 'A locksmith hands a courier a glowing key at a loading dock.')
-    expect(prompt).toContain('Scene: A locksmith hands a courier')
-    expect(prompt).toContain('biometric iris scans')
+    expect(prompt).toContain('Cyberpunk android using AI - A locksmith hands a courier a glowing key at a loading dock - ')
   })
 
   it('always includes the "no text" constraint', () => {
@@ -48,9 +46,10 @@ describe('buildArtPrompt', () => {
     expect(prompt.toLowerCase()).toContain('no text')
   })
 
-  it('sets 21:9 aspect ratio', () => {
+  it('sets 16:9 aspect ratio and the house grade', () => {
     const prompt = buildArtPrompt(['identity'])
-    expect(prompt).toContain('21:9')
+    expect(prompt).toContain('16:9')
+    expect(prompt).toContain('dark teal and orange color grade')
   })
 })
 
