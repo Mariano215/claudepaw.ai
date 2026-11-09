@@ -1,0 +1,32 @@
+{
+  "id": "sentry-mcp",
+  "name": "Sentry",
+  "category": "dev-tools",
+  "icon": "bug",
+  "description": "View error reports, stack traces, and performance data from Sentry",
+  "kind": "mcp_server",
+  "mcp": {
+    "command": "npx",
+    "args": ["-y", "@sentry/mcp-server@0.31.0"],
+    "env_from_credentials": ["sentry.auth_token"],
+    "transport": "stdio"
+  },
+  "setup": {
+    "credentials_required": [
+      {
+        "service": "sentry",
+        "key": "auth_token",
+        "label": "Sentry Auth Token",
+        "help_url": "https://sentry.io/settings/auth-tokens/",
+        "input_type": "password"
+      }
+    ],
+    "instructions": "Create an auth token at sentry.io with project:read and event:read scopes."
+  },
+  "verify": {
+    "kind": "mcp_tool_call",
+    "tool": "list_organizations",
+    "args": {},
+    "timeout_ms": 15000
+  }
+}

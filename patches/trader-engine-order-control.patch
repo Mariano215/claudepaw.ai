@@ -1,0 +1,204 @@
+--- a/src/trader_engine/api/routes/orders.py
++++ b/src/trader_engine/api/routes/orders.py
+@@ -1,12 +1,21 @@
+ from __future__ import annotations
++import time
+ import sys
+-from typing import Annotated, Any, Generator
+-from fastapi import APIRouter, Depends, Query
++from typing import Annotated, Any, Generator, Literal
++from fastapi import APIRouter, Depends, HTTPException, Query
+ from pydantic import BaseModel
+ from trader_engine.db.models import EngineOrder
+ from trader_engine.db.session import get_session
+ 
+ router = APIRouter()
++
++_TERMINAL_ORDER_STATUSES = {"filled", "canceled", "cancelled", "rejected", "expired", "failed"}
++
++
++def _get_adapter() -> Any:
++    """Late-binding wrapper so tests can inject the execution adapter."""
++    from trader_engine.api.main import get_broker_adapter
++    return get_broker_adapter()
+ 
+ 
+ # FIX 3: yield keeps the with-block open until FastAPI is done with the dependency.
+@@ -46,14 +55,26 @@
+     updated_at: int
+ 
+ 
++class CancelOrderOut(BaseModel):
++    client_order_id: str
++    status: str
++    submitted: bool
++
++
+ @router.get("/orders", response_model=list[OrderOut])
+ async def list_orders(
++    status: Annotated[Literal["open", "closed", "all"], Query()] = "all",
+     limit: Annotated[int, Query(ge=1, le=500)] = 100,
+     offset: Annotated[int, Query(ge=0, le=1_000_000)] = 0,
+     session: Any = Depends(_session_dep),
+ ) -> list[OrderOut]:
++    query = session.query(EngineOrder)
++    if status == "open":
++        query = query.filter(~EngineOrder.status.in_(_TERMINAL_ORDER_STATUSES))
++    elif status == "closed":
++        query = query.filter(EngineOrder.status.in_(_TERMINAL_ORDER_STATUSES))
+     rows = (
+-        session.query(EngineOrder)
++        query
+         .order_by(EngineOrder.created_at.desc(), EngineOrder.client_order_id.desc())
+         .offset(offset)
+         .limit(limit)
+@@ -70,3 +91,49 @@
+         )
+         for r in rows
+     ]
++
++
++@router.post("/orders/{client_order_id}/cancel", response_model=CancelOrderOut)
++async def cancel_order(
++    client_order_id: str,
++    session: Any = Depends(_session_dep),
++) -> CancelOrderOut:
++    """Idempotently request cancellation for one durable engine order."""
++    order = session.get(EngineOrder, client_order_id)
++    if order is None:
++        raise HTTPException(status_code=404, detail="order not found")
++
++    status = str(order.status or "unknown").lower()
++    if status in _TERMINAL_ORDER_STATUSES:
++        return CancelOrderOut(
++            client_order_id=order.client_order_id,
++            status=status,
++            submitted=False,
++        )
++    if not order.broker_order_id:
++        raise HTTPException(status_code=409, detail="order has no broker id; reconcile before cancellation")
++    if order.source != "alpaca":
++        raise HTTPException(status_code=409, detail="order broker is not available for cancellation")
++
++    try:
++        submitted = await _get_adapter().cancel_order(broker_order_id=order.broker_order_id)
++    except Exception:
++        raise HTTPException(status_code=502, detail="broker cancellation failed") from None
++
++    if not submitted:
++        return CancelOrderOut(
++            client_order_id=order.client_order_id,
++            status=status,
++            submitted=False,
++        )
++
++    # The broker accepted the request. Final canceled/filled state arrives via
++    # trade_updates or reconciliation, so persist the in-flight state now.
++    order.status = "pending_cancel"
++    order.updated_at = int(time.time() * 1000)
++    session.commit()
++    return CancelOrderOut(
++        client_order_id=order.client_order_id,
++        status=order.status,
++        submitted=True,
++    )
+--- a/tests/test_api_endpoints.py
++++ b/tests/test_api_endpoints.py
+@@ -113,6 +113,97 @@
+     assert first.json()[0]["client_order_id"] != second.json()[0]["client_order_id"]
+ 
+ 
++def test_orders_filters_open_before_pagination(client_seeded, seeded):
++    order = seeded.query(EngineOrder).filter(EngineOrder.asset == "AAPL").one()
++    order.status = "pending_cancel"
++    seeded.commit()
++    open_response = client_seeded.get("/orders?status=open&limit=1", headers=HEADERS)
++    closed_response = client_seeded.get("/orders?status=closed&limit=1", headers=HEADERS)
++    assert open_response.status_code == 200
++    assert [row["client_order_id"] for row in open_response.json()] == [order.client_order_id]
++    assert closed_response.status_code == 200
++    assert closed_response.json() == []
++
++
++def test_cancel_order_marks_request_pending_and_is_idempotent_after_terminal(client_seeded, seeded, monkeypatch):
++    import trader_engine.api.routes.orders as ord_mod
++
++    order = seeded.query(EngineOrder).filter(EngineOrder.asset == "AAPL").one()
++    order.status = "accepted"
++    seeded.commit()
++
++    class Adapter:
++        calls = []
++
++        async def cancel_order(self, *, broker_order_id):
++            self.calls.append(broker_order_id)
++            return True
++
++    adapter = Adapter()
++    monkeypatch.setattr(ord_mod, "_get_adapter", lambda: adapter)
++    response = client_seeded.post(f"/orders/{order.client_order_id}/cancel", headers=HEADERS)
++    assert response.status_code == 200
++    assert response.json() == {
++        "client_order_id": order.client_order_id,
++        "status": "pending_cancel",
++        "submitted": True,
++    }
++    assert adapter.calls == ["alpaca-xyz"]
++    seeded.refresh(order)
++    assert order.status == "pending_cancel"
++
++    order.status = "canceled"
++    seeded.commit()
++    again = client_seeded.post(f"/orders/{order.client_order_id}/cancel", headers=HEADERS)
++    assert again.status_code == 200
++    assert again.json()["submitted"] is False
++    assert again.json()["status"] == "canceled"
++    assert adapter.calls == ["alpaca-xyz"]
++
++
++def test_cancel_order_rejects_missing_unknown_or_wrong_broker(client_seeded, seeded, monkeypatch):
++    import trader_engine.api.routes.orders as ord_mod
++
++    class Adapter:
++        async def cancel_order(self, *, broker_order_id):
++            raise AssertionError("adapter must not be called")
++
++    monkeypatch.setattr(ord_mod, "_get_adapter", lambda: Adapter())
++    assert client_seeded.post("/orders/missing/cancel", headers=HEADERS).status_code == 404
++
++    order = seeded.query(EngineOrder).filter(EngineOrder.asset == "AAPL").one()
++    order.status = "accepted"
++    order.broker_order_id = None
++    seeded.commit()
++    response = client_seeded.post(f"/orders/{order.client_order_id}/cancel", headers=HEADERS)
++    assert response.status_code == 409
++
++    order.broker_order_id = "coinbase-order"
++    order.source = "coinbase"
++    seeded.commit()
++    response = client_seeded.post(f"/orders/{order.client_order_id}/cancel", headers=HEADERS)
++    assert response.status_code == 409
++
++
++def test_cancel_order_masks_adapter_failures(client_seeded, seeded, monkeypatch):
++    import trader_engine.api.routes.orders as ord_mod
++
++    order = seeded.query(EngineOrder).filter(EngineOrder.asset == "AAPL").one()
++    order.status = "accepted"
++    seeded.commit()
++
++    class Adapter:
++        async def cancel_order(self, *, broker_order_id):
++            raise RuntimeError("broker secret detail")
++
++    monkeypatch.setattr(ord_mod, "_get_adapter", lambda: Adapter())
++    response = client_seeded.post(f"/orders/{order.client_order_id}/cancel", headers=HEADERS)
++    assert response.status_code == 502
++    assert response.json() == {"detail": "broker cancellation failed"}
++    seeded.refresh(order)
++    assert order.status == "accepted"
++
++
+ def test_reconcile_last_returns_clean(client_seeded):
+     resp = client_seeded.get("/reconcile/last", headers=HEADERS)
+     assert resp.status_code == 200

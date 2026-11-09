@@ -1,0 +1,47 @@
+{
+  "id": "synthwave-nights",
+  "name": "Synthwave Nights",
+  "description": "Purple and amber on deep violet",
+  "colors": {
+    "bgBase": "#120a20",
+    "bgRaised": "#170f25",
+    "bgSurface": "#1c142a",
+    "bgOverlay": "#221a30",
+    "bgGlass": "rgba(23, 15, 37, 0.85)",
+    "accent": "#8E44AD",
+    "accentDim": "rgba(142, 68, 173, 0.13)",
+    "accentGlow": "rgba(142, 68, 173, 0.32)",
+    "accentSoft": "rgba(142, 68, 173, 0.07)",
+    "magenta": "#8E44AD",
+    "cyan": "#00d4ff",
+    "green": "#00ff88",
+    "amber": "#F1C40F",
+    "red": "#ff3355",
+    "purple": "#8E44AD",
+    "textPrimary": "#eaeaf5",
+    "textSecondary": "#8a8aac",
+    "textMuted": "#50506e",
+    "textOnAccent": "#050510",
+    "borderColor": "rgba(142, 68, 173, 0.14)",
+    "borderSubtle": "rgba(255, 255, 255, 0.06)",
+    "sidebarBg": "rgba(23, 15, 37, 0.75)",
+    "headerBg": "#120a20",
+    "cardBg": "#170f25",
+    "cardBorder": "rgba(142, 68, 173, 0.14)",
+    "feedHighlight": "rgba(142, 68, 173, 0.07)"
+  },
+  "fonts": {
+    "heading": "'Orbitron', sans-serif",
+    "body": "'Outfit', sans-serif",
+    "mono": "'JetBrains Mono', monospace"
+  },
+  "gradients": {
+    "card": "linear-gradient(135deg, rgba(142, 68, 173, 0.04) 0%, transparent 60%)",
+    "cardHover": "linear-gradient(135deg, rgba(142, 68, 173, 0.07) 0%, transparent 60%)"
+  },
+  "shadows": {
+    "card": "0 1px 3px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3)",
+    "hover": "0 0 0 1px rgba(142,68,173,0.3), 0 4px 24px rgba(0,0,0,0.4), 0 0 32px rgba(142,68,173,0.06)",
+    "glow": "0 0 8px rgba(142,68,173,0.13), 0 0 24px rgba(142,68,173,0.05)"
+  }
+}

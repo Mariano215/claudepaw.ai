@@ -1,0 +1,78 @@
+--- a/src/trader_engine/api/main.py
++++ b/src/trader_engine/api/main.py
+@@ -239,7 +239,7 @@
+         try:
+             crypto_data_client = CoinbaseDataClient(settings)
+             set_crypto_data_client(crypto_data_client)
+-            _log.info("lifespan.crypto_wired", pairs="BTC/USD,ETH/USD")
++            _log.info("lifespan.crypto_wired", pairs="BTC/USD")
+         except Exception as _cc_err:
+             _log.warning(
+                 "lifespan.crypto_data_client_failed",
+--- a/src/trader_engine/signals/crypto_momentum.py
++++ b/src/trader_engine/signals/crypto_momentum.py
+@@ -2,7 +2,7 @@
+ """
+ Layer 1 - Crypto momentum signal generator (24/7).
+ 
+-Strategy: 7-day breakout over 30-day high on BTC/USD and ETH/USD.
++Strategy: 7-day breakout over the 20-day high on BTC/USD.
+ 
+ Entry (BUY candidate):
+   close(today) > max(high over last 30 days, exclusive of today)
+@@ -29,12 +29,10 @@
+ 
+ STRATEGY_NAME = 'momentum-crypto'
+ 
+-# 2026-06-11 (operator decision): widened from (BTC, ETH) + 30-day window
+-# after the strategy generated ZERO signals in 14 days -- neither asset
+-# printed a 30-day high. SOL adds a third independent breakout source and a
+-# 20-day (Donchian-style) window fires on intermediate trends, not only
+-# all-time-high regimes. Pairs are ccxt unified form (Coinbase).
+-BASKET: tuple[str, ...] = ('BTC/USD', 'ETH/USD', 'SOL/USD')
++# The first prospective crypto cohort is Bitcoin-only. A single frozen asset
++# keeps the benchmark, cost model, and trade attribution auditable. Add another
++# pair only by starting a new versioned cohort. Pair is ccxt unified form.
++BASKET: tuple[str, ...] = ('BTC/USD',)
+ LOOKBACK_HIGH = 20    # 20-day high window (was 30; see note above)
+ BREAKOUT_RETURN = 7   # 7-day return window
+ MIN_SCORE = 0.05
+--- a/tests/test_crypto_momentum.py
++++ b/tests/test_crypto_momentum.py
+@@ -69,14 +69,14 @@
+     assert generate_candidates(client) == []
+ 
+ 
+-def test_generate_candidates_emits_both_pairs_when_signalled():
+-    # Force both pairs into a breakout.
++def test_generate_candidates_emits_frozen_bitcoin_pair_when_signalled():
++    # Force the frozen Bitcoin cohort pair into a breakout.
+     closes = [100.0] * 40 + [95.0, 96.0, 98.0, 100.0, 101.0, 104.0, 110.0, 120.0]
+     df = _df(closes)
+     client = MagicMock()
+     client.get_daily_bars.return_value = df
+     candidates = generate_candidates(client)
+-    # BASKET is ('BTC/USD', 'ETH/USD') so we expect both.
++    assert BASKET == ('BTC/USD',)
+     assets = {c.asset for c in candidates}
+     assert assets == set(BASKET)
+     for c in candidates:
+@@ -87,16 +87,14 @@
+ 
+ 
+ def test_generate_candidates_sorts_by_score_desc():
+-    # BTC breaks out hard, ETH barely.
++    # Single-asset cohort remains deterministically sorted.
+     closes_btc = [100.0] * 40 + [95.0, 100.0, 110.0, 120.0, 130.0, 140.0, 155.0, 180.0]
+-    closes_eth = [100.0] * 40 + [99.0, 99.5, 100.0, 100.5, 101.0, 101.5, 102.0, 103.0]
+     mapping = {
+         'BTC/USD': _df(closes_btc),
+-        'ETH/USD': _df(closes_eth),
+     }
+     client = MagicMock()
+     client.get_daily_bars.side_effect = lambda asset, days=270: mapping[asset]
+     candidates = generate_candidates(client)
+-    assert candidates[0].asset == 'BTC/USD'
++    assert [candidate.asset for candidate in candidates] == ['BTC/USD']
+     scores = [c.raw_score for c in candidates]
+     assert scores == sorted(scores, reverse=True)

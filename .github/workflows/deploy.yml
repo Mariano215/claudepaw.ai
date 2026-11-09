@@ -1,0 +1,54 @@
+name: Deploy Dashboard
+
+on:
+  workflow_dispatch:  # Manual-only -- deploy runs locally via Tailscale (npm run deploy:dashboard)
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Manual dispatch is the only trigger. The previous `if: github.event_name == 'push'`
+    # guard was dead code (push is not in `on:`) and silently disabled the job.
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Deploy to Hostinger
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_DIR: /opt/claudepaw-server
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          SSH_OPTS="-o StrictHostKeyChecking=no -i ~/.ssh/deploy_key"
+
+          rsync -az --delete -e "ssh $SSH_OPTS" server/public/ "$DEPLOY_HOST:$DEPLOY_DIR/public/"
+          rsync -az --delete -e "ssh $SSH_OPTS" server/src/ "$DEPLOY_HOST:$DEPLOY_DIR/src/"
+          rsync -az -e "ssh $SSH_OPTS" server/package.json server/tsconfig.json "$DEPLOY_HOST:$DEPLOY_DIR/"
+
+          if [ -d "server/scripts" ]; then
+            rsync -az --delete -e "ssh $SSH_OPTS" server/scripts/ "$DEPLOY_HOST:$DEPLOY_DIR/scripts/"
+          fi
+
+          ssh $SSH_OPTS "$DEPLOY_HOST" \
+            "cd $DEPLOY_DIR && npm install && npx tsc && systemctl restart claudepaw-server"

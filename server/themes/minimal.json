@@ -1,0 +1,47 @@
+{
+  "id": "minimal",
+  "name": "Minimal",
+  "description": "Black and white -- no distractions",
+  "colors": {
+    "bgBase": "#0a0a0a",
+    "bgRaised": "#141414",
+    "bgSurface": "#1a1a1a",
+    "bgOverlay": "#242424",
+    "bgGlass": "rgba(10, 10, 10, 0.85)",
+    "accent": "#ffffff",
+    "accentDim": "rgba(255, 255, 255, 0.12)",
+    "accentGlow": "rgba(255, 255, 255, 0.25)",
+    "accentSoft": "rgba(255, 255, 255, 0.06)",
+    "magenta": "#e879f9",
+    "cyan": "#67e8f9",
+    "green": "#86efac",
+    "amber": "#fcd34d",
+    "red": "#fca5a5",
+    "purple": "#c4b5fd",
+    "textPrimary": "#e5e5e5",
+    "textSecondary": "#a3a3a3",
+    "textMuted": "#525252",
+    "textOnAccent": "#0a0a0a",
+    "borderColor": "rgba(255, 255, 255, 0.12)",
+    "borderSubtle": "rgba(255, 255, 255, 0.06)",
+    "sidebarBg": "#0a0a0a",
+    "headerBg": "#0a0a0a",
+    "cardBg": "#141414",
+    "cardBorder": "rgba(255, 255, 255, 0.08)",
+    "feedHighlight": "rgba(255, 255, 255, 0.04)"
+  },
+  "fonts": {
+    "heading": "'Outfit', sans-serif",
+    "body": "'Outfit', sans-serif",
+    "mono": "'JetBrains Mono', monospace"
+  },
+  "gradients": {
+    "card": "linear-gradient(135deg, rgba(255, 255, 255, 0.02) 0%, transparent 60%)",
+    "cardHover": "linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0%, transparent 60%)"
+  },
+  "shadows": {
+    "card": "0 1px 2px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3)",
+    "hover": "0 0 0 1px rgba(255,255,255,0.15), 0 4px 16px rgba(0,0,0,0.4)",
+    "glow": "0 0 6px rgba(255,255,255,0.08)"
+  }
+}

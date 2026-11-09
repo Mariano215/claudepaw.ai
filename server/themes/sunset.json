@@ -1,0 +1,47 @@
+{
+  "id": "sunset",
+  "name": "Sunset",
+  "description": "Orange and purple -- warm gradient energy",
+  "colors": {
+    "bgBase": "#1a0a2e",
+    "bgRaised": "#231040",
+    "bgSurface": "#2d1650",
+    "bgOverlay": "#381c62",
+    "bgGlass": "rgba(26, 10, 46, 0.85)",
+    "accent": "#f97316",
+    "accentDim": "rgba(249, 115, 22, 0.15)",
+    "accentGlow": "rgba(249, 115, 22, 0.30)",
+    "accentSoft": "rgba(249, 115, 22, 0.08)",
+    "magenta": "#e879f9",
+    "cyan": "#67e8f9",
+    "green": "#4ade80",
+    "amber": "#fbbf24",
+    "red": "#fb7185",
+    "purple": "#c084fc",
+    "textPrimary": "#faf5ff",
+    "textSecondary": "#d8b4fe",
+    "textMuted": "#a855f7",
+    "textOnAccent": "#1a0a2e",
+    "borderColor": "rgba(249, 115, 22, 0.20)",
+    "borderSubtle": "rgba(255, 255, 255, 0.08)",
+    "sidebarBg": "#1a0a2e",
+    "headerBg": "#1a0a2e",
+    "cardBg": "#231040",
+    "cardBorder": "rgba(249, 115, 22, 0.15)",
+    "feedHighlight": "rgba(249, 115, 22, 0.08)"
+  },
+  "fonts": {
+    "heading": "'Outfit', sans-serif",
+    "body": "'Outfit', sans-serif",
+    "mono": "'JetBrains Mono', monospace"
+  },
+  "gradients": {
+    "card": "linear-gradient(135deg, rgba(249, 115, 22, 0.05) 0%, rgba(168, 85, 247, 0.03) 100%)",
+    "cardHover": "linear-gradient(135deg, rgba(249, 115, 22, 0.08) 0%, rgba(168, 85, 247, 0.05) 100%)"
+  },
+  "shadows": {
+    "card": "0 1px 3px rgba(0,0,0,0.4), 0 4px 12px rgba(0,0,0,0.3)",
+    "hover": "0 0 0 1px rgba(249,115,22,0.3), 0 4px 20px rgba(0,0,0,0.3), 0 0 24px rgba(168,85,247,0.08)",
+    "glow": "0 0 8px rgba(249,115,22,0.15), 0 0 20px rgba(168,85,247,0.08)"
+  }
+}

@@ -1,0 +1,125 @@
+# Changelog
+
+All notable user-facing changes to this project should be recorded here.
+
+This file follows a lightweight Keep a Changelog style and is intended for humans first. Commits can stay technical; this file should summarize what users, contributors, and future-you care about.
+
+## Unreleased
+
+### Added
+
+- Added a one-shot, append-only Bitcoin order-flow research evaluator that runs
+  only after the frozen 180-day boundary, preserves the untouched holdout, and
+  cannot activate strategies, cohorts, signals, decisions, or orders.
+- Added immutable trade-price OHLC outcome evidence to future Bitcoin
+  order-flow bars and a read-only Mission Control evaluation verdict.
+
+- Added an append-only PawTrader operational event ledger with authenticated, project-scoped WebSocket catch-up for real scheduler, strategy, suppression, committee, order, fill, exit, reconcile, verdict, cohort, and watchdog activity.
+- Predeclared a forward-only Bitcoin order-flow imbalance research family while keeping all rejected Bitcoin candidates and the new family paused and non-executable.
+- Added a forward-only public BTC-USD research collector with append-only trade/L2 storage, immutable 15-minute order-flow feature bars, sequence/reconnect/feed-quality watchdogs, and no signal or execution path. Mission Control now labels the lane `RESEARCH PAUSED` while retaining the latest rejected cohort as evidence detail.
+- Fixed Coinbase research-feed gap detection to follow the socket's interleaved sequence instead of producing false warnings between channel messages; duplicate and out-of-order frames are now ignored. Derived bars deduplicate trade IDs before feature calculation, source-order unique trades behind a 60-second local-receive-time watermark, and apply L2 state transitions in authoritative receive/sequence order so repeated trades and delayed L2 event clocks do not create false clock-reversal failures or inflate features.
+- Added fail-closed Bitcoin order-flow collection progress to Mission Control: eligible completed bars, forward days, and the earliest permitted 180-day evaluation date. Operational tape UUID deduplication now has a direct regression test.
+- Partitioned new high-volume Bitcoin raw market data into immutable UTC-day SQLite shards while preserving the original research DB in place, preventing the 180-day collection from becoming one multi-billion-row database.
+
+- Fixed PawTrader Mission Control so unavailable risk data and stale reconcile data no longer appear healthy; pipeline motion now reflects current work instead of running continuously.
+
+- Added versioned BTC/USD paper candidates, matching engine backtest workflows, and prospective ROI accounting with conservative crypto fees and slippage.
+- Added a BTC/USD four-hour trend candidate with completed-candle aggregation, explicit cost hurdle, matched production backtest, and a frozen v5 paper cohort.
+- Fixed Coinbase history pagination across short intermediate pages and added a cost-adjusted BTC momentum backtest plus corrected v3 cohort metadata.
+
+### Added
+- PawTrader prospective paper cohorts now freeze stock and Bitcoin strategy configs, venues, cost assumptions, code identities, position/daily caps, and evidence thresholds. Every new entry is cohort-linked; drift, missing broker state, stale reconciliation, open orders, shorts, or legacy overlap blocks activation. One running cohort is allowed per asset-class sleeve. Independent cost-adjusted scorecards count only completed-trade regimes and require current paper broker/data health, clean reconciliation, fresh NAV, 100 round trips, qualified matched backtests, DSR, drawdown, execution quality, and benchmark outperformance before producing a review-only pass. A local paper-control CLI handles audited bootstrap, preflight, legacy flattening, activation, invalidation, and backtest evidence; live mode never switches automatically.
+- PawTrader Mission Control adds a near-live capital curve, stock/Bitcoin execution lanes, system-flow and activity views, broker exposure, honest proof-of-edge blockers, and an admin-only two-step control for canceling individual open Alpaca orders. Order and position outages now stay visibly unknown instead of looking empty.
+- PawTrader checks progress every five minutes and sends a persistent daily readiness summary at 5 p.m. Eastern, alongside the existing weekly review. Reports expose stale accounting and missing evidence without automatically enabling live trading.
+- Immediate acknowledgement message ("Got it, working on it...") sent to the user right after routing, before the agent runs — so a mid-run restart no longer leaves the user with zero feedback.
+- Ollama embeddings now fall back to OpenAI `text-embedding-3-small` when Ollama is unreachable (HTTP 4xx/network error). Requires `OPENAI_API_KEY` to be set. Falls back to empty vector if neither succeeds.
+- Empty agent responses now include a descriptive reason (subtype, turn count, tool count, duration) instead of the generic `(No response from Claude)` placeholder, matching the detail level already present in scheduler failure messages.
+
+### Added (previous)
+- `/api/v1/health` now reports `status: "degraded"` with a `warnings` array when critical env vars (`CREDENTIAL_ENCRYPTION_KEY`, `WS_SECRET` in prod, `DASHBOARD_API_TOKEN`) are missing, so misconfiguration is visible instead of silent.
+- Rate limiting on `/api/v1` (300 req/min per IP general, 30 req/min for `/tasks/:id/run` since each triggers an agent spawn) and per-client WebSocket rate limiting (60 msg/min, bot client exempt).
+- Provider fallback chain is now configured for all projects: `claude_desktop` primary with `anthropic_api` as the automatic fallback, so errors like `error_max_turns` in Claude Desktop no longer kill the task.
+
+### Security
+- Telegram bot allowlist is now fail-closed: an empty allowlist rejects all messages with an error log instead of accepting everyone. Set `ALLOWED_CHAT_ID` in `.env` or per-project credentials.
+- OAuth return-url redirects are now origin-validated against the server's own host to prevent open-redirect abuse from crafted `return_url` parameters.
+- Agent file resolution in `resolveAgentFilePath()` now enforces a strict `[a-z0-9-]`/`project--template` regex and asserts the resolved path stays under `PROJECT_ROOT` (explicit path-traversal defense on top of the existing implicit check).
+- Missing `CREDENTIAL_ENCRYPTION_KEY` now aborts server startup by default. Set `ALLOW_MISSING_CREDENTIAL_KEY=1` to downgrade to a warning for local/dev runs.
+- Removed the hardcoded personal Telegram chat ID fallback in `social-cli.ts notify`; requires an explicit chat ID or `DEFAULT_NOTIFY_CHAT_ID` env var.
+- Google OAuth token refresh no longer marks an integration `disconnected` on transient network errors; only hard auth failures (`invalid_grant`, token revoked) flip the flag. Transient failures fall back to the existing token and log a warning.
+
+### Changed
+- Updated repo docs with a clearer command cheat sheet for commit, push, deploy, OSS sync, and Paw Trader mirror sync workflows.
+- Migrated local TTS defaults, setup docs, dashboard labels, and content guidance from Voxtral on port 8091 to Chatterbox on port 8095 using the new `/v1/tts` `{text, voice}` API with `default` as the default voice.
+- Scheduled task prompts are now prefixed with a preamble instructing agents to skip `git status`/`git diff` and not ask about uncommitted changes, which was previously stalling `newsletter-monday` and `security-weekly-audit` runs.
+- `augmentTaskPrompt()` in the scheduler catches auth/token errors from context builders and runs the task with a degraded-context note instead of killing the whole run.
+- SDK `query()` `maxTurns` raised from 25 to 50 for the `anthropic_api` execution path, reducing spurious mid-task failures on complex multi-step agents.
+- New projects now seed a generic agent roster by default instead of inheriting the Default Project project-specific lineup.
+- Chat-to-project routing is now keyed by channel-qualified chat identity, preventing cross-channel project collisions when raw chat IDs overlap.
+- Document meaningful behavior changes, refactors with visible impact, or updated defaults.
+- Tightened Telegram notifications so scheduled runs stay quiet unless they hit an error, surface an issue, or create action items to review.
+- Example Company weekly briefing, content-plan, and festival-scan tasks now receive structured Gmail, calendar, and sheet context from the scheduler before the model runs, instead of relying on in-prompt shell commands.
+
+### Fixed
+- PawTrader health and weekly reports now quarantine pre-cohort verdict-less closures from active paper-cohort failure counts while retaining the legacy rows for audit. New cohort-linked closures without verdicts still alert.
+- Restored scheduled agent cost checks for the authenticated bot identity. The bot can read project cost-gate status without project memberships, while cost-cap mutations remain limited to project editors, owners, and admins.
+- Dashboard deployments now run PM2 replacement in a detached remote session, ignore terminal stdin, detect dropped SSH connections with keepalives, and verify a unique completion marker plus authenticated health. An SSH reset after process deletion can no longer strand the dashboard offline, report an old process as the new deploy, or leave the deploy waiting for Enter.
+- PawTrader auto-dispatch now honors the engine's limit-only buy contract, blocks new exposure when broker positions or trader cost controls are unavailable or unexpectedly short, and replaces cumulative partial-fill snapshots instead of double-counting them. In paper mode it autonomously covers unexpected stock shorts during market hours without counting repairs as strategy returns. Companion engine patches add full ledger catch-up, durable GTC bracket protection, targeted stale-state recovery, and safe cancellation of stale engine-owned orders.
+- PawTrader uncertain exits retain their original intent for safe recovery; partial exits stay guarded and canceled executions retain their audit trail. Companion engine migration 0007 is required for idempotent recovery.
+- PawTrader exits use fresh position marks and current momentum instead of stale entry enrichment; slow dashboard refreshes no longer overlap.
+- PawTrader retries preserve entry/stop/target prices and reject expired, paused, unprotected, or exhausted intents after broker reconciliation.
+- PawTrader validation rejects missing equity history, corrects single-trial confidence, requires trial variance for multiple variants, and expires approvals when strategy/config changes. Missing prospective evaluation evidence now explicitly blocks live readiness.
+- PawTrader dashboard uses archive-aware accounting with fee limitations and stale timestamps; outages no longer appear as paper mode or an empty portfolio. Readiness details are visible above trading activity.
+- Fixed Paw Trader dashboard usability so pending signals can be approved, skipped, upsized, or paused directly from the dashboard when Telegram delivery stalls, and trader queue/decision tables now scroll inside their cards instead of taking over the page.
+- Fixed Paw Trader alert spam by suppressing blind low-score signals before they page the operator and persisting skip, timeout, and committee-abstain dismissals so the same asset/strategy/side stays quiet unless score or enrichment changes materially or 24 hours pass.
+- Fixed Paw Trader committee rationale calibration so risk/trader explanations now see the configured score floor and stop labeling valid low-end signals as "noise" without threshold context.
+- Fixed `cp-competitive-watch` false alarms by moving it onto a deterministic feed collector and only approval-gating new findings that cite evidence URLs from the current observation set.
+- Blocked dashboard `Run Now` on paws already waiting for approval and hardened paw finding dedupe so previously surfaced items stay known unless they return at higher severity.
+- Fixed Paw reliability so approval timeouts resume on the next scheduled cron instead of re-firing immediately, empty paw phases now retain the runtime diagnostic reason in the stored error, and `paw-retry` skips non-transient failures like no-text responses and known code bugs.
+- Fixed Paw Trader signal ingestion so the brain no longer drops most live engine candidates behind an overly strict local `0.5` score floor; the default now matches the engine’s `0.05` strategy floor and logs fetched/stored/filtered counts for easier diagnosis.
+- Fixed scheduled social post reliability for Facebook/Instagram by repairing legacy `social_posts` rows with missing IDs at startup, enforcing non-null social post IDs in schema rebuilds, and surfacing a specific corruption error instead of the generic `Unknown error`.
+- Fixed dashboard WebSocket `new_message` handler reading `msg.data` when the backend sends `msg.message` + `msg.agentId`. Real-time chat updates in the dashboard now render correctly again.
+- Fixed the dashboard "Run Now" chat path stale-placeholder bug so failed runs now return a descriptive message instead of the old `[No response from agent]` literal (the scheduler paths were already fixed earlier).
+- Removed dead `feed_item` WebSocket handler in the frontend that was never triggered (server receives `feed_item` from the bot and re-emits as `feed_update`, which the frontend already handles).
+- Deleted the broken `daily-repo-backup` scheduled task, which was writing setup documentation instead of running a backup. `daily-backup` (6:20am) continues to perform the actual backup work.
+- Locked down dashboard API authentication so production no longer fails open when `DASHBOARD_API_TOKEN` is missing.
+- Synced dashboard-managed project credentials and OAuth tokens down to the live bot, so connected integrations like Google are usable immediately by task runs instead of appearing connected only in the dashboard.
+- Scoped webhook delivery to the owning project and stopped exposing webhook secrets in dashboard API responses.
+- Stopped cross-project fallback in the YouTube metrics proxy so project dashboards only use their own configured credentials.
+- Fixed the Action Plan dashboard to read the main bot database from the repo-level `store/claudepaw.db` by default, so Telegram notifications about newly proposed items line up with what the dashboard actually shows.
+- Fixed Action Plan drift between the local bot and hosted dashboard by syncing action items to the dashboard on bot connect and after item changes, and hardened startup so a corrupted local `telemetry.db` is quarantined and rebuilt instead of crashing ClaudePaw.
+- Fixed deploy/database durability by stopping normal deploys from overwriting live local SQLite files with production copies, archiving production DB pulls into `store/prod-snapshots/`, and checkpointing local SQLite databases during shutdown.
+- Fixed the Security score gauge sizing so it stays properly scaled on high-DPI and mobile screens instead of rendering oversized.
+- Restored dashboard chat delivery by aligning the WebSocket message type with the bot listener and preserving the selected project context for provider-switch testing.
+- Fixed execution waterfall fallback triggered via runtime overrides and `provider:smoke`, including legacy policy aliases like `auto_on_error`.
+- Fixed dashboard and channel logging so failed chat runs now emit visible error entries with provider fallback context instead of disappearing from the UI.
+- Removed HTML parse mode from the shell notifier so every Telegram path follows the project's plain-text-only rule.
+- Fixed guard sidecar startup so it recreates stale Python virtualenvs, reports ML init failures as health errors instead of hanging in `loading`, and loads Nova rules through the installed package layout.
+- Added a repo-local Nova starter ruleset and a `test:guard:rules` harness for validating prompt-injection detections against blocked and benign samples.
+- Added a hard timeout to Claude Desktop agent runs so scheduled jobs fail over cleanly instead of sitting at `running...` indefinitely.
+- Normalized Claude runtime working directories to the repo root so local provider runs can resolve ClaudePaw assets and integration CLIs consistently.
+- Removed stale `ubuntu-mbp` references from live config and dashboard mock data now that ClaudePaw runs on the Mac-hosted workspace.
+### Removed
+- Document removed features, deprecated paths, or breaking cleanup.
+
+## Release Process
+
+1. Add notable changes to `Unreleased` as work lands.
+2. When ready to publish, copy `Unreleased` into a dated version section like `## v0.1.0 - 2026-04-08`.
+3. Clear `Unreleased` back to empty headings.
+4. Create and push the tag for that version.
+5. Create a GitHub Release using the same summary.
+
+## Example
+
+## v0.1.0 - 2026-04-08
+
+### Added
+- Initial Telegram bot workflow.
+- Dashboard live status updates.
+
+### Changed
+- Improved local execution provider selection.
+
+### Fixed
+- Reduced startup failures during setup.

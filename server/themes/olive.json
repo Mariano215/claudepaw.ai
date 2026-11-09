@@ -1,0 +1,47 @@
+{
+  "id": "olive",
+  "name": "Olive Grove",
+  "description": "Earthy olive greens on deep forest",
+  "colors": {
+    "bgBase": "#0a0f08",
+    "bgRaised": "#111a0e",
+    "bgSurface": "#162013",
+    "bgOverlay": "#1c2818",
+    "bgGlass": "rgba(17, 26, 14, 0.80)",
+    "accent": "#8bc34a",
+    "accentDim": "rgba(139, 195, 74, 0.13)",
+    "accentGlow": "rgba(139, 195, 74, 0.32)",
+    "accentSoft": "rgba(139, 195, 74, 0.07)",
+    "magenta": "#e91e63",
+    "cyan": "#cddc39",
+    "green": "#8bc34a",
+    "amber": "#ffc107",
+    "red": "#f44336",
+    "purple": "#9c27b0",
+    "textPrimary": "#e8ecd8",
+    "textSecondary": "#9aaa7c",
+    "textMuted": "#5c6b4a",
+    "textOnAccent": "#0a0f08",
+    "borderColor": "rgba(139, 195, 74, 0.14)",
+    "borderSubtle": "rgba(255, 255, 255, 0.06)",
+    "sidebarBg": "rgba(17, 26, 14, 0.80)",
+    "headerBg": "#0a0f08",
+    "cardBg": "#162013",
+    "cardBorder": "rgba(139, 195, 74, 0.14)",
+    "feedHighlight": "rgba(139, 195, 74, 0.07)"
+  },
+  "fonts": {
+    "heading": "'Orbitron', sans-serif",
+    "body": "'Outfit', sans-serif",
+    "mono": "'JetBrains Mono', monospace"
+  },
+  "gradients": {
+    "card": "linear-gradient(135deg, rgba(139, 195, 74, 0.04) 0%, transparent 60%)",
+    "cardHover": "linear-gradient(135deg, rgba(139, 195, 74, 0.07) 0%, transparent 60%)"
+  },
+  "shadows": {
+    "card": "0 1px 3px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3)",
+    "hover": "0 0 0 1px rgba(139,195,74,0.3), 0 4px 24px rgba(0,0,0,0.4), 0 0 32px rgba(139,195,74,0.06)",
+    "glow": "0 0 8px rgba(139,195,74,0.13), 0 0 24px rgba(139,195,74,0.05)"
+  }
+}

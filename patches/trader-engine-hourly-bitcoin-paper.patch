@@ -1,0 +1,705 @@
+--- a/src/trader_engine/data/coinbase_data.py
++++ b/src/trader_engine/data/coinbase_data.py
+@@ -27,6 +27,7 @@
+ # paginate forward to the present instead. See test_coinbase_data.py.
+ _COINBASE_PAGE_LIMIT = 300
+ _DAY_MS = 86_400_000
++_HOUR_MS = 3_600_000
+ 
+ # Default pairs. BTC and ETH on the USD book. Strings are in ccxt
+ # unified format (`BASE/QUOTE`) so adapter and data client speak the
+@@ -56,6 +57,43 @@
+                 'options': {'sandbox': settings.coinbase_sandbox},
+             })
+ 
++    def _get_bars(
++        self,
++        asset: str,
++        *,
++        timeframe: str,
++        periods: int,
++        period_ms: int,
++    ) -> pd.DataFrame:
++        """Return paginated OHLCV bars through the latest Coinbase page."""
++        if periods < 1:
++            raise ValueError('periods must be positive')
++        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
++        cursor = now_ms - periods * period_ms
++        raw: list[list[Any]] = []
++
++        while cursor <= now_ms:
++            batch = self._ex.fetch_ohlcv(
++                asset, timeframe=timeframe, since=cursor, limit=_COINBASE_PAGE_LIMIT
++            )
++            if not batch:
++                break
++            raw.extend(batch)
++            last_ts = batch[-1][0]
++            if last_ts < cursor:
++                break
++            if len(batch) < _COINBASE_PAGE_LIMIT:
++                break
++            cursor = last_ts + period_ms
++
++        if not raw:
++            raise ValueError(f'No OHLCV data returned for {asset} ({timeframe})')
++        df = pd.DataFrame(raw, columns=list(OHLCV_COLUMNS))
++        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
++        df = df.set_index('timestamp').sort_index()
++        df = df[~df.index.duplicated(keep='last')]
++        return df
++
+     def get_daily_bars(self, asset: str, days: int = 270) -> pd.DataFrame:
+         """Return a daily OHLCV DataFrame indexed by UTC timestamp.
+ 
+@@ -66,35 +104,26 @@
+         so lookbacks longer than the Coinbase 300-candle cap still reach the
+         most recent bar rather than truncating ~300 days in the past.
+         """
++        return self._get_bars(
++            asset, timeframe='1d', periods=days, period_ms=_DAY_MS
++        )
++
++    def get_hourly_bars(self, asset: str, hours: int = 500) -> pd.DataFrame:
++        """Return the latest completed one-hour candles for ``asset``.
++
++        Coinbase includes the currently forming candle. Signals may only use
++        information known at the decision time, so this method removes that
++        candle and returns at most ``hours`` completed bars.
++        """
++        df = self._get_bars(
++            asset, timeframe='1h', periods=hours + 2, period_ms=_HOUR_MS
++        )
+         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+-        cursor = now_ms - days * _DAY_MS
+-        raw: list[list[Any]] = []
+-
+-        while cursor <= now_ms:
+-            batch = self._ex.fetch_ohlcv(
+-                asset, timeframe='1d', since=cursor, limit=_COINBASE_PAGE_LIMIT
+-            )
+-            if not batch:
+-                break
+-            raw.extend(batch)
+-            last_ts = batch[-1][0]
+-            if last_ts < cursor:
+-                # Exchange ignored `since` or made no forward progress; stop
+-                # to avoid refetching the same page forever.
+-                break
+-            if len(batch) < _COINBASE_PAGE_LIMIT:
+-                # Short page => we have reached the most recent candle.
+-                break
+-            cursor = last_ts + _DAY_MS
+-
+-        if not raw:
+-            raise ValueError(f"No OHLCV data returned for {asset} (last {days} days)")
+-        df = pd.DataFrame(raw, columns=list(OHLCV_COLUMNS))
+-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
+-        df = df.set_index('timestamp').sort_index()
+-        # Consecutive pages can share a boundary candle; keep one copy.
+-        df = df[~df.index.duplicated(keep='last')]
+-        return df
++        current_hour_ms = (now_ms // _HOUR_MS) * _HOUR_MS
++        completed = df[df.index.view('int64') // 1_000_000 < current_hour_ms]
++        if completed.empty:
++            raise ValueError(f'No completed hourly OHLCV data returned for {asset}')
++        return completed.tail(hours)
+ 
+     def is_market_open(self) -> bool:  # noqa: PLR6301
+         """Crypto markets never close."""
+--- a/src/trader_engine/signals/crypto_mean_reversion.py
++++ b/src/trader_engine/signals/crypto_mean_reversion.py
+@@ -1,24 +1,25 @@
+ # src/trader_engine/signals/crypto_mean_reversion.py
+ """
+-Layer 2 - Crypto mean-reversion signal generator (24/7).
++BTC/USD hourly mean-reversion signal generator (24/7).
+ 
+-Strategy: RSI(14) oversold + not in confirmed downtrend.
++Strategy: buy an hourly oversold pullback inside a positive 200-hour trend.
+ 
+ Complements the breakout strategy (crypto_momentum.py) which requires a
+ 30-day high — a condition that only holds in strong uptrends. Mean-reversion
+ fires during consolidation / pullback phases when RSI dips toward oversold.
+ 
+ Entry (BUY candidate):
+-  RSI(14) < RSI_THRESHOLD (default 40)
+-  AND 7-day return > FREEFALL_FLOOR (default -20%) — avoid catching knives
+-  AND Markov-regime is NOT 'bear'          (added in scheduler call site)
++  RSI(14) < 35
++  AND close > EMA(200)
++  AND 24-hour return > -8%
++  AND crypto regime is not bearish (scheduler gate)
+ 
+ Score: tanh((RSI_THRESHOLD - rsi) / RSI_SCALE)
+   At RSI=35 → tanh(0.25) ≈ 0.24  (weak, near threshold)
+   At RSI=30 → tanh(0.875) ≈ 0.70 (strong)
+   At RSI=20 → tanh(2.125) ≈ 0.97 (near max)
+ 
+-Strategy name 'mean-reversion-crypto' is tracked separately from
++Strategy name 'mean-reversion-hourly-crypto' is tracked separately from
+ 'momentum-crypto' so performance attribution stays clean.
+ """
+ from __future__ import annotations
+@@ -34,16 +35,18 @@
+ 
+ logger = structlog.get_logger()
+ 
+-STRATEGY_NAME = 'mean-reversion-crypto'
++STRATEGY_NAME = 'mean-reversion-hourly-crypto'
+ 
+-BASKET: tuple[str, ...] = ('BTC/USD', 'ETH/USD')
++BASKET: tuple[str, ...] = ('BTC/USD',)
+ RSI_PERIOD = 14
+-RSI_THRESHOLD = 40.0   # fire when RSI < this
+-RSI_SCALE = 10.0        # tanh scale — RSI=35.8 → score=0.40 (effective floor); RSI=30 → 0.76
+-FREEFALL_FLOOR = -0.20 # suppress if 7d return worse than -20%
+-MIN_BARS = RSI_PERIOD + 2
+-HORIZON_DAYS = 7       # shorter horizon — mean-reversion expected to resolve quickly
+-MIN_SCORE = 0.05       # same floor as breakout strategy
++RSI_THRESHOLD = 35.0
++RSI_SCALE = 10.0
++EMA_TREND_PERIOD = 200
++FREEFALL_HOURS = 24
++FREEFALL_FLOOR = -0.08
++MIN_BARS = EMA_TREND_PERIOD + 2
++HORIZON_DAYS = 1
++MIN_SCORE = 0.05
+ 
+ 
+ @dataclass
+@@ -72,19 +75,22 @@
+ def _mean_reversion_score(df: pd.DataFrame) -> float:
+     """Return [0, 1] score for an RSI oversold entry on the last bar.
+ 
+-    Returns 0.0 when there is not enough data, RSI is not below
+-    RSI_THRESHOLD, or the 7-day return is below FREEFALL_FLOOR.
++    Returns 0.0 without enough data, an oversold reading, a positive long
++    trend, or protection against a 24-hour freefall.
+     """
+     if len(df) < MIN_BARS:
+         return 0.0
+     closes = df['close']
++    last_close = float(closes.iloc[-1])
++    ema_trend = float(closes.ewm(span=EMA_TREND_PERIOD, adjust=False).mean().iloc[-1])
++    if not (last_close > ema_trend):
++        return 0.0
+     rsi = _rsi(closes)
+     if math.isnan(rsi) or rsi >= RSI_THRESHOLD:
+         return 0.0
+-    # Suppress if asset is in freefall
+-    if len(closes) >= 8:
+-        ret_7d = float(closes.iloc[-1] / closes.iloc[-8]) - 1.0
+-        if ret_7d < FREEFALL_FLOOR:
++    if len(closes) >= FREEFALL_HOURS + 1:
++        ret_24h = float(last_close / closes.iloc[-(FREEFALL_HOURS + 1)]) - 1.0
++        if ret_24h < FREEFALL_FLOOR:
+             return 0.0
+     return float(math.tanh((RSI_THRESHOLD - rsi) / RSI_SCALE))
+ 
+@@ -100,7 +106,7 @@
+     now_ms = int(time.time() * 1000)
+     for asset in BASKET:
+         try:
+-            df = data_client.get_daily_bars(asset, days=MIN_BARS + 30)
++            df = data_client.get_hourly_bars(asset, hours=MIN_BARS + 100)
+             score = _mean_reversion_score(df)
+             if score < MIN_SCORE:
+                 logger.debug('mean_reversion_crypto.below_threshold', asset=asset, score=round(score, 4))
+@@ -117,3 +123,31 @@
+         except Exception as exc:
+             logger.warning('mean_reversion_crypto.skip', asset=asset, error=str(exc))
+     return sorted(candidates, key=lambda c: c.raw_score, reverse=True)
++
++
++@dataclass
++class ScoredAsset:
++    asset: str
++    strategy: str
++    raw_score: float
++    ts_ms: int
++
++
++def score_all(data_client: Any) -> list[ScoredAsset]:
++    """Return a score for every frozen asset, including zero near-misses."""
++    now_ms = int(time.time() * 1000)
++    results: list[ScoredAsset] = []
++    for asset in BASKET:
++        try:
++            df = data_client.get_hourly_bars(asset, hours=MIN_BARS + 100)
++            score = _mean_reversion_score(df)
++        except Exception as exc:
++            logger.warning('mean_reversion_crypto.score_all.skip', asset=asset, error=str(exc))
++            score = 0.0
++        results.append(ScoredAsset(
++            asset=asset,
++            strategy=STRATEGY_NAME,
++            raw_score=score,
++            ts_ms=now_ms,
++        ))
++    return results
+--- a/src/trader_engine/scheduler.py
++++ b/src/trader_engine/scheduler.py
+@@ -84,13 +84,13 @@
+ # None = suppress the strategy entirely in that regime.
+ # ---------------------------------------------------------------------------
+ _CRYPTO_REGIME_PARAMS: dict[str, dict[str, float | None]] = {
+-    'crypto-bull':      {'momentum-crypto': 0.8},   # loosen -- confirmed uptrend
+-    'crypto-bear':      {'momentum-crypto': None},   # suppress -- buy-only in downtrend
+-    'crypto-high-vol':  {'momentum-crypto': 2.0},   # tighten -- only strongest signals
+-    'crypto-choppy':    {'momentum-crypto': 1.0},   # neutral
++    'crypto-bull':      {'mean-reversion-hourly-crypto': 0.8},
++    'crypto-bear':      {'mean-reversion-hourly-crypto': None},
++    'crypto-high-vol':  {'mean-reversion-hourly-crypto': 1.5},
++    'crypto-choppy':    {'mean-reversion-hourly-crypto': 1.0},
+ }
+ _CRYPTO_DEFAULT_REGIME_PARAMS: dict[str, float | None] = {
+-    'momentum-crypto': 1.0,
++    'mean-reversion-hourly-crypto': 1.0,
+ }
+ 
+ _ET = ZoneInfo("America/New_York")
+@@ -350,7 +350,6 @@
+         _write_score_telemetry(all_scores, all_fired, all_suppressed, current_regime)
+ 
+     # --- Convert ScoredAsset candidates to Candidate objects for cache ---
+-    import time as _time
+     import uuid as _uuid
+     from trader_engine.signals.momentum import HORIZON_DAYS as MOM_HORIZON
+     from trader_engine.signals.mean_reversion import HORIZON_DAYS as MR_HORIZON
+@@ -423,7 +422,7 @@
+ 
+ 
+ def run_crypto_signal_generation() -> None:  # noqa: RUF029
+-    """24/7 crypto momentum generator with BTC-derived regime gating.
++    """24/7 hourly BTC mean-reversion generator with regime gating.
+ 
+     Phase 8C: wired a BTC-specific regime classifier (signals/crypto_regime.py)
+     so telemetry is labelled and candidates are regime-gated. Equity SPY regime
+@@ -448,7 +447,7 @@
+ 
+     from trader_engine.api.routes.signals import cache_signals
+     from trader_engine.db.session import get_session
+-    from trader_engine.signals.crypto_momentum import (
++    from trader_engine.signals.crypto_mean_reversion import (
+         MIN_SCORE as CRYPTO_MIN,
+         HORIZON_DAYS as CRYPTO_HORIZON,
+         score_all as score_crypto,
+@@ -474,18 +473,18 @@
+     if not current_crypto_regime:
+         current_crypto_regime = 'crypto-unknown'
+ 
+-    # Resolve regime multiplier for momentum-crypto.
++    # Resolve regime multiplier for the frozen hourly pullback rule.
+     regime_row = _CRYPTO_REGIME_PARAMS.get(
+         current_crypto_regime, _CRYPTO_DEFAULT_REGIME_PARAMS
+     )
+-    multiplier: float | None = regime_row.get('momentum-crypto', 1.0)
++    multiplier: float | None = regime_row.get('mean-reversion-hourly-crypto', 1.0)
+     effective_threshold = None if multiplier is None else CRYPTO_MIN * multiplier
+ 
+     scores: list = []
+     try:
+         scores = score_crypto(_crypto_data_client)
+     except Exception as exc:
+-        log.error('signals.crypto_momentum.error', error=str(exc))
++        log.error('signals.crypto_mean_reversion.error', error=str(exc))
+         return
+ 
+     # Apply regime gate.
+@@ -647,7 +646,7 @@
+             trigger="interval",
+             minutes=15,
+             id="crypto_signal_gen",
+-            name="Generate crypto momentum signals every 15 min (24/7)",
++            name="Generate hourly BTC mean-reversion signals every 15 min (24/7)",
+             misfire_grace_time=120,
+             coalesce=True,
+         )
+--- a/src/trader_engine/backtest/trade_simulator.py
++++ b/src/trader_engine/backtest/trade_simulator.py
+@@ -129,6 +129,7 @@
+     # world-beating number and it is not a conventional Sharpe ratio.
+     sharpe_convention: str
+     assets: list[str]
++    fee_bps: float = 0.0
+     warnings: list[str] = field(default_factory=list)
+     trades: list[Trade] = field(default_factory=list)
+ 
+@@ -202,6 +203,9 @@
+     horizon_days: int,
+     slippage_bps: float,
+     warmup: int,
++    bars_per_day: int = 1,
++    vol_window_bars: int = VOL_WINDOW_DAYS,
++    fee_bps: float = 0.0,
+ ) -> list[Trade]:
+     """
+     Walk one asset's history bar by bar, one position at a time.
+@@ -210,7 +214,7 @@
+     will not stack lots on an asset it already holds.
+     """
+     trades: list[Trade] = []
+-    slip = slippage_bps / 10_000.0
++    cost_per_leg = (slippage_bps + fee_bps) / 10_000.0
+     n = len(df)
+     i = warmup
+     while i < n - 1:
+@@ -228,7 +232,7 @@
+             i += 1
+             continue
+ 
+-        window = df.iloc[max(0, entry_idx - VOL_WINDOW_DAYS): entry_idx]
++        window = df.iloc[max(0, entry_idx - vol_window_bars): entry_idx]
+         stop_pct = _vol_stop_pct(entry_price, window) or DEFAULT_STOP_PCT
+         stop_dist = entry_price * stop_pct
+         stop_price = entry_price - stop_dist
+@@ -248,7 +252,7 @@
+             if high >= target_price:
+                 exit_idx, exit_price, reason = j, target_price, 'target'
+                 break
+-            if (j - entry_idx) >= horizon_days:
++            if (j - entry_idx) >= horizon_days * bars_per_day:
+                 exit_idx, exit_price, reason = j, float(df['close'].iloc[j]), 'time'
+                 break
+         if exit_idx is None:
+@@ -259,8 +263,8 @@
+             reason = 'eod'
+ 
+         # Slippage against us on both legs: pay up on entry, sell down on exit.
+-        eff_entry = entry_price * (1.0 + slip)
+-        eff_exit = float(exit_price) * (1.0 - slip)
++        eff_entry = entry_price * (1.0 + cost_per_leg)
++        eff_exit = float(exit_price) * (1.0 - cost_per_leg)
+         ret = (eff_exit / eff_entry) - 1.0
+ 
+         trades.append(Trade(
+@@ -374,3 +378,93 @@
+         warnings=warnings,
+         trades=all_trades,
+     )
++
++
++def run_crypto_hourly_mean_reversion_backtest(
++    data_client,
++    hours: int = 8_760,
++    slippage_bps: float = 10.0,
++    fee_bps: float = 25.0,
++) -> BacktestResult:
++    """Simulate the exact hourly BTC pullback rule with production exits.
++
++    Signals use only completed bars and enter at the next hour's open. The
++    35-day live volatility window is represented by 840 hourly bars. Coinbase
++    fee plus modeled slippage are charged on both legs.
++    """
++    from trader_engine.signals.crypto_mean_reversion import (
++        BASKET,
++        HORIZON_DAYS,
++        MIN_BARS,
++        MIN_SCORE,
++        STRATEGY_NAME,
++        _mean_reversion_score,
++    )
++
++    warnings: list[str] = []
++    all_trades: list[Trade] = []
++    start_date = ''
++    end_date = ''
++    for asset in BASKET:
++        try:
++            df = data_client.get_hourly_bars(asset, hours=hours)
++        except Exception as exc:
++            warnings.append(f'{asset}: hourly bar fetch failed ({exc})')
++            continue
++        if len(df) <= MIN_BARS + 2:
++            warnings.append(
++                f'{asset}: only {len(df)} bars, needs > {MIN_BARS + 2} for a signal'
++            )
++            continue
++        start_date = str(df.index[0])
++        end_date = str(df.index[-1])
++        all_trades.extend(_simulate_asset(
++            asset=asset,
++            df=df,
++            score_fn=_mean_reversion_score,
++            min_score=MIN_SCORE,
++            horizon_days=HORIZON_DAYS,
++            slippage_bps=slippage_bps,
++            fee_bps=fee_bps,
++            warmup=MIN_BARS,
++            bars_per_day=24,
++            vol_window_bars=35 * 24,
++        ))
++
++    all_trades.sort(key=lambda trade: trade.entry_date)
++    returns = [trade.return_net for trade in all_trades]
++    total_return = 1.0
++    for value in returns:
++        total_return *= 1.0 + value
++    total_return -= 1.0
++    wins = sum(value > 0 for value in returns)
++    unresolved = sum(trade.reason == 'eod' for trade in all_trades)
++    if unresolved:
++        warnings.append(f'{unresolved} trade(s) open at history end, marked to last close')
++
++    return BacktestResult(
++        strategy=STRATEGY_NAME,
++        method=(
++            'historical simulation of the frozen hourly rule; completed-bar '
++            'signal, next-hour-open entry, stop-before-target, one-day time '
++            'stop, Coinbase fee and slippage on both legs; no parameter fit'
++        ),
++        start=start_date,
++        end=end_date,
++        n_trades=len(all_trades),
++        sharpe=_sharpe_per_trade(returns),
++        max_drawdown=_max_drawdown(returns) if returns else None,
++        win_rate=(wins / len(returns)) if returns else None,
++        expectancy=statistics.fmean(returns) if returns else None,
++        total_return=total_return,
++        slippage_bps=slippage_bps,
++        fee_bps=fee_bps,
++        min_score=MIN_SCORE,
++        sharpe_convention=(
++            'mean/stdev of per-trade returns annualised by sqrt(252), matching '
++            'the live cohort gate; not a conventional hourly-return Sharpe'
++        ),
++        assets=list(BASKET),
++        warnings=warnings,
++        trades=all_trades,
++    )
+--- a/src/trader_engine/api/routes/backtest.py
++++ b/src/trader_engine/api/routes/backtest.py
+@@ -15,8 +15,11 @@
+ 
+ from fastapi import APIRouter, HTTPException, Query
+ 
+-from trader_engine.backtest.trade_simulator import run_momentum_backtest
+-from trader_engine.scheduler import get_data_client
++from trader_engine.backtest.trade_simulator import (
++    run_crypto_hourly_mean_reversion_backtest,
++    run_momentum_backtest,
++)
++from trader_engine.scheduler import get_crypto_data_client, get_data_client
+ 
+ router = APIRouter(prefix="/backtest")
+ 
+@@ -56,3 +59,20 @@
+     payload["elapsed_ms"] = int((time.time() - started) * 1000)
+     payload["computed_at_ms"] = int(time.time() * 1000)
+     return payload
++
++
++@router.get('/crypto-hourly-mean-reversion')
++def get_crypto_hourly_mean_reversion_backtest(
++    hours: int = Query(8_760, ge=500, le=43_800),
++    include_trades: bool = Query(False),
++) -> dict:
++    """Trade-level simulation of the frozen BTC/USD hourly paper rule."""
++    data_client = get_crypto_data_client()
++    if data_client is None:
++        raise HTTPException(status_code=503, detail='crypto data client not ready')
++    started = time.time()
++    result = run_crypto_hourly_mean_reversion_backtest(data_client, hours=hours)
++    payload = result.to_dict(include_trades=include_trades)
++    payload['elapsed_ms'] = int((time.time() - started) * 1000)
++    payload['computed_at_ms'] = int(time.time() * 1000)
++    return payload
+--- a/tests/test_coinbase_data.py
++++ b/tests/test_coinbase_data.py
+@@ -124,3 +124,29 @@
+ 
+     assert df.index.is_monotonic_increasing
+     assert not df.index.has_duplicates
++
++
++def test_get_hourly_bars_uses_one_hour_pages_and_drops_forming_candle():
++    import time
++
++    hour_ms = 3_600_000
++    current_hour = (int(time.time() * 1000) // hour_ms) * hour_ms
++    rows = [
++        [current_hour - 2 * hour_ms, 100, 102, 99, 101, 10],
++        [current_hour - hour_ms, 101, 103, 100, 102, 11],
++        [current_hour, 102, 104, 101, 103, 12],
++    ]
++    ex = _FakeExchange(rows)
++    client = CoinbaseDataClient(_minimal_settings(), exchange=ex)
++
++    df = client.get_hourly_bars('BTC/USD', hours=10)
++
++    assert len(df) == 2
++    assert int(df.index.max().value // 1_000_000) == current_hour - hour_ms
++    assert ex.calls[0][0] == 'BTC/USD'
++
++
++def test_get_hourly_bars_rejects_non_positive_period_count():
++    client = CoinbaseDataClient(_minimal_settings(), exchange=_FakeExchange([]))
++    with pytest.raises(ValueError, match='periods must be positive'):
++        client.get_hourly_bars('BTC/USD', hours=-3)
+--- /dev/null
++++ b/tests/test_crypto_mean_reversion.py
+@@ -0,0 +1,68 @@
++"""Tests for the frozen BTC/USD hourly pullback rule."""
++from __future__ import annotations
++
++from unittest.mock import MagicMock
++
++import pandas as pd
++
++from trader_engine.signals.crypto_mean_reversion import (
++    BASKET,
++    HORIZON_DAYS,
++    STRATEGY_NAME,
++    _mean_reversion_score,
++    generate_candidates,
++    score_all,
++)
++
++
++def _hourly(closes: list[float]) -> pd.DataFrame:
++    idx = pd.date_range('2025-01-01', periods=len(closes), freq='h', tz='UTC')
++    return pd.DataFrame({
++        'open': closes,
++        'high': [c * 1.002 for c in closes],
++        'low': [c * 0.998 for c in closes],
++        'close': closes,
++        'volume': [10.0] * len(closes),
++    }, index=idx)
++
++
++def _uptrend_pullback() -> pd.DataFrame:
++    trend = [100 + i * 0.25 for i in range(220)]
++    pullback = [trend[-1] - i * 0.55 for i in range(1, 19)]
++    return _hourly(trend + pullback)
++
++
++def test_hourly_pullback_scores_positive_above_long_trend():
++    score = _mean_reversion_score(_uptrend_pullback())
++    assert 0 < score <= 1
++
++
++def test_downtrend_is_rejected_even_when_rsi_is_oversold():
++    closes = [200 - i * 0.25 for i in range(230)]
++    assert _mean_reversion_score(_hourly(closes)) == 0
++
++
++def test_generator_is_bitcoin_only_and_uses_one_day_horizon():
++    client = MagicMock()
++    client.get_hourly_bars.return_value = _uptrend_pullback()
++    candidates = generate_candidates(client)
++    assert BASKET == ('BTC/USD',)
++    assert len(candidates) == 1
++    assert candidates[0].asset == 'BTC/USD'
++    assert candidates[0].strategy == STRATEGY_NAME == 'mean-reversion-hourly-crypto'
++    assert candidates[0].horizon_days == HORIZON_DAYS == 1
++    client.get_hourly_bars.assert_called_once()
++
++
++def test_score_all_keeps_zero_for_telemetry():
++    client = MagicMock()
++    client.get_hourly_bars.return_value = _hourly([100.0] * 230)
++    scores = score_all(client)
++    assert [(row.asset, row.raw_score) for row in scores] == [('BTC/USD', 0.0)]
++
++
++def test_data_error_is_contained():
++    client = MagicMock()
++    client.get_hourly_bars.side_effect = RuntimeError('exchange down')
++    assert generate_candidates(client) == []
++    assert score_all(client)[0].raw_score == 0
+--- a/tests/test_scheduler.py
++++ b/tests/test_scheduler.py
+@@ -2,7 +2,7 @@
+ import asyncio
+ 
+ import pytest
+-from unittest.mock import AsyncMock, MagicMock
++from unittest.mock import AsyncMock
+ 
+ 
+ def test_scheduler_has_reconcile_job():
+@@ -278,7 +278,7 @@
+     from unittest.mock import MagicMock
+     from trader_engine import scheduler
+     from trader_engine.config import settings as live_settings
+-    import trader_engine.signals.crypto_momentum as crypto_mod
++    import trader_engine.signals.crypto_mean_reversion as crypto_mod
+     import trader_engine.signals.crypto_regime as crypto_regime_mod
+     import trader_engine.api.routes.signals as signals_route
+ 
+@@ -289,7 +289,7 @@
+     # score_all() returns a ScoredAsset-like object for BTC/USD.
+     # raw_score=0.9 clears MIN_SCORE(0.05) * regime multiplier(0.8 for bull).
+     crypto_score = MagicMock()
+-    crypto_score.strategy = 'momentum-crypto'
++    crypto_score.strategy = 'mean-reversion-hourly-crypto'
+     crypto_score.asset = 'BTC/USD'
+     crypto_score.raw_score = 0.9
+     crypto_score.ts_ms = 1_000_000
+@@ -320,7 +320,7 @@
+     scheduler.run_crypto_signal_generation()
+ 
+     assert len(cached) == 1
+-    assert cached[0][0].strategy == 'momentum-crypto'
++    assert cached[0][0].strategy == 'mean-reversion-hourly-crypto'
+ 
+ 
+ def test_scheduler_registers_order_sync_job():
+--- a/tests/test_trade_simulator.py
++++ b/tests/test_trade_simulator.py
+@@ -22,6 +22,7 @@
+     _simulate_asset,
+     _vol_stop_pct,
+     run_momentum_backtest,
++    run_crypto_hourly_mean_reversion_backtest,
+ )
+ 
+ 
+@@ -172,6 +173,18 @@
+         assert free[0].return_net == pytest.approx(0.0, abs=1e-9)
+         assert costed[0].return_net < free[0].return_net
+ 
++    def test_fee_is_charged_on_both_legs(self):
++        df = make_df([100.0] * 30)
++        free = _simulate_asset(
++            asset='X', df=df, score_fn=lambda w: 1.0 if len(w) == 4 else 0.0,
++            min_score=0.05, horizon_days=1, slippage_bps=0.0, fee_bps=0.0, warmup=3,
++        )
++        fee = _simulate_asset(
++            asset='X', df=df, score_fn=lambda w: 1.0 if len(w) == 4 else 0.0,
++            min_score=0.05, horizon_days=1, slippage_bps=0.0, fee_bps=25.0, warmup=3,
++        )
++        assert fee[0].return_net < free[0].return_net
++
+ 
+ class TestOnePositionPerAsset:
+     def test_does_not_stack_lots_while_a_position_is_open(self):
+@@ -225,3 +238,27 @@
+         assert r.start and r.end
+         assert r.slippage_bps == 5.0
+         assert 'no train/test split' in r.method
++
++
++class TestRunCryptoHourlyMeanReversionBacktest:
++    def test_uses_frozen_rule_and_composite_costs(self):
++        trend = [100 + i * 0.25 for i in range(220)]
++        cycle: list[float] = []
++        level = trend[-1]
++        for _ in range(12):
++            cycle.extend([level - i * 0.55 for i in range(1, 19)])
++            level += 5
++            cycle.extend([level + i * 0.4 for i in range(1, 30)])
++            level = cycle[-1]
++        df = make_df(trend + cycle)
++
++        class Client:
++            def get_hourly_bars(self, asset, hours=8760):
++                return df
++
++        result = run_crypto_hourly_mean_reversion_backtest(Client(), hours=1000)
++        assert result.strategy == 'mean-reversion-hourly-crypto'
++        assert result.assets == ['BTC/USD']
++        assert result.slippage_bps == 10
++        assert result.fee_bps == 25
++        assert result.n_trades > 0

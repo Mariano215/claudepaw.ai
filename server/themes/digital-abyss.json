@@ -1,0 +1,47 @@
+{
+  "id": "digital-abyss",
+  "name": "Digital Abyss",
+  "description": "Teal and amber on abyssal black",
+  "colors": {
+    "bgBase": "#050a0a",
+    "bgRaised": "#0a0f0f",
+    "bgSurface": "#0f1414",
+    "bgOverlay": "#151a1a",
+    "bgGlass": "rgba(10, 15, 15, 0.85)",
+    "accent": "#00BFAE",
+    "accentDim": "rgba(0, 191, 174, 0.13)",
+    "accentGlow": "rgba(0, 191, 174, 0.32)",
+    "accentSoft": "rgba(0, 191, 174, 0.07)",
+    "magenta": "#ff00aa",
+    "cyan": "#00BFAE",
+    "green": "#00ff88",
+    "amber": "#FFD600",
+    "red": "#ff3355",
+    "purple": "#a78bfa",
+    "textPrimary": "#eaeaf5",
+    "textSecondary": "#8a8aac",
+    "textMuted": "#50506e",
+    "textOnAccent": "#050510",
+    "borderColor": "rgba(0, 191, 174, 0.14)",
+    "borderSubtle": "rgba(255, 255, 255, 0.06)",
+    "sidebarBg": "rgba(10, 15, 15, 0.75)",
+    "headerBg": "#050a0a",
+    "cardBg": "#0a0f0f",
+    "cardBorder": "rgba(0, 191, 174, 0.14)",
+    "feedHighlight": "rgba(0, 191, 174, 0.07)"
+  },
+  "fonts": {
+    "heading": "'Orbitron', sans-serif",
+    "body": "'Outfit', sans-serif",
+    "mono": "'JetBrains Mono', monospace"
+  },
+  "gradients": {
+    "card": "linear-gradient(135deg, rgba(0, 191, 174, 0.04) 0%, transparent 60%)",
+    "cardHover": "linear-gradient(135deg, rgba(0, 191, 174, 0.07) 0%, transparent 60%)"
+  },
+  "shadows": {
+    "card": "0 1px 3px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3)",
+    "hover": "0 0 0 1px rgba(0,191,174,0.3), 0 4px 24px rgba(0,0,0,0.4), 0 0 32px rgba(0,191,174,0.06)",
+    "glow": "0 0 8px rgba(0,191,174,0.13), 0 0 24px rgba(0,191,174,0.05)"
+  }
+}

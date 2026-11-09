@@ -1,0 +1,47 @@
+{
+  "id": "chrome-reflections",
+  "name": "Chrome Reflections",
+  "description": "Silver, cyan, and purple on dark chrome",
+  "colors": {
+    "bgBase": "#0e0e12",
+    "bgRaised": "#131317",
+    "bgSurface": "#18181c",
+    "bgOverlay": "#1e1e22",
+    "bgGlass": "rgba(19, 19, 23, 0.85)",
+    "accent": "#BDC3C7",
+    "accentDim": "rgba(189, 195, 199, 0.13)",
+    "accentGlow": "rgba(189, 195, 199, 0.32)",
+    "accentSoft": "rgba(189, 195, 199, 0.07)",
+    "magenta": "#ff00aa",
+    "cyan": "#2980B9",
+    "green": "#00ff88",
+    "amber": "#ffaa00",
+    "red": "#ff3355",
+    "purple": "#8E44AD",
+    "textPrimary": "#eaeaf5",
+    "textSecondary": "#8a8aac",
+    "textMuted": "#50506e",
+    "textOnAccent": "#050510",
+    "borderColor": "rgba(189, 195, 199, 0.14)",
+    "borderSubtle": "rgba(255, 255, 255, 0.06)",
+    "sidebarBg": "rgba(19, 19, 23, 0.75)",
+    "headerBg": "#0e0e12",
+    "cardBg": "#131317",
+    "cardBorder": "rgba(189, 195, 199, 0.14)",
+    "feedHighlight": "rgba(189, 195, 199, 0.07)"
+  },
+  "fonts": {
+    "heading": "'Orbitron', sans-serif",
+    "body": "'Outfit', sans-serif",
+    "mono": "'JetBrains Mono', monospace"
+  },
+  "gradients": {
+    "card": "linear-gradient(135deg, rgba(189, 195, 199, 0.04) 0%, transparent 60%)",
+    "cardHover": "linear-gradient(135deg, rgba(189, 195, 199, 0.07) 0%, transparent 60%)"
+  },
+  "shadows": {
+    "card": "0 1px 3px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3)",
+    "hover": "0 0 0 1px rgba(189,195,199,0.3), 0 4px 24px rgba(0,0,0,0.4), 0 0 32px rgba(189,195,199,0.06)",
+    "glow": "0 0 8px rgba(189,195,199,0.13), 0 0 24px rgba(189,195,199,0.05)"
+  }
+}

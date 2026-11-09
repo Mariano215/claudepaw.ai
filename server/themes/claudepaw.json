@@ -1,0 +1,47 @@
+{
+  "id": "claudepaw",
+  "name": "ClaudePaw",
+  "description": "Orange-to-indigo gradient -- the ClaudePaw brand",
+  "colors": {
+    "bgBase": "#08080f",
+    "bgRaised": "#0e0e1a",
+    "bgSurface": "#131322",
+    "bgOverlay": "#1a1a2e",
+    "bgGlass": "rgba(14, 14, 26, 0.80)",
+    "accent": "#f97316",
+    "accentDim": "rgba(249, 115, 22, 0.13)",
+    "accentGlow": "rgba(249, 115, 22, 0.32)",
+    "accentSoft": "rgba(249, 115, 22, 0.07)",
+    "magenta": "#ec4899",
+    "cyan": "#6366f1",
+    "green": "#22c55e",
+    "amber": "#f97316",
+    "red": "#ef4444",
+    "purple": "#6366f1",
+    "textPrimary": "#e8e8f5",
+    "textSecondary": "#8888aa",
+    "textMuted": "#505070",
+    "textOnAccent": "#08080f",
+    "borderColor": "rgba(249, 115, 22, 0.14)",
+    "borderSubtle": "rgba(255, 255, 255, 0.06)",
+    "sidebarBg": "rgba(14, 14, 26, 0.80)",
+    "headerBg": "#08080f",
+    "cardBg": "#131322",
+    "cardBorder": "rgba(249, 115, 22, 0.14)",
+    "feedHighlight": "rgba(249, 115, 22, 0.07)"
+  },
+  "fonts": {
+    "heading": "'Orbitron', sans-serif",
+    "body": "'Outfit', sans-serif",
+    "mono": "'JetBrains Mono', monospace"
+  },
+  "gradients": {
+    "card": "linear-gradient(135deg, rgba(249, 115, 22, 0.04) 0%, rgba(99, 102, 241, 0.02) 60%, transparent 100%)",
+    "cardHover": "linear-gradient(135deg, rgba(249, 115, 22, 0.07) 0%, rgba(99, 102, 241, 0.04) 60%, transparent 100%)"
+  },
+  "shadows": {
+    "card": "0 1px 3px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3)",
+    "hover": "0 0 0 1px rgba(249,115,22,0.3), 0 4px 24px rgba(0,0,0,0.4), 0 0 32px rgba(249,115,22,0.06)",
+    "glow": "0 0 8px rgba(249,115,22,0.13), 0 0 24px rgba(249,115,22,0.05)"
+  }
+}

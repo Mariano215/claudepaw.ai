@@ -1,0 +1,31 @@
+rule PromptInjectionOverride {
+  meta:
+    description = "Direct attempts to override prior instructions or reveal hidden prompts"
+    severity = "high"
+
+  keywords:
+    $ignore = "ignore previous instructions"
+    $forget = "forget all previous instructions"
+    $override = "disregard your prior instructions"
+    $system = "reveal your system prompt"
+    $developer = "show the developer message"
+
+  condition:
+    keywords.$ignore or keywords.$forget or keywords.$override or keywords.$system or keywords.$developer
+}
+
+rule PromptInjectionRoleHijack {
+  meta:
+    description = "Attempts to redefine the assistant role or jailbreak it into a new persona"
+    severity = "high"
+
+  keywords:
+    $newrole = "you are now"
+    $pretend = "pretend you are not bound by"
+    $jailbreak = "this is a jailbreak"
+    $dan = "do anything now"
+    $bypass = "bypass your safety rules"
+
+  condition:
+    keywords.$newrole or keywords.$pretend or keywords.$jailbreak or keywords.$dan or keywords.$bypass
+}

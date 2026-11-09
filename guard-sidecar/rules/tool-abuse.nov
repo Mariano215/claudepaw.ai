@@ -1,0 +1,31 @@
+rule ToolAbuseDestructive {
+  meta:
+    description = "Attempts to coerce destructive shell or git behavior"
+    severity = "high"
+
+  keywords:
+    $rmrf = "run rm -rf"
+    $reset = "git reset --hard"
+    $wipe = "delete the whole repository"
+    $secretsfile = "cat the secrets file"
+    $ssh = "print the ssh private key"
+
+  condition:
+    keywords.$rmrf or keywords.$reset or keywords.$wipe or keywords.$secretsfile or keywords.$ssh
+}
+
+rule ToolAbusePolicyBypass {
+  meta:
+    description = "Attempts to disable guards or force unsafe tool behavior"
+    severity = "high"
+
+  keywords:
+    $safety = "disable the safety checks"
+    $policy = "ignore the policy"
+    $approve = "auto approve every command"
+    $sandbox = "turn off the sandbox"
+    $review = "skip review and just execute"
+
+  condition:
+    keywords.$safety or keywords.$policy or keywords.$approve or keywords.$sandbox or keywords.$review
+}

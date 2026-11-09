@@ -1,0 +1,108 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { checkKillSwitch, _resetCache } from './kill-switch-client.js'
+
+vi.mock('../logger.js', () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}))
+
+describe('checkKillSwitch', () => {
+  beforeEach(() => {
+    _resetCache()
+    vi.restoreAllMocks()
+  })
+
+  it('returns null when dashboard says not active', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ active: false }),
+    }))
+
+    const result = await checkKillSwitch()
+    expect(result).toBeNull()
+  })
+
+  it('returns KillSwitchInfo when dashboard says active', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ active: true, reason: 'spike', set_at: 123 }),
+    }))
+
+    const result = await checkKillSwitch()
+    expect(result).toEqual({ reason: 'spike', set_at: 123 })
+  })
+
+  it('uses cache on second call within 15s (fetch called once)', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ active: false }),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    await checkKillSwitch()
+    await checkKillSwitch()
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns stale tripped value on network failure after prior tripped response', async () => {
+    // First call: tripped
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ active: true, reason: 'spike', set_at: 123 }),
+    }))
+    await checkKillSwitch()
+
+    // Expire the TTL cache but keep staleCache
+    _resetCache({ keepStale: true })
+    vi.restoreAllMocks()
+
+    // Second call: network failure
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network error')))
+
+    const result = await checkKillSwitch()
+    expect(result).toEqual({ reason: 'spike', set_at: 123 })
+  })
+
+  it('FAIL-CLOSED: returns synthetic tripped value when dashboard unreachable before any successful fetch', async () => {
+    // Fresh start — no prior successful response.
+    _resetCache()
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')))
+
+    const result = await checkKillSwitch()
+    // Must NOT return null (which callers treat as "not tripped"). Fail-closed.
+    expect(result).not.toBeNull()
+    expect(result?.reason).toMatch(/unreachable/i)
+    expect(result?.set_at).toBe(0)
+  })
+
+  it('falls back to stale not-tripped value after a prior successful not-tripped response', async () => {
+    // First call: not tripped
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ active: false }),
+    }))
+    await checkKillSwitch()
+
+    // TTL expires, network fails
+    _resetCache({ keepStale: true })
+    vi.restoreAllMocks()
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network error')))
+
+    const result = await checkKillSwitch()
+    // We have an authoritative "not tripped" observation; stay with that value
+    // (null). Fail-closed only applies before any authoritative observation.
+    expect(result).toBeNull()
+  })
+
+  it('treats a 401 as unreachable: fail-closed before any success, stale after', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: 'Unauthorized' }),
+    }))
+
+    const first = await checkKillSwitch()
+    expect(first).not.toBeNull()
+    expect(first!.reason).toContain('fail-closed')
+  })
+})

@@ -1,0 +1,17 @@
+node_modules/
+dist/
+server/dist/
+.env
+store/
+workspace/
+*.log
+*.pid
+guard-sidecar/.venv/
+*.db
+*.db-wal
+*.db-shm
+coverage/
+.DS_Store
+.claude/
+*.plist
+.playwright-mcp/

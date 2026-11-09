@@ -1,0 +1,24 @@
+{
+  "id": "server-memory-mcp",
+  "name": "Memory (MCP)",
+  "category": "storage",
+  "icon": "database",
+  "description": "Reference MCP server for in-memory entity storage. Good for testing MCP integration.",
+  "kind": "mcp_server",
+  "mcp": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-memory@2026.1.26"],
+    "env_from_credentials": [],
+    "transport": "stdio"
+  },
+  "setup": {
+    "credentials_required": [],
+    "instructions": "Click Install to add the in-memory MCP server. No credentials needed."
+  },
+  "verify": {
+    "kind": "mcp_tool_call",
+    "tool": "create_entities",
+    "args": { "entities": [{ "name": "test", "entityType": "test", "observations": [] }] },
+    "timeout_ms": 30000
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "id": "ocean",
+  "name": "Ocean",
+  "description": "Deep teal and blue -- calm waters",
+  "colors": {
+    "bgBase": "#042f2e",
+    "bgRaised": "#0d3d3b",
+    "bgSurface": "#134e4a",
+    "bgOverlay": "#1a5c58",
+    "bgGlass": "rgba(4, 47, 46, 0.85)",
+    "accent": "#2dd4bf",
+    "accentDim": "rgba(45, 212, 191, 0.15)",
+    "accentGlow": "rgba(45, 212, 191, 0.30)",
+    "accentSoft": "rgba(45, 212, 191, 0.08)",
+    "magenta": "#f472b6",
+    "cyan": "#22d3ee",
+    "green": "#34d399",
+    "amber": "#fbbf24",
+    "red": "#f87171",
+    "purple": "#a78bfa",
+    "textPrimary": "#f0fdfa",
+    "textSecondary": "#99f6e4",
+    "textMuted": "#5eead4",
+    "textOnAccent": "#042f2e",
+    "borderColor": "rgba(45, 212, 191, 0.20)",
+    "borderSubtle": "rgba(255, 255, 255, 0.08)",
+    "sidebarBg": "#042f2e",
+    "headerBg": "#042f2e",
+    "cardBg": "#0d3d3b",
+    "cardBorder": "rgba(45, 212, 191, 0.15)",
+    "feedHighlight": "rgba(45, 212, 191, 0.08)"
+  },
+  "fonts": {
+    "heading": "'Outfit', sans-serif",
+    "body": "'Outfit', sans-serif",
+    "mono": "'JetBrains Mono', monospace"
+  },
+  "gradients": {
+    "card": "linear-gradient(135deg, rgba(45, 212, 191, 0.05) 0%, transparent 60%)",
+    "cardHover": "linear-gradient(135deg, rgba(45, 212, 191, 0.08) 0%, transparent 60%)"
+  },
+  "shadows": {
+    "card": "0 1px 3px rgba(0,0,0,0.4), 0 4px 12px rgba(0,0,0,0.3)",
+    "hover": "0 0 0 1px rgba(45,212,191,0.3), 0 4px 20px rgba(0,0,0,0.3)",
+    "glow": "0 0 8px rgba(45,212,191,0.15), 0 0 20px rgba(45,212,191,0.06)"
+  }
+}

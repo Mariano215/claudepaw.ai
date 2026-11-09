@@ -1,0 +1,47 @@
+{
+  "id": "virtual-reality",
+  "name": "Virtual Reality",
+  "description": "Yellow, cyan, magenta, and purple VR palette",
+  "colors": {
+    "bgBase": "#0a0a14",
+    "bgRaised": "#0f0f19",
+    "bgSurface": "#14141e",
+    "bgOverlay": "#1a1a24",
+    "bgGlass": "rgba(15, 15, 25, 0.85)",
+    "accent": "#FFEA00",
+    "accentDim": "rgba(255, 234, 0, 0.13)",
+    "accentGlow": "rgba(255, 234, 0, 0.32)",
+    "accentSoft": "rgba(255, 234, 0, 0.07)",
+    "magenta": "#FF007A",
+    "cyan": "#00BFFF",
+    "green": "#00ff88",
+    "amber": "#FFEA00",
+    "red": "#ff3355",
+    "purple": "#8E44AD",
+    "textPrimary": "#eaeaf5",
+    "textSecondary": "#8a8aac",
+    "textMuted": "#50506e",
+    "textOnAccent": "#050510",
+    "borderColor": "rgba(255, 234, 0, 0.14)",
+    "borderSubtle": "rgba(255, 255, 255, 0.06)",
+    "sidebarBg": "rgba(15, 15, 25, 0.75)",
+    "headerBg": "#0a0a14",
+    "cardBg": "#0f0f19",
+    "cardBorder": "rgba(255, 234, 0, 0.14)",
+    "feedHighlight": "rgba(255, 234, 0, 0.07)"
+  },
+  "fonts": {
+    "heading": "'Orbitron', sans-serif",
+    "body": "'Outfit', sans-serif",
+    "mono": "'JetBrains Mono', monospace"
+  },
+  "gradients": {
+    "card": "linear-gradient(135deg, rgba(255, 234, 0, 0.04) 0%, transparent 60%)",
+    "cardHover": "linear-gradient(135deg, rgba(255, 234, 0, 0.07) 0%, transparent 60%)"
+  },
+  "shadows": {
+    "card": "0 1px 3px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3)",
+    "hover": "0 0 0 1px rgba(255,234,0,0.3), 0 4px 24px rgba(0,0,0,0.4), 0 0 32px rgba(255,234,0,0.06)",
+    "glow": "0 0 8px rgba(255,234,0,0.13), 0 0 24px rgba(255,234,0,0.05)"
+  }
+}

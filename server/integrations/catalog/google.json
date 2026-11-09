@@ -1,0 +1,25 @@
+{
+  "id": "google",
+  "name": "Google",
+  "category": "communication",
+  "icon": "mail",
+  "description": "Gmail, Calendar, Drive, and YouTube access via OAuth",
+  "kind": "oauth",
+  "oauth": {
+    "provider": "google",
+    "scopes": [
+      "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/gmail.modify",
+      "https://www.googleapis.com/auth/calendar"
+    ]
+  },
+  "setup": {
+    "credentials_required": [],
+    "instructions": "Click Connect to sign in with your Google account. You will be redirected to Google to grant access."
+  },
+  "verify": {
+    "kind": "oauth_profile",
+    "endpoint": "https://www.googleapis.com/oauth2/v2/userinfo",
+    "account_field": "email"
+  }
+}

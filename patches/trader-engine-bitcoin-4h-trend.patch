@@ -1,0 +1,419 @@
+--- a/src/trader_engine/data/coinbase_data.py
++++ b/src/trader_engine/data/coinbase_data.py
+@@ -129,6 +129,22 @@
+             raise ValueError(f'No completed hourly OHLCV data returned for {asset}')
+         return completed.tail(hours)
+ 
++    def get_four_hour_bars(self, asset: str, periods: int = 500) -> pd.DataFrame:
++        """Aggregate completed UTC-aligned four-hour candles for ``asset``."""
++        if periods < 1:
++            raise ValueError('periods must be positive')
++        hourly = self.get_hourly_bars(asset, hours=periods * 4 + 4)
++        bars = hourly.resample('4h', label='left', closed='left').agg({
++            'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last',
++            'volume': 'sum',
++        }).dropna()
++        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
++        current_bucket_ms = (now_ms // (4 * _HOUR_MS)) * (4 * _HOUR_MS)
++        completed = bars[bars.index.view('int64') // 1_000_000 < current_bucket_ms]
++        if completed.empty:
++            raise ValueError(f'No completed four-hour OHLCV data returned for {asset}')
++        return completed.tail(periods)
++
+     def is_market_open(self) -> bool:  # noqa: PLR6301
+         """Crypto markets never close."""
+         return True
+--- /dev/null
++++ b/src/trader_engine/signals/crypto_trend_4h.py
+@@ -0,0 +1,80 @@
++"""BTC/USD four-hour trend breakout with an explicit cost hurdle."""
++from __future__ import annotations
++
++import math
++import time
++from dataclasses import dataclass
++from typing import Any
++
++import pandas as pd
++import structlog
++
++logger = structlog.get_logger()
++
++STRATEGY_NAME = 'trend-4h-crypto'
++BASKET: tuple[str, ...] = ('BTC/USD',)
++FAST_EMA = 20
++SLOW_EMA = 100
++BREAKOUT_BARS = 20
++RETURN_BARS = 6
++SLOPE_BARS = 6
++MIN_RETURN = 0.014
++MIN_SCORE = 0.05
++HORIZON_DAYS = 7
++MIN_BARS = SLOW_EMA + SLOPE_BARS + 2
++SCORE_BARS = MIN_BARS + 30
++
++
++def _trend_score(df: pd.DataFrame) -> float:
++    """Score a completed four-hour bar without future information."""
++    if len(df) < MIN_BARS:
++        return 0.0
++    # Production fetches SCORE_BARS. Pin history here so a backtest does not
++    # get a differently initialised EMA merely because more old bars exist.
++    df = df.tail(SCORE_BARS)
++    closes = df['close'].astype(float)
++    highs = df['high'].astype(float)
++    last_close = float(closes.iloc[-1])
++    prior_high = float(highs.iloc[-(BREAKOUT_BARS + 1):-1].max())
++    ret_24h = last_close / float(closes.iloc[-(RETURN_BARS + 1)]) - 1.0
++    fast = closes.ewm(span=FAST_EMA, adjust=False).mean()
++    slow = closes.ewm(span=SLOW_EMA, adjust=False).mean()
++    fast_now = float(fast.iloc[-1])
++    slow_now = float(slow.iloc[-1])
++    slow_prior = float(slow.iloc[-(SLOPE_BARS + 1)])
++    if (
++        prior_high <= 0
++        or last_close <= prior_high
++        or ret_24h <= MIN_RETURN
++        or fast_now <= slow_now
++        or slow_now <= slow_prior
++    ):
++        return 0.0
++    breakout = last_close / prior_high - 1.0
++    trend_spread = fast_now / slow_now - 1.0
++    excess_return = ret_24h - MIN_RETURN
++    combined = 0.4 * breakout + 0.3 * trend_spread + 0.3 * excess_return
++    return float(math.tanh(combined * 10.0))
++
++
++@dataclass
++class ScoredAsset:
++    asset: str
++    strategy: str
++    raw_score: float
++    ts_ms: int
++
++
++def score_all(data_client: Any) -> list[ScoredAsset]:
++    """Return a score for each frozen asset; errors fail closed to zero."""
++    now_ms = int(time.time() * 1000)
++    results: list[ScoredAsset] = []
++    for asset in BASKET:
++        try:
++            df = data_client.get_four_hour_bars(asset, periods=SCORE_BARS)
++            score = _trend_score(df)
++        except Exception as exc:
++            logger.warning('crypto_trend_4h.skip', asset=asset, error=str(exc))
++            score = 0.0
++        results.append(ScoredAsset(asset, STRATEGY_NAME, score, now_ms))
++    return results
+--- a/src/trader_engine/scheduler.py
++++ b/src/trader_engine/scheduler.py
+@@ -87,23 +87,28 @@
+     'crypto-bull': {
+         'momentum-crypto': 0.8,
+         'mean-reversion-hourly-crypto': 0.8,
++        'trend-4h-crypto': 1.0,
+     },
+     'crypto-bear': {
+         'momentum-crypto': None,
+         'mean-reversion-hourly-crypto': None,
++        'trend-4h-crypto': 1.0,
+     },
+     'crypto-high-vol': {
+         'momentum-crypto': 2.0,
+         'mean-reversion-hourly-crypto': 1.5,
++        'trend-4h-crypto': 1.0,
+     },
+     'crypto-choppy': {
+         'momentum-crypto': 1.0,
+         'mean-reversion-hourly-crypto': 1.0,
++        'trend-4h-crypto': 1.0,
+     },
+ }
+ _CRYPTO_DEFAULT_REGIME_PARAMS: dict[str, float | None] = {
+     'momentum-crypto': 1.0,
+     'mean-reversion-hourly-crypto': 1.0,
++    'trend-4h-crypto': 1.0,
+ }
+ 
+ _ET = ZoneInfo("America/New_York")
+@@ -473,6 +478,12 @@
+         score_all as score_momentum,
+     )
+     from trader_engine.signals.crypto_regime import get_crypto_regime
++    from trader_engine.signals.crypto_trend_4h import (
++        HORIZON_DAYS as TREND_HORIZON,
++        MIN_SCORE as TREND_MIN,
++        STRATEGY_NAME as TREND_STRATEGY,
++        score_all as score_trend,
++    )
+     import time as _time
+     import uuid as _uuid
+ 
+@@ -499,6 +510,7 @@
+     specs = (
+         (MOMENTUM_STRATEGY, MOMENTUM_MIN, MOMENTUM_HORIZON, score_momentum),
+         (HOURLY_STRATEGY, HOURLY_MIN, HOURLY_HORIZON, score_hourly),
++        (TREND_STRATEGY, TREND_MIN, TREND_HORIZON, score_trend),
+     )
+     live_candidates: list[tuple[Any, int]] = []
+     total_suppressed = 0
+--- a/src/trader_engine/backtest/trade_simulator.py
++++ b/src/trader_engine/backtest/trade_simulator.py
+@@ -551,3 +551,82 @@
+         warnings=warnings,
+         trades=all_trades,
+     )
++
++
++def run_crypto_4h_trend_backtest(
++    data_client,
++    periods: int = 10_950,
++    slippage_bps: float = 10.0,
++    fee_bps: float = 25.0,
++) -> BacktestResult:
++    """Simulate the frozen BTC/USD four-hour trend candidate after costs."""
++    from trader_engine.signals.crypto_trend_4h import (
++        BASKET,
++        HORIZON_DAYS,
++        MIN_BARS,
++        MIN_SCORE,
++        STRATEGY_NAME,
++        _trend_score,
++    )
++
++    warnings: list[str] = []
++    all_trades: list[Trade] = []
++    start_date = ''
++    end_date = ''
++    for asset in BASKET:
++        try:
++            df = data_client.get_four_hour_bars(asset, periods=periods)
++        except Exception as exc:
++            warnings.append(f'{asset}: four-hour bar fetch failed ({exc})')
++            continue
++        if len(df) <= MIN_BARS + 2:
++            warnings.append(f'{asset}: only {len(df)} bars, needs > {MIN_BARS + 2}')
++            continue
++        start_date = str(df.index[0])
++        end_date = str(df.index[-1])
++        all_trades.extend(_simulate_asset(
++            asset=asset,
++            df=df,
++            score_fn=_trend_score,
++            min_score=MIN_SCORE,
++            horizon_days=HORIZON_DAYS,
++            slippage_bps=slippage_bps,
++            fee_bps=fee_bps,
++            warmup=MIN_BARS,
++            bars_per_day=6,
++            vol_window_bars=35 * 6,
++        ))
++
++    returns = [trade.return_net for trade in all_trades]
++    total_return = 1.0
++    for value in returns:
++        total_return *= 1.0 + value
++    total_return -= 1.0
++    wins = sum(value > 0 for value in returns)
++    unresolved = sum(trade.reason == 'eod' for trade in all_trades)
++    if unresolved:
++        warnings.append(f'{unresolved} trade(s) open at history end, marked to last close')
++    return BacktestResult(
++        strategy=STRATEGY_NAME,
++        method=(
++            'fixed BTC/USD 4h breakout plus EMA trend and explicit cost hurdle; '
++            'completed signal bar, next-4h-open entry, stop-before-target, seven-day '
++            'time stop, conservative crypto fee and slippage on both legs; no fit'
++        ),
++        start=start_date,
++        end=end_date,
++        n_trades=len(all_trades),
++        sharpe=_sharpe_per_trade(returns),
++        max_drawdown=_max_drawdown(returns) if returns else None,
++        win_rate=(wins / len(returns)) if returns else None,
++        expectancy=statistics.fmean(returns) if returns else None,
++        total_return=total_return,
++        slippage_bps=slippage_bps,
++        fee_bps=fee_bps,
++        min_score=MIN_SCORE,
++        sharpe_convention=(
++            'mean/stdev of per-trade returns annualised by sqrt(252), matching '
++            'the live cohort gate; not a conventional time-series Sharpe'
++        ),
++        assets=list(BASKET), warnings=warnings, trades=all_trades,
++    )
+--- a/src/trader_engine/api/routes/backtest.py
++++ b/src/trader_engine/api/routes/backtest.py
+@@ -16,6 +16,7 @@
+ from fastapi import APIRouter, HTTPException, Query
+ 
+ from trader_engine.backtest.trade_simulator import (
++    run_crypto_4h_trend_backtest,
+     run_crypto_hourly_mean_reversion_backtest,
+     run_crypto_momentum_backtest,
+     run_momentum_backtest,
+@@ -62,6 +63,23 @@
+     return payload
+ 
+ 
++@router.get('/crypto-4h-trend')
++def get_crypto_4h_trend_backtest(
++    periods: int = Query(10_950, ge=1_000, le=12_000),
++    include_trades: bool = Query(False),
++) -> dict:
++    """Trade-level simulation of the frozen BTC/USD four-hour trend rule."""
++    data_client = get_crypto_data_client()
++    if data_client is None:
++        raise HTTPException(status_code=503, detail='crypto data client not ready')
++    started = time.time()
++    result = run_crypto_4h_trend_backtest(data_client, periods=periods)
++    payload = result.to_dict(include_trades=include_trades)
++    payload['elapsed_ms'] = int((time.time() - started) * 1000)
++    payload['computed_at_ms'] = int(time.time() * 1000)
++    return payload
++
++
+ @router.get('/crypto-hourly-mean-reversion')
+ def get_crypto_hourly_mean_reversion_backtest(
+     hours: int = Query(8_760, ge=500, le=43_800),
+--- a/tests/test_coinbase_data.py
++++ b/tests/test_coinbase_data.py
+@@ -183,6 +183,25 @@
+     assert int(df.index.max().value // 1_000_000) == current_day - _DAY_MS
+ 
+ 
++def test_get_four_hour_bars_aggregates_and_drops_partial_bucket():
++    import time
++
++    hour_ms = 3_600_000
++    current_bucket = (int(time.time() * 1000) // (4 * hour_ms)) * (4 * hour_ms)
++    rows = []
++    for offset in range(-8, 2):
++        ts = current_bucket + offset * hour_ms
++        price = 100 + offset
++        rows.append([ts, price, price + 2, price - 1, price + 1, 10])
++    client = CoinbaseDataClient(_minimal_settings(), exchange=_FakeExchange(rows))
++
++    df = client.get_four_hour_bars('BTC/USD', periods=10)
++
++    assert len(df) == 2
++    assert int(df.index.max().value // 1_000_000) == current_bucket - 4 * hour_ms
++    assert float(df.iloc[-1]['volume']) == 40
++
++
+ def test_get_hourly_bars_rejects_non_positive_period_count():
+     client = CoinbaseDataClient(_minimal_settings(), exchange=_FakeExchange([]))
+     with pytest.raises(ValueError, match='periods must be positive'):
+--- /dev/null
++++ b/tests/test_crypto_trend_4h.py
+@@ -0,0 +1,43 @@
++from __future__ import annotations
++
++import pandas as pd
++
++from trader_engine.signals.crypto_trend_4h import (
++    MIN_BARS,
++    MIN_RETURN,
++    STRATEGY_NAME,
++    _trend_score,
++    score_all,
++)
++
++
++def _frame(closes: list[float]) -> pd.DataFrame:
++    index = pd.date_range('2025-01-01', periods=len(closes), freq='4h', tz='UTC')
++    return pd.DataFrame({
++        'open': closes, 'high': [v * 1.001 for v in closes],
++        'low': [v * 0.999 for v in closes], 'close': closes,
++        'volume': [10] * len(closes),
++    }, index=index)
++
++
++def test_trend_score_fires_only_for_aligned_cost_clearing_breakout():
++    closes = [100 + i * 0.12 for i in range(MIN_BARS)]
++    closes.extend([closes[-1] * (1 + MIN_RETURN / 6)] * 5)
++    closes.append(max(closes) * 1.025)
++    assert _trend_score(_frame(closes)) > 0.05
++
++
++def test_trend_score_rejects_flat_market():
++    assert _trend_score(_frame([100.0] * (MIN_BARS + 10))) == 0.0
++
++
++def test_score_all_is_btc_only_and_fails_closed():
++    class Client:
++        def get_four_hour_bars(self, asset, periods):
++            raise RuntimeError('down')
++
++    result = score_all(Client())
++    assert len(result) == 1
++    assert result[0].asset == 'BTC/USD'
++    assert result[0].strategy == STRATEGY_NAME
++    assert result[0].raw_score == 0.0
+--- a/tests/test_scheduler.py
++++ b/tests/test_scheduler.py
+@@ -280,6 +280,7 @@
+     from trader_engine.config import settings as live_settings
+     import trader_engine.signals.crypto_mean_reversion as crypto_mod
+     import trader_engine.signals.crypto_momentum as momentum_mod
++    import trader_engine.signals.crypto_trend_4h as trend_mod
+     import trader_engine.signals.crypto_regime as crypto_regime_mod
+     import trader_engine.api.routes.signals as signals_route
+ 
+@@ -301,6 +302,12 @@
+     momentum_score.raw_score = 0.9
+     momentum_score.ts_ms = 1_000_000
+     monkeypatch.setattr(momentum_mod, 'score_all', lambda c: [momentum_score])
++    trend_score = MagicMock()
++    trend_score.strategy = 'trend-4h-crypto'
++    trend_score.asset = 'BTC/USD'
++    trend_score.raw_score = 0.9
++    trend_score.ts_ms = 1_000_000
++    monkeypatch.setattr(trend_mod, 'score_all', lambda c: [trend_score])
+ 
+     # Stub regime fetch: return crypto-bull so multiplier is 0.8 (not suppressed).
+     monkeypatch.setattr(crypto_regime_mod, 'get_crypto_regime', lambda c, **kw: 'crypto-bull')
+@@ -328,7 +335,7 @@
+ 
+     assert len(cached) == 1
+     assert {candidate.strategy for candidate in cached[0]} == {
+-        'momentum-crypto', 'mean-reversion-hourly-crypto',
++        'momentum-crypto', 'mean-reversion-hourly-crypto', 'trend-4h-crypto',
+     }
+ 
+ 
+--- a/tests/test_trade_simulator.py
++++ b/tests/test_trade_simulator.py
+@@ -24,6 +24,7 @@
+     run_momentum_backtest,
+     run_crypto_hourly_mean_reversion_backtest,
+     run_crypto_momentum_backtest,
++    run_crypto_4h_trend_backtest,
+ )
+ 
+ 
+@@ -284,3 +285,23 @@
+         assert result.slippage_bps == 10
+         assert result.fee_bps == 25
+         assert result.n_trades > 0
++
++
++def test_crypto_4h_trend_backtest_uses_btc_and_crypto_costs():
++    closes = [100 + i * 0.1 for i in range(120)]
++    for cycle in range(15):
++        base = closes[-1]
++        closes.extend([base * (1 + 0.004 * (i + 1)) for i in range(15)])
++        closes.extend([closes[-1] * (1 - 0.002 * (i + 1)) for i in range(8)])
++    df = make_df(closes)
++
++    class Client:
++        def get_four_hour_bars(self, asset, periods=10_950):
++            return df
++
++    result = run_crypto_4h_trend_backtest(Client(), periods=len(df))
++    assert result.strategy == 'trend-4h-crypto'
++    assert result.assets == ['BTC/USD']
++    assert result.fee_bps == 25
++    assert result.slippage_bps == 10
++    assert result.n_trades > 0

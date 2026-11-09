@@ -1,0 +1,24 @@
+{
+  "id": "context7-mcp",
+  "name": "Context7",
+  "category": "dev-tools",
+  "icon": "book-open",
+  "description": "Look up version-specific documentation for any library or framework",
+  "kind": "mcp_server",
+  "mcp": {
+    "command": "npx",
+    "args": ["-y", "@upstash/context7-mcp@2.1.7"],
+    "env_from_credentials": [],
+    "transport": "stdio"
+  },
+  "setup": {
+    "credentials_required": [],
+    "instructions": "No credentials needed. Provides access to documentation for thousands of libraries."
+  },
+  "verify": {
+    "kind": "mcp_tool_call",
+    "tool": "resolve-library-id",
+    "args": { "libraryName": "react" },
+    "timeout_ms": 15000
+  }
+}

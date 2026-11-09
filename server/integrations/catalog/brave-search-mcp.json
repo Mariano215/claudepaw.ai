@@ -1,0 +1,32 @@
+{
+  "id": "brave-search-mcp",
+  "name": "Brave Search",
+  "category": "analytics",
+  "icon": "search",
+  "description": "Web search, news search, and local business lookup via Brave Search API",
+  "kind": "mcp_server",
+  "mcp": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-brave-search@0.6.2"],
+    "env_from_credentials": ["brave.api_key"],
+    "transport": "stdio"
+  },
+  "setup": {
+    "credentials_required": [
+      {
+        "service": "brave",
+        "key": "api_key",
+        "label": "Brave Search API Key",
+        "help_url": "https://brave.com/search/api/",
+        "input_type": "password"
+      }
+    ],
+    "instructions": "Sign up for the Brave Search API (free tier: 2000 queries/month). Paste your API key below."
+  },
+  "verify": {
+    "kind": "mcp_tool_call",
+    "tool": "brave_web_search",
+    "args": { "query": "test", "count": 1 },
+    "timeout_ms": 15000
+  }
+}
